@@ -1,0 +1,36 @@
+# InfiniContext per-run logs (see design doc §7.4)
+logs/
+**/logs/
+
+# .NET build outputs
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+.vscode/
+
+# Test outputs
+TestResults/
+*.coverage
+*.coveragexml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Optional host-local config / runtime state
+.infinicontext/
+
+# User settings overrides — settings.json is the committed defaults; settings.user.json is per-user
+settings.user.json
+
+# Per-machine Claude Code overrides (permissions etc.); committed file is .claude/settings.json
+.claude/settings.local.json
+
+# Recorder sidecar diagnostic logs (committed fixture is the .jsonl, not the stderr log)
+tests/fixtures/*.stderr.log
+
+# Recorder scratch CWD (used as a clean working dir for fixture recording runs)
+tmp/

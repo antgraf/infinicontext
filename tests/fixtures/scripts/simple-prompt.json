@@ -1,0 +1,6 @@
+{
+  "prompts": [
+    "Write a short paragraph (3-4 sentences) about the history of Unix. Reply with the paragraph and nothing else."
+  ],
+  "max_runtime_seconds": 90
+}

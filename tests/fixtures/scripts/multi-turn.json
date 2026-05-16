@@ -1,0 +1,8 @@
+{
+  "prompts": [
+    "Reply with: TURN-1",
+    "Reply with: TURN-2",
+    "Reply with: TURN-3"
+  ],
+  "max_runtime_seconds": 120
+}

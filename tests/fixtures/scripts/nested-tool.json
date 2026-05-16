@@ -1,0 +1,7 @@
+{
+  "prompts": [
+    "Use the Task tool to dispatch a sub-agent (the general-purpose subagent_type) with the prompt: 'Run the bash command `echo nested-ok` and return the output.' Wait for it to complete and tell me what the sub-agent reported."
+  ],
+  "max_runtime_seconds": 240,
+  "claude_extra_args": ["--permission-mode", "bypassPermissions"]
+}

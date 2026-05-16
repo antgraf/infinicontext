@@ -1,0 +1,11 @@
+{
+  "_comment": "Emits a known init, a truncated/malformed JSON line, then a valid result. Parser must count exactly 1 malformed line and still reach the result event.",
+  "actions": [
+    {"type": "wait-stdin"},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000fff","model":"fake","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-raw", "bytes": "{\"type\":\"system\",\"subtype\":\"will_be_truncated\"\n"},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"after truncation"}]},"session_id":"00000000-0000-0000-0000-000000000fff"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"after truncation","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000fff","total_cost_usd":0}},
+    {"type": "exit", "code": 0}
+  ]
+}

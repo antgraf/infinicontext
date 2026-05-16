@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="FluentAssertions" Version="7.2.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Serilog" Version="4.3.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <!-- Spectre.Console (drives Stage 2B+ TUI; D17 pin) and the matching testing helpers
+         (TestConsole, capture API) so MultiSessionHostTests can drive a fake console. -->
+    <PackageReference Include="Spectre.Console" Version="0.55.2" />
+    <PackageReference Include="Spectre.Console.Testing" Version="0.55.2" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\InfiniContext.Core\InfiniContext.Core.csproj" />
+    <ProjectReference Include="..\..\src\InfiniContext.Cli\InfiniContext.Cli.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\FakeClaude\FakeClaude.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!--
+    Link a small set of pure-logic CLI files into the test assembly so direct unit tests can
+    exercise them without spawning the binary. These types are `internal` so the duplicate
+    compilation is harmless: each assembly carries its own copy. Smoke tests still spawn the
+    real CLI executable for end-to-end coverage.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\InfiniContext.Cli\RunArgs.cs" Link="Cli\RunArgs.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\CliFlagCatalog.cs" Link="Cli\CliFlagCatalog.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlotApprovalSink.cs" Link="Cli\SlotApprovalSink.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\StaticApprovalSink.cs" Link="Cli\StaticApprovalSink.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\AutoApprovalSink.cs" Link="Cli\AutoApprovalSink.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\ConsoleEchoingApprovalSink.cs" Link="Cli\ConsoleEchoingApprovalSink.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommand.cs" Link="Cli\Tasks\TaskCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommandHandler.cs" Link="Cli\Tasks\TaskCommandHandler.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Ui\HostResult.cs" Link="Cli\Ui\HostResult.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Ui\MultiSessionHost.cs" Link="Cli\Ui\MultiSessionHost.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ISlashCommand.cs" Link="Cli\SlashCommands\ISlashCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\SlashCommandRegistry.cs" Link="Cli\SlashCommands\SlashCommandRegistry.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\QuitCommand.cs" Link="Cli\SlashCommands\QuitCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\CostCommand.cs" Link="Cli\SlashCommands\CostCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\StateCommand.cs" Link="Cli\SlashCommands\StateCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\HelpCommand.cs" Link="Cli\SlashCommands\HelpCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\SettingsCommand.cs" Link="Cli\SlashCommands\SettingsCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ResumeCommand.cs" Link="Cli\SlashCommands\ResumeCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ApprovalCommand.cs" Link="Cli\SlashCommands\ApprovalCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\TaskSlashCommand.cs" Link="Cli\SlashCommands\TaskSlashCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\NewSessionCommand.cs" Link="Cli\SlashCommands\NewSessionCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ListSessionsCommand.cs" Link="Cli\SlashCommands\ListSessionsCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FocusCommand.cs" Link="Cli\SlashCommands\FocusCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\BroadcastCommand.cs" Link="Cli\SlashCommands\BroadcastCommand.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,75 @@
+{
+  "$schema": "./settings.schema.json",
+
+  "logging": {
+    "level": "Debug",
+    "directory": "./logs",
+    "flushIntervalMs": 250,
+    "maxFieldBytes": 4096,
+    "rxTruncationBytes": 2048
+  },
+
+  "session": {
+    "eventChannelCapacity": 1024,
+    "stderrRingCapacity": 200,
+    "stdoutDrainTimeoutSeconds": 2,
+    "exitDrainWaitSeconds": 2,
+    "interruptTimeoutSeconds": 5,
+    "model": null,
+    "includePartialMessages": false,
+    "extraArgs": []
+  },
+
+  "approval": {
+    "timeoutSeconds": 60,
+    "mode": "Auto",
+    "auto": {
+      "onLowConfidence": "Deny",
+      "timeoutSeconds": 15,
+      "effort": "Low",
+      "mode": "SingleShot"
+    }
+  },
+
+  "models": {
+    "main": { "id": "claude-opus-4-7" },
+    "light": {
+      "id": "claude-haiku-4-5",
+      "maxTokens": 1024,
+      "timeoutSeconds": 30,
+      "cli": {
+        "mode": "LongLived",
+        "maxOutputTokens": 128,
+        "thinkingMaxOutputTokens": 1024
+      }
+    }
+  },
+
+  "mcp": {
+    "sidecarConnectTimeoutSeconds": 10,
+    "approvalChannelDisposeTimeoutSeconds": 2
+  },
+
+  "tasks": {
+    "lockTtlSeconds": 30,
+    "lockMaxWaitSeconds": 60,
+    "softThresholdPct": 60,
+    "hardThresholdPct": 85
+  },
+
+  "versioning": {
+    "minClaudeVersion": "2.0.0",
+    "testedAgainstVersion": "2.1.112"
+  },
+
+  "cosmetics": {
+    "repl": {
+      "prompt": "> "
+    },
+    "approval": {
+      "timeoutMessage": "[approval] timeout \u2192 deny",
+      "approvedMessage": "[approval] allowed",
+      "deniedMessage": "[approval] denied"
+    }
+  }
+}

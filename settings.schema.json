@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://infinicontext.local/settings.schema.json",
+  "title": "InfiniContext settings",
+  "description": "Defaults live in settings.json (committed); user overrides live in settings.user.json (gitignored). Environment variables prefixed INFINICONTEXT__ overlay both.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "logging": { "$ref": "#/$defs/logging" },
+    "session": { "$ref": "#/$defs/session" },
+    "approval": { "$ref": "#/$defs/approval" },
+    "mcp": { "$ref": "#/$defs/mcp" },
+    "versioning": { "$ref": "#/$defs/versioning" },
+    "models": { "$ref": "#/$defs/models" },
+    "cosmetics": { "$ref": "#/$defs/cosmetics" },
+    "tasks": { "$ref": "#/$defs/tasks" }
+  },
+  "$defs": {
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["Verbose", "Debug", "Information", "Warning", "Error", "Fatal"],
+          "description": "Serilog minimum level threshold."
+        },
+        "directory": {
+          "type": "string",
+          "description": "Directory for per-run log files. Relative paths resolve from the host's working directory."
+        },
+        "flushIntervalMs": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 5000,
+          "description": "Serilog file sink flush-to-disk interval, in milliseconds."
+        },
+        "maxFieldBytes": {
+          "type": "integer",
+          "minimum": 64,
+          "description": "Truncate any log scalar string longer than this, in UTF-8 bytes."
+        },
+        "rxTruncationBytes": {
+          "type": "integer",
+          "minimum": 256,
+          "description": "Truncate the rx: log line for each received event to this many bytes."
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eventChannelCapacity": {
+          "type": "integer",
+          "minimum": 16,
+          "description": "Bounded channel size for per-session event queue. Drop-oldest under back-pressure."
+        },
+        "stderrRingCapacity": {
+          "type": "integer",
+          "minimum": 16,
+          "description": "Ring buffer size for stderr drained from the claude child."
+        },
+        "stdoutDrainTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Grace period to wait for stdout/stderr tasks during session disposal."
+        },
+        "exitDrainWaitSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "REPL grace period after session signals exit, before printing the exit summary."
+        },
+        "interruptTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "description": "Deadline for the interrupt operation triggered by Ctrl+C."
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Default --model for spawned claude processes. null = let claude pick its default."
+        },
+        "includePartialMessages": {
+          "type": "boolean",
+          "description": "Pass --include-partial-messages to receive SSE-shaped stream_event records."
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra args appended verbatim to the claude invocation."
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "description": "Wait for user y/n on approval prompt before auto-deny. Design doc §4.6 default: 60."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["Ask", "Deny", "Auto"],
+          "description": "Default decision policy for tool-permission requests. 'Ask' prompts the user (default). 'Deny' auto-denies everything. 'Auto' consults the light model. 'Allow' is intentionally NOT a persisted default — switch via CLI (--approval-mode allow) or REPL (/approval allow) for one session at a time."
+        },
+        "auto": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "onLowConfidence": {
+              "type": "string",
+              "enum": ["Deny", "FallbackToAsk"],
+              "description": "Behavior when the light model's allow verdict has low confidence. 'Deny' fails closed; 'FallbackToAsk' surfaces the prompt to the user."
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120,
+              "description": "Wall-clock deadline for the light-model API call. On timeout, behaves as low-confidence."
+            },
+            "effort": {
+              "type": "string",
+              "enum": ["Low", "High"],
+              "description": "Effort tier for the safety verdict. 'Low' (default): non-thinking, ~2.3 s p50, $0.0007/call. 'High': thinking enabled, ~9 s p50, ~$0.0074/call. Same axis on both SDK and CLI back ends."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["SingleShot", "LongLived"],
+              "description": "Meaningful ONLY for non-API subscriptions (no ANTHROPIC_API_KEY) — ignored when the SDK back end is in use. Controls the CLI back-end lifecycle for auto-mode safety review specifically. 'SingleShot' (default, recommended): fresh process per call — real isolation between unrelated tool calls. 'LongLived': single child reused across calls with cosmetic /clear isolation only — usually wrong for safety review. Independent of models.light.cli.mode (which controls the default for general consumers)."
+            }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidecarConnectTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "description": "Deadline for the approval sidecar to connect back to the host's named pipe."
+        },
+        "approvalChannelDisposeTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Grace period for the approval-channel server task to exit on disposal."
+        }
+      }
+    },
+    "versioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minClaudeVersion": {
+          "type": "string",
+          "pattern": "^v?\\d+(\\.\\d+){0,2}([-+].*)?$",
+          "description": "Hard floor: claude versions below this are refused. Design doc §7.3."
+        },
+        "testedAgainstVersion": {
+          "type": "string",
+          "pattern": "^v?\\d+(\\.\\d+){0,2}([-+].*)?$",
+          "description": "Version Stage 0 fixtures were recorded against. Mismatch → soft warning."
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "main": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Identifier of the host's main model. Currently informational; the active main-model channel is the spawned claude child. Reserved for future host-side direct calls."
+            }
+          }
+        },
+        "light": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Anthropic model id used by ILightModelService. Default: claude-haiku-4-5."
+            },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 8192,
+              "description": "Cap on output tokens per light-model call (SDK back end)."
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300,
+              "description": "Wall-clock deadline for one light-model call (both back ends)."
+            },
+            "cli": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Knobs for the CLI back end (OAuth-only fallback). See docs/research/claude-cli-light-model.md §6.",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["SingleShot", "LongLived"],
+                  "description": "Meaningful ONLY for non-API subscriptions (no ANTHROPIC_API_KEY) — ignored when the SDK back end is in use. Default lifecycle for general (non-auto-mode) CLI light-model consumers — title generation, classification, summarization. 'LongLived' (default, highly recommended): one process across many calls, amortized startup, /clear between turns for cosmetic isolation. 'SingleShot': fresh process per call (~2.3 s p50, real isolation) — pays startup cost every call; only use if leakage between bulk calls would actually matter. Auto-mode safety review reads its own approval.auto.mode, not this setting."
+                },
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "minimum": 16,
+                  "maximum": 8192,
+                  "description": "CLAUDE_CODE_MAX_OUTPUT_TOKENS for non-thinking calls. 128 matches the safety-verdict size."
+                },
+                "thinkingMaxOutputTokens": {
+                  "type": "integer",
+                  "minimum": 64,
+                  "maximum": 16384,
+                  "description": "CLAUDE_CODE_MAX_OUTPUT_TOKENS for thinking calls. 1024 is a placeholder; the right ceiling is an open benchmark sub-question."
+                },
+                "claudeExecutable": {
+                  "type": ["string", "null"],
+                  "description": "Override the resolved claude executable. Mainly for tests."
+                },
+                "managedCwd": {
+                  "type": ["string", "null"],
+                  "description": "Working directory the child runs in. null = %USERPROFILE%/.infinicontext/light-cwd/."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stage 2A task registry + lock subsystem. Threshold and model-context-window keys land alongside Phase 8.",
+      "properties": {
+        "dbPath": {
+          "type": ["string", "null"],
+          "description": "Override for the SQLite registry path. null resolves to %USERPROFILE%/.infinicontext/infinicontext.db."
+        },
+        "lockTtlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "description": "How long a granted task-artifact lock stays valid before auto-expiry. Default 30."
+        },
+        "lockMaxWaitSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "description": "How long a competing session waits for a contended lock before reporting a timeout. Default 60."
+        },
+        "softThresholdPct": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "Context window % at which the host injects a polite 'flush at next stopping point' nudge. Default 60."
+        },
+        "hardThresholdPct": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "Context window % at which the host injects a firm 'flush now, no new work' nudge. Must be strictly greater than softThresholdPct. Default 85."
+        },
+        "modelContextWindows": {
+          "type": "object",
+          "description": "Fallback context-window map keyed by model id, used when claude's own modelUsage.contextWindow is absent.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "cosmetics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Customisable user-facing strings. None of these change behavior.",
+      "properties": {
+        "repl": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt": { "type": "string" }
+          }
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "timeoutMessage": { "type": "string" },
+            "approvedMessage": { "type": "string" },
+            "deniedMessage": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

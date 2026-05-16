@@ -1,0 +1,10 @@
+{
+  "_comment": "Light-model script: emits a safety-deny verdict wrapped in a ```json``` markdown fence, exercising the fence-stripping path.",
+  "actions": [
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000002","model":"fake-haiku","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"```json\n{\"decision\":\"deny\",\"confidence\":\"high\",\"axis\":\"destructive\",\"reason\":\"rm -rf is irreversible\"}\n```"}]},"session_id":"00000000-0000-0000-0000-000000000002"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"ok","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000002","total_cost_usd":0.0007}},
+    {"type": "exit", "code": 0}
+  ]
+}

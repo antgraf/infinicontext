@@ -1,0 +1,7 @@
+{
+  "prompts": [
+    "Use the Bash tool to run `echo hello-from-tool` and tell me the output."
+  ],
+  "max_runtime_seconds": 120,
+  "claude_extra_args": []
+}

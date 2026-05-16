@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\InfiniContext.Core\InfiniContext.Core.csproj" />
+    <!--
+      Spectre.Console drives the Stage 2B multi-pane TUI (decisions.md D17 — pin to an exact
+      stable version; Dependabot/manual upgrades happen as separate PRs).
+    -->
+    <PackageReference Include="Spectre.Console" Version="0.55.2" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

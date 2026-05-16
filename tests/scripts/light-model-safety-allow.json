@@ -1,0 +1,10 @@
+{
+  "_comment": "FakeClaude script for light-model integration tests. Waits for one stdin line, emits system/init + assistant (with a safety-verdict JSON allow) + result, then exits.",
+  "actions": [
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000001","model":"fake-haiku","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\"decision\":\"allow\",\"confidence\":\"high\",\"axis\":\"none\",\"reason\":\"benign read-only listing\"}"}]},"session_id":"00000000-0000-0000-0000-000000000001"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"ok","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000001","total_cost_usd":0.0007}},
+    {"type": "exit", "code": 0}
+  ]
+}

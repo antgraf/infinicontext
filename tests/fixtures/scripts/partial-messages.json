@@ -1,0 +1,7 @@
+{
+  "prompts": [
+    "Write a 4-sentence paragraph about the history of TCP/IP. Reply with the paragraph and nothing else."
+  ],
+  "max_runtime_seconds": 90,
+  "claude_extra_args": ["--include-partial-messages"]
+}

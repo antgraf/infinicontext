@@ -1,0 +1,11 @@
+{
+  "_comment": "200ms gap between assistant and result; verifies state stays Streaming during the gap and the parser does not deadlock on an open stdout.",
+  "actions": [
+    {"type": "wait-stdin"},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000ddd","model":"fake","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"slow"}]},"session_id":"00000000-0000-0000-0000-000000000ddd"}},
+    {"type": "sleep-ms", "ms": 200},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":200,"num_turns":1,"result":"slow","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000ddd","total_cost_usd":0}},
+    {"type": "exit", "code": 0}
+  ]
+}

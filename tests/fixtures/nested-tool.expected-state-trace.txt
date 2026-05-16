@@ -1,0 +1,7 @@
+Idle -> Sending (BeginSend)
+Sending -> Streaming (assistant)
++tool Agent#toolu_01MxiH1ZSAxMMsuWiDCXuAEx (parent=) (open=1)
++tool Bash#toolu_01NgZXrKq2feFCZJsqJxzCGe (parent=toolu_01MxiH1ZSAxMMsuWiDCXuAEx) (open=2)
+-tool Bash#toolu_01NgZXrKq2feFCZJsqJxzCGe (open=1)
+-tool Agent#toolu_01MxiH1ZSAxMMsuWiDCXuAEx (open=0)
+Streaming -> Idle (result/success)

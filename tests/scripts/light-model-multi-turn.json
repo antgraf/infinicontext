@@ -1,0 +1,31 @@
+{
+  "_comment": "Light-model script: 3 caller-level calls on the same long-lived child. Each caller call is two FakeClaude turns (real verdict + /clear confirmation), so this script handles 6 wait-stdin/emit cycles. Used by long-lived service tests.",
+  "actions": [
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000010","model":"fake-haiku","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\"decision\":\"allow\",\"confidence\":\"high\",\"axis\":\"none\",\"reason\":\"turn 1\"}"}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"ok","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0007}},
+
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I have cleared the conversation."}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":2,"result":"cleared","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0001}},
+
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\"decision\":\"deny\",\"confidence\":\"high\",\"axis\":\"destructive\",\"reason\":\"turn 2\"}"}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":3,"result":"ok","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0007}},
+
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I have cleared the conversation."}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":4,"result":"cleared","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0001}},
+
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\"decision\":\"allow\",\"confidence\":\"medium\",\"axis\":\"none\",\"reason\":\"turn 3\"}"}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":5,"result":"ok","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0007}},
+
+    {"type": "wait-stdin", "lines": 1},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I have cleared the conversation."}]},"session_id":"00000000-0000-0000-0000-000000000010"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":6,"result":"cleared","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000010","total_cost_usd":0.0001}},
+
+    {"type": "exit", "code": 0}
+  ]
+}

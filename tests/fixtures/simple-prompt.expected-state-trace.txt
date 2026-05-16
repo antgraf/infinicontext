@@ -1,0 +1,3 @@
+Idle -> Sending (BeginSend)
+Sending -> Streaming (assistant)
+Streaming -> Idle (result/success)

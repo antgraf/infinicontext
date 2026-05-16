@@ -1,0 +1,5 @@
+Idle -> Sending (BeginSend)
+Sending -> Streaming (assistant)
++tool Bash#toolu_01UtGoCC73A4Nxze93R9DvoU (parent=) (open=1)
+-tool Bash#toolu_01UtGoCC73A4Nxze93R9DvoU (open=0)
+Streaming -> Idle (result/success)

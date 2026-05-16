@@ -1,0 +1,11 @@
+{
+  "_comment": "Emits one unknown top-level event between known events; parser drift counter must increment.",
+  "actions": [
+    {"type": "wait-stdin"},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000ccc","model":"fake","cwd":"/tmp","claude_code_version":"99.99.99-future"}},
+    {"type": "emit-line", "json": {"type":"some_future_top_level","payload":{"answer":42},"session_id":"00000000-0000-0000-0000-000000000ccc"}},
+    {"type": "emit-line", "json": {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"drift"}]},"session_id":"00000000-0000-0000-0000-000000000ccc"}},
+    {"type": "emit-line", "json": {"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"drift","stop_reason":"end_turn","session_id":"00000000-0000-0000-0000-000000000ccc","total_cost_usd":0}},
+    {"type": "exit", "code": 0}
+  ]
+}

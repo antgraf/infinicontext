@@ -1,0 +1,9 @@
+{
+  "_comment": "Emits a valid init, then raw bytes for an unterminated line, then exits non-zero. Tests state machine handles process exit cleanly while a malformed final line is in flight.",
+  "actions": [
+    {"type": "wait-stdin"},
+    {"type": "emit-line", "json": {"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000eee","model":"fake","cwd":"/tmp","claude_code_version":"0.0.0"}},
+    {"type": "emit-raw", "bytes": "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\""},
+    {"type": "exit", "code": 1}
+  ]
+}
