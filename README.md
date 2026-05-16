@@ -2,6 +2,8 @@
 
 **A specialized, opinionated operations tool for long-running autonomous AI agents — agents that work on problems bigger than one context window, supervised by a human watching many projects at once.**
 
+→ **New here?** Start with the [Quickstart](docs/quickstart.md) — five minutes from clone to a multi-session supervisor whose work survives the context window.
+
 ## The vision
 
 Today's coding agents have a hard ceiling: the context window. When it fills, the agent forgets what it was doing — there's no clean "save and continue tomorrow." Around that limit grows a second problem: a human babysitting one agent in one terminal doesn't scale, but stepping away entirely means tool approvals stall and runaway sessions burn budget. InfiniContext is the missing layer.
@@ -58,5 +60,8 @@ claude — its own slash-commands like `/clear` or `/compact` reach claude as ex
 
 ## Where to read next
 
+- **Quickstart:** [`docs/quickstart.md`](docs/quickstart.md) — hands-on walkthrough: launch the host, create a task, run multiple sessions side-by-side, hand off cleanly when context fills.
+- **`/task` reference:** [`docs/cli/howto/task-commands.md`](docs/cli/howto/task-commands.md) — full sub-grammar for `/task new | list | show | fork | merge | switch | delete` with every flag.
 - **Architecture:** [`docs/infinicontext-initial-design.md`](docs/infinicontext-initial-design.md) — wire protocol, parser tolerance contract, state machine, MCP approval flow, process supervision, version-drift strategy, stage 1/2A/2B/3 plan. The "why" behind the code.
+- **Decisions ledger:** [`docs/stage2/decisions.md`](docs/stage2/decisions.md) — running record of every constraint that affects future work.
 - **Agent contract:** [`CLAUDE.md`](CLAUDE.md) — what Claude Code (this repo's primary author) is told about the code, conventions, and constraints. Read it before non-trivial changes.
