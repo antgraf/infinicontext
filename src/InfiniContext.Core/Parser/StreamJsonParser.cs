@@ -86,20 +86,32 @@ public sealed class StreamJsonParser
             "user" => BuildUserEvent(common),
             "rate_limit_event" => new RateLimitEvent
             {
-                Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid,
-                ParentToolUseId = parentToolUseId, Raw = root,
+                Type = type,
+                Subtype = subtype,
+                SessionId = sessionId,
+                Uuid = uuid,
+                ParentToolUseId = parentToolUseId,
+                Raw = root,
             },
             "stream_event" => new PartialMessageEvent
             {
-                Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid,
-                ParentToolUseId = parentToolUseId, Raw = root,
+                Type = type,
+                Subtype = subtype,
+                SessionId = sessionId,
+                Uuid = uuid,
+                ParentToolUseId = parentToolUseId,
+                Raw = root,
                 InnerType = (string?)root["event"]?["type"],
             },
             "result" => BuildResultEvent(common),
             "control_response" => new ControlResponseEvent
             {
-                Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid,
-                ParentToolUseId = parentToolUseId, Raw = root,
+                Type = type,
+                Subtype = subtype,
+                SessionId = sessionId,
+                Uuid = uuid,
+                ParentToolUseId = parentToolUseId,
+                Raw = root,
                 RequestId = (string?)root["request_id"],
                 Status = (string?)root["response"]?["status"],
             },
@@ -115,8 +127,12 @@ public sealed class StreamJsonParser
         {
             "init" => new SystemInitEvent
             {
-                Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid,
-                ParentToolUseId = parentToolUseId, Raw = root,
+                Type = type,
+                Subtype = subtype,
+                SessionId = sessionId,
+                Uuid = uuid,
+                ParentToolUseId = parentToolUseId,
+                Raw = root,
                 Cwd = (string?)root["cwd"],
                 Model = (string?)root["model"],
                 ClaudeCodeVersion = (string?)root["claude_code_version"],
@@ -124,8 +140,12 @@ public sealed class StreamJsonParser
             },
             "hook_response" => new SystemHookResponseEvent
             {
-                Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid,
-                ParentToolUseId = parentToolUseId, Raw = root,
+                Type = type,
+                Subtype = subtype,
+                SessionId = sessionId,
+                Uuid = uuid,
+                ParentToolUseId = parentToolUseId,
+                Raw = root,
                 HookName = (string?)root["hook_name"],
                 HookEvent = (string?)root["hook_event"],
                 Outcome = (string?)root["outcome"],
@@ -146,8 +166,13 @@ public sealed class StreamJsonParser
         var blocks = ParseContentBlocks(c.Raw["message"]?["content"] as JsonArray);
         return new AssistantEvent
         {
-            Type = c.Type, Subtype = c.Subtype, SessionId = c.SessionId, Uuid = c.Uuid,
-            ParentToolUseId = c.ParentToolUseId, Raw = c.Raw, Content = blocks,
+            Type = c.Type,
+            Subtype = c.Subtype,
+            SessionId = c.SessionId,
+            Uuid = c.Uuid,
+            ParentToolUseId = c.ParentToolUseId,
+            Raw = c.Raw,
+            Content = blocks,
         };
     }
 
@@ -156,8 +181,13 @@ public sealed class StreamJsonParser
         var blocks = ParseContentBlocks(c.Raw["message"]?["content"] as JsonArray);
         return new UserEvent
         {
-            Type = c.Type, Subtype = c.Subtype, SessionId = c.SessionId, Uuid = c.Uuid,
-            ParentToolUseId = c.ParentToolUseId, Raw = c.Raw, Content = blocks,
+            Type = c.Type,
+            Subtype = c.Subtype,
+            SessionId = c.SessionId,
+            Uuid = c.Uuid,
+            ParentToolUseId = c.ParentToolUseId,
+            Raw = c.Raw,
+            Content = blocks,
         };
     }
 
@@ -166,8 +196,12 @@ public sealed class StreamJsonParser
         var root = c.Raw;
         return new ResultEvent
         {
-            Type = c.Type, Subtype = c.Subtype, SessionId = c.SessionId, Uuid = c.Uuid,
-            ParentToolUseId = c.ParentToolUseId, Raw = root,
+            Type = c.Type,
+            Subtype = c.Subtype,
+            SessionId = c.SessionId,
+            Uuid = c.Uuid,
+            ParentToolUseId = c.ParentToolUseId,
+            Raw = root,
             IsError = (bool?)root["is_error"],
             DurationMs = (long?)root["duration_ms"],
             NumTurns = (int?)root["num_turns"],
@@ -203,14 +237,16 @@ public sealed class StreamJsonParser
                 "thinking" => new ThinkingBlock { Type = blockType, Raw = block, Thinking = (string?)block["thinking"] ?? "" },
                 "tool_use" => new ToolUseBlock
                 {
-                    Type = blockType, Raw = block,
+                    Type = blockType,
+                    Raw = block,
                     Id = (string?)block["id"] ?? "",
                     Name = (string?)block["name"] ?? "",
                     Input = block["input"],
                 },
                 "tool_result" => new ToolResultBlock
                 {
-                    Type = blockType, Raw = block,
+                    Type = blockType,
+                    Raw = block,
                     ToolUseId = (string?)block["tool_use_id"] ?? "",
                     Content = block["content"],
                     IsError = (bool?)block["is_error"] ?? false,
@@ -234,8 +270,13 @@ public sealed class StreamJsonParser
         Bump(discriminator);
         return new UnknownEvent
         {
-            Type = c.Type, Subtype = c.Subtype, SessionId = c.SessionId, Uuid = c.Uuid,
-            ParentToolUseId = c.ParentToolUseId, Raw = c.Raw, Discriminator = discriminator,
+            Type = c.Type,
+            Subtype = c.Subtype,
+            SessionId = c.SessionId,
+            Uuid = c.Uuid,
+            ParentToolUseId = c.ParentToolUseId,
+            Raw = c.Raw,
+            Discriminator = discriminator,
         };
     }
 

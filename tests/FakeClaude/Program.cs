@@ -99,65 +99,65 @@ static async Task<int> RunScript(string scriptPath, StreamReader stdin)
         switch (type)
         {
             case "wait-stdin":
-            {
-                var lines = action["lines"]?.GetValue<int>() ?? 1;
-                var recordTo = (string?)action["record_to"];
-                StreamWriter? recorder = null;
-                if (recordTo is not null)
                 {
-                    recorder = new StreamWriter(recordTo, append: true, Encoding.UTF8) { AutoFlush = true };
-                }
-                try
-                {
-                    for (var i = 0; i < lines; i++)
+                    var lines = action["lines"]?.GetValue<int>() ?? 1;
+                    var recordTo = (string?)action["record_to"];
+                    StreamWriter? recorder = null;
+                    if (recordTo is not null)
                     {
-                        var line = await stdin.ReadLineAsync();
-                        if (line is null) return 0;
-                        if (recorder is not null) await recorder.WriteLineAsync(line);
+                        recorder = new StreamWriter(recordTo, append: true, Encoding.UTF8) { AutoFlush = true };
                     }
+                    try
+                    {
+                        for (var i = 0; i < lines; i++)
+                        {
+                            var line = await stdin.ReadLineAsync();
+                            if (line is null) return 0;
+                            if (recorder is not null) await recorder.WriteLineAsync(line);
+                        }
+                    }
+                    finally
+                    {
+                        recorder?.Dispose();
+                    }
+                    break;
                 }
-                finally
-                {
-                    recorder?.Dispose();
-                }
-                break;
-            }
             case "emit-line":
-            {
-                var node = action["json"]
-                    ?? throw new InvalidOperationException("emit-line requires 'json'");
-                await Console.Out.WriteLineAsync(node.ToJsonString());
-                await Console.Out.FlushAsync();
-                break;
-            }
+                {
+                    var node = action["json"]
+                        ?? throw new InvalidOperationException("emit-line requires 'json'");
+                    await Console.Out.WriteLineAsync(node.ToJsonString());
+                    await Console.Out.FlushAsync();
+                    break;
+                }
             case "emit-raw":
-            {
-                var bytes = (string?)action["bytes"]
-                    ?? throw new InvalidOperationException("emit-raw requires 'bytes'");
-                await Console.Out.WriteAsync(bytes);
-                await Console.Out.FlushAsync();
-                break;
-            }
+                {
+                    var bytes = (string?)action["bytes"]
+                        ?? throw new InvalidOperationException("emit-raw requires 'bytes'");
+                    await Console.Out.WriteAsync(bytes);
+                    await Console.Out.FlushAsync();
+                    break;
+                }
             case "emit-fixture":
-            {
-                var path = ResolveScriptPath(scriptDir, (string?)action["path"]
-                    ?? throw new InvalidOperationException("emit-fixture requires 'path'"));
-                var perLineDelayMs = action["delay_ms"]?.GetValue<int>() ?? 0;
-                await StreamFixture(path, perLineDelayMs);
-                break;
-            }
+                {
+                    var path = ResolveScriptPath(scriptDir, (string?)action["path"]
+                        ?? throw new InvalidOperationException("emit-fixture requires 'path'"));
+                    var perLineDelayMs = action["delay_ms"]?.GetValue<int>() ?? 0;
+                    await StreamFixture(path, perLineDelayMs);
+                    break;
+                }
             case "sleep-ms":
-            {
-                var ms = action["ms"]?.GetValue<int>() ?? 0;
-                if (ms > 0) await Task.Delay(ms);
-                break;
-            }
+                {
+                    var ms = action["ms"]?.GetValue<int>() ?? 0;
+                    if (ms > 0) await Task.Delay(ms);
+                    break;
+                }
             case "exit":
-            {
-                var code = action["code"]?.GetValue<int>() ?? 0;
-                await Console.Out.FlushAsync();
-                return code;
-            }
+                {
+                    var code = action["code"]?.GetValue<int>() ?? 0;
+                    await Console.Out.FlushAsync();
+                    return code;
+                }
             default:
                 throw new InvalidOperationException($"unknown action type: {type}");
         }

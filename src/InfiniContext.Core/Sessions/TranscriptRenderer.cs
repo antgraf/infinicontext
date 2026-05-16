@@ -47,7 +47,7 @@ public static class TranscriptRenderer
                 case UnknownBlock ub:
                     fragments.Add($"\n[unknown_block: {ub.Type}]\n");
                     break;
-                // ThinkingBlock intentionally not rendered — already in the log.
+                    // ThinkingBlock intentionally not rendered — already in the log.
             }
         }
         return fragments;

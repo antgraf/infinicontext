@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write  # reserved for future PR-comment expansion of coverage summary
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build + test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'InfiniContext.slnx') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore InfiniContext.slnx
+
+      - name: Format check
+        run: dotnet format InfiniContext.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build InfiniContext.slnx --configuration Release --no-restore
+
+      - name: Test (with coverage)
+        run: |
+          dotnet test InfiniContext.slnx `
+            --configuration Release `
+            --no-build `
+            --logger "trx;LogFileName=test-results.trx" `
+            --collect:"XPlat Code Coverage" `
+            --results-directory coverage
+
+      - name: Generate coverage summary
+        if: always()
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          reportgenerator `
+            -reports:coverage/**/coverage.cobertura.xml `
+            -targetdir:coverage-report `
+            -reporttypes:MarkdownSummaryGithub
+
+      - name: Append coverage to job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = Join-Path 'coverage-report' 'SummaryGithub.md'
+          if (Test-Path $summary) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value (Get-Content $summary -Raw)
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '_No coverage summary produced (tests may have failed before collection)._'
+          }

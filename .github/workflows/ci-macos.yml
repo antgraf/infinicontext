@@ -1,0 +1,52 @@
+name: CI (macOS)
+
+# Stage 2B Phase 8 / D37: macOS runs are manual-only because private-repo macos-latest minutes
+# bill at 10x the windows-latest rate. Trigger this workflow whenever Phase 7's macOS-specific
+# code (`PosixSignalSupervisor`, `FileSystemNaming`, [MacOnlyFact] tests) is touched, or before
+# any release that needs to declare the "killing the host cleans up child processes тАФ verified
+# on macOS" exit criterion green. The 3 MacOnly tests light up here for the first time.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + test (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'InfiniContext.slnx') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore InfiniContext.slnx
+
+      # No `dotnet format --verify-no-changes` here тАФ the Windows CI owns the formatting gate so we
+      # don't burn 10x-billed macOS minutes on a cosmetic check.
+
+      - name: Build
+        run: dotnet build InfiniContext.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: |
+          dotnet test InfiniContext.slnx \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory coverage

@@ -119,7 +119,8 @@ public class ToolStackTests
         var sm = new SessionStateMachine();
         sm.Apply(new UnknownEvent
         {
-            Type = "future_type", Discriminator = "future_type",
+            Type = "future_type",
+            Discriminator = "future_type",
             Raw = new System.Text.Json.Nodes.JsonObject(),
         });
         sm.UnknownEventCount.Should().Be(1);
@@ -134,13 +135,15 @@ public class ToolStackTests
 
     private static ResultEvent MakeResultEvent() => new()
     {
-        Type = "result", Subtype = "success",
+        Type = "result",
+        Subtype = "success",
         Raw = new System.Text.Json.Nodes.JsonObject(),
     };
 
     private static SystemCompactEvent MakeCompactEvent() => new()
     {
-        Type = "system", Subtype = "compact",
+        Type = "system",
+        Subtype = "compact",
         Raw = new System.Text.Json.Nodes.JsonObject(),
     };
 }
