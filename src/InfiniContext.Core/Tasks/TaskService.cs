@@ -58,7 +58,15 @@ public sealed class TaskService
                 "and the registry row goes stale. Pass --home <stable-path> to /task new (typically the " +
                 "repo root, not a build output).");
 
-        var title = SanitizeTitle(await _lightModel.GenerateShortTitleAsync(description, maxWords: 6, ct).ConfigureAwait(false));
+        // The light model runs with no filesystem tools (see CLAUDE.md "Light-model service"),
+        // so a description that mentions local files or @-references can elicit a refusal like
+        // "I don't have access to read files…" which then gets stored verbatim as the title.
+        // Detect that shape and fall back to a deterministic title derived from the description;
+        // the description itself is preserved into description.md regardless, so the user's
+        // references survive for the /task switch session to act on.
+        var rawTitle = await _lightModel.GenerateShortTitleAsync(description, maxWords: 6, ct).ConfigureAwait(false);
+        var sanitized = SanitizeTitle(rawTitle);
+        var title = LooksLikeRefusal(sanitized) ? DeriveFallbackTitle(description) : sanitized;
         var slug = Slugify.For(title);
         var id = await _store.AllocateIdAsync(ct).ConfigureAwait(false);
 
@@ -295,6 +303,47 @@ public sealed class TaskService
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="title"/> looks like a refusal the light model emitted instead
+    /// of a label — typically because the user's description referenced files the light-model
+    /// back end can't read. Match is case-insensitive on a small set of canonical refusal
+    /// openers. Public for tests; not part of the service's behavioural contract.
+    /// </summary>
+    public static bool LooksLikeRefusal(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return false;
+        var s = title.TrimStart().ToLowerInvariant();
+        return s.StartsWith("i don't have access")
+            || s.StartsWith("i do not have access")
+            || s.StartsWith("i cannot ")
+            || s.StartsWith("i can't ")
+            || s.StartsWith("i'm unable")
+            || s.StartsWith("i am unable")
+            || s.StartsWith("i'm sorry")
+            || s.StartsWith("i am sorry")
+            || s.StartsWith("sorry, i ")
+            || s.StartsWith("unfortunately,");
+    }
+
+    /// <summary>
+    /// Build a deterministic fallback title from the user's description: take the first
+    /// non-empty line and clamp to six whitespace-delimited words. Used when the light model
+    /// refuses or returns an unusable title. The splitter intentionally does NOT break on
+    /// <c>.</c> / <c>!</c> / <c>?</c> — those collide with file extensions (<c>docs/foo.md</c>)
+    /// and decimal numbers; the six-word cap is the length budget. Public for tests; not part
+    /// of the service's behavioural contract.
+    /// </summary>
+    public static string DeriveFallbackTitle(string description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return "Untitled task";
+        var firstLine = description.Split(new[] { '\r', '\n' }, 2, StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(firstLine)) return "Untitled task";
+        var words = firstLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0) return "Untitled task";
+        return SanitizeTitle(string.Join(' ', words.Take(6)));
     }
 
     private static string BuildInitialDescription(string title, string body) => $"""

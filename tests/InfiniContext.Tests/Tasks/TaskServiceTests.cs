@@ -50,6 +50,61 @@ public class TaskServiceTests
     }
 
     [Fact]
+    public async Task Create_falls_back_to_deterministic_title_when_light_model_refuses()
+    {
+        // Repro for the 2026-05-16 bug: a /task new whose description referenced local files
+        // (which the light model cannot read) had the model's refusal text stored verbatim as
+        // the task title. The description itself must still be persisted to description.md so
+        // the /task switch session can act on the references.
+        await using var fixture = await TaskServiceFixture.OpenAsync();
+        fixture.LightModel.QueueTitle("I don't have access to read files from your local filesystem. I cannot view the documents you've referenced to plan phase 3.");
+
+        const string description = "Review @docs/foo.md and @docs/bar.md to plan phase 3 of the migration.";
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, description);
+
+        record.Title.Should().NotContain("I don't have access");
+        record.Title.Should().Be("Review @docs/foo.md and @docs/bar.md to plan");
+
+        var folder = new TaskFolder(fixture.HomeCwd, record.Id, Slugify.For(record.Title));
+        var desc = await File.ReadAllTextAsync(Path.Combine(folder.Path, "description.md"));
+        desc.Should().Contain("@docs/foo.md").And.Contain("@docs/bar.md");
+    }
+
+    [Theory]
+    [InlineData("I don't have access to /etc/passwd")]
+    [InlineData("I cannot read those files")]
+    [InlineData("I can't fulfill that request")]
+    [InlineData("I'm unable to help with this")]
+    [InlineData("I'm sorry, but I cannot")]
+    [InlineData("Sorry, I cannot read local files")]
+    [InlineData("Unfortunately, I have no file access")]
+    public void LooksLikeRefusal_recognizes_common_refusal_openers(string title)
+    {
+        TaskService.LooksLikeRefusal(title).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("Implement Phase 3")]
+    [InlineData("Fix the parser drift counter")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void LooksLikeRefusal_returns_false_for_normal_titles(string title)
+    {
+        TaskService.LooksLikeRefusal(title).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("Review docs/foo.md and plan phase 3 of the migration.", "Review docs/foo.md and plan phase 3")]
+    [InlineData("One sentence only", "One sentence only")]
+    [InlineData("First line\nSecond line ignored", "First line")]
+    [InlineData("", "Untitled task")]
+    [InlineData("   ", "Untitled task")]
+    public void DeriveFallbackTitle_clamps_to_first_six_words_of_first_line(string description, string expected)
+    {
+        TaskService.DeriveFallbackTitle(description).Should().Be(expected);
+    }
+
+    [Fact]
     public async Task Create_rejects_blank_inputs()
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
