@@ -15,7 +15,7 @@ InfiniContext CLI itself.
 
 | Command | What it does |
 |---|---|
-| `/task new "<description>"` | Create a new task. The light model picks the title. |
+| `/task new "<description>" [--home <path>]` | Create a new task. Light model picks the title; home defaults to current cwd. |
 | `/task list [--status …] [--limit N]` | Show recent tasks (most-recently-active first). |
 | `/task show <id>` | One task with its artifact list and timestamps. |
 | `/task fork <id> ["<title>"]` | Copy a task into a new id; lineage recorded. |
@@ -23,6 +23,20 @@ InfiniContext CLI itself.
 | `/task switch <id>` | Start a Claude session bound to the task (Phase 6 — not yet wired). |
 | `/task delete <id> [--remove-folder]` | Drop the registry row. Folder kept unless `--remove-folder`. |
 | `/task help` | Print the in-REPL command summary. |
+
+## Task homes (`home_cwd`)
+
+Every task has a **home** — the working directory it was created in, recorded on the registry row as `home_cwd`. The task folder is always `<home_cwd>/.task/<id>-<slug>/`, and `/task switch <id>` re-spawns `claude` rooted at that same `home_cwd` so the agent finds the artifacts at the path it expects. Get the home right and the rest of the lifecycle just works.
+
+**Where it comes from.** `/task new` defaults `home_cwd` to the InfiniContext host's current working directory. Override with `/task new "<description>" --home <path>` when you want the task scaffolded somewhere other than where you launched the host — typically the repo root if you launched from a subdirectory.
+
+**Build-output guard.** Paths containing `bin/Debug`, `bin/Release`, or `obj/` are rejected with a specific error message. Tasks scaffolded under those would get wiped on the next `dotnet build`, leaving the registry row pointing at nothing. If you hit this, pass `--home <stable-path>` (the repo root, usually).
+
+**Inheritance.** `/task fork <id>` inherits the source task's `home_cwd` — the forked folder lives next to the parent's under the same `.task/`. `/task merge` requires every source to share the same `home_cwd`; cross-repo merge is post-MVP and refused with a clear error.
+
+**Validation on switch.** `/task switch <id>` checks that `home_cwd` and the `.task/<id>-<slug>/` folder both still exist on disk before spawning. If the home directory has been wiped (build output, manual delete, repo moved), the switch is refused with a message pointing at `/task delete` as the recovery path — the registry row is stale and needs to be dropped before the id is reused.
+
+You can see a task's home with `/task show <id>` — it's the `home:` line in the output. `/task list` doesn't surface it in the summary table.
 
 ## Walkthrough
 
@@ -86,9 +100,33 @@ If the title contains characters that don't fit a folder name (spaces,
 punctuation, accents), the slug normalises to ASCII kebab-case (`Café au lait`
 → `cafe-au-lait`).
 
-**Requires** `ANTHROPIC_API_KEY` for the title call. If the key is missing,
-this command returns `[task] error: …` and the row isn't created. Other
-`/task` commands keep working.
+**`--home <path>`** sets where the task lives. The argument is recorded on
+the registry row as `home_cwd`, and the task folder is scaffolded at
+`<path>/.task/<id>-<slug>/`. Default is the InfiniContext host's current
+working directory. The flag can appear before or after the description so a
+long description body doesn't push it out:
+
+```
+> /task new --home D:\src\my-project "rework the auth migration"
+> /task new "rework the auth migration" --home D:\src\my-project
+```
+
+Both forms are equivalent. Use `--home` whenever the launch cwd isn't the
+right place to anchor the task — typically when you started the host from
+a subdirectory but want the task's `.task/` folder at the repo root, where
+it'll be committed alongside the code.
+
+Paths that look like build outputs (anything containing `bin/Debug`,
+`bin/Release`, or `obj/`) are rejected — those get wiped on rebuild and
+the registry row goes stale. The error message names a stable path to use
+instead.
+
+**Credentials.** `/task new` calls the light model to generate the title.
+With `ANTHROPIC_API_KEY` set, it uses the Anthropic SDK directly. Without
+it, the host falls back to the CLI light-model service via the same OAuth
+login `claude` itself uses, so the command works either way. If both are
+missing (no key, no `claude /login`), the command returns `[task] error: …`
+and the row isn't created; other `/task` commands keep working.
 
 ### `/task list`
 
@@ -246,6 +284,31 @@ SQLite DB and the skill folder are host-global: they're per-machine.
 
 The agent never reads SQLite directly. All durable task content lives as
 plain markdown the agent can edit with `Read` / `Edit` / `Write`.
+
+### What each artifact is for
+
+Tasks are InfiniContext's **structured-compaction** primitive: instead of
+collapsing a session into a free-form `/compact` blob that dies with the
+process, each task is a small, named set of markdown files the agent
+edits in place across sessions. Each file has a specific role:
+
+| File             | Role                                                        | Mandatory |
+|------------------|-------------------------------------------------------------|-----------|
+| `index.md`       | Table of contents for the task folder; the agent reads it first and uses it to decide what else to load. | yes |
+| `description.md` | Original problem statement — what you typed at `/task new`. Set once, rarely edited. | yes |
+| `progress.md`    | Append-only audit log of state changes (phase completion, decision recorded, blocker hit, hand-off). Grouped under `## YYYY-MM-DD` headings. The single most important file for cross-session continuity. | yes |
+| `plan.md`        | Forward-looking work plan: what's left, in what order, with rough sequencing. | no |
+| `research.md`    | Findings, experiments, what was tried, what didn't work. | no |
+| `decisions.md`   | Decision record — what was chosen and why; the receipt for future readers. | no |
+| `design.md`      | Architectural or design notes that live longer than one session of plan/research. | no |
+| anything else    | The agent creates what the work needs; appending a row to `index.md` is part of the contract. | no |
+
+The skill (`~/.claude/skills/infinicontext-task/SKILL.md`) is what teaches
+every session to honour this contract: read `index.md` first, load only
+what the prompt needs, append to `progress.md` at every meaningful state
+change, lock before writing. A fresh session can pick up days-old work
+because the previous session left the artifacts current — the file set is
+the schema, not whatever the model felt like summarising.
 
 ## Configuration
 

@@ -63,17 +63,37 @@ Switch into the task. This spawns a *fresh* `claude` process rooted at the task'
 
 The agent (taught by the auto-installed [`infinicontext-task` skill](../src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs)) reads `index.md`, decides what else to load, edits in place, and appends to `progress.md` on every meaningful state change.
 
-## Not losing context, in practice
+## Structured compaction: how the context survives
 
-Three layered defences:
+Claude's built-in `/compact` summarises the running conversation into a free-form blob and stuffs it into the *same* session's prompt prefix. The model picks what to keep; the schema is "whatever the model wrote"; the result lives in a context window that's about to die anyway. When the process ends, the summary ends with it.
 
-**1. Durable artifacts.** `progress.md` is the working memory. The skill teaches every session: append at every state change, group by `## YYYY-MM-DD` headings. When the window fills, the file knows where the work is.
+InfiniContext does **structured compaction** instead. Two things at once:
+
+- **Durable on disk.** The summary lives as plain markdown files inside the repo, not in a context-window prefix. They survive process death, travel with the code in git, are diffable across sessions, and an agent can `Read` and `Edit` them like any other source file.
+- **Structured by role.** Instead of one free-form summary the model picks the contents of, the host scaffolds a defined file set with named roles. The agent edits each file in place rather than re-summarising:
+
+| File             | Role                                                       | Mandatory |
+|------------------|------------------------------------------------------------|-----------|
+| `index.md`       | Table of contents / artifact registry; read it first       | yes       |
+| `description.md` | Original problem statement (set at `/task new`)            | yes       |
+| `progress.md`    | Append-only audit log of state changes, grouped by date    | yes       |
+| `plan.md`        | Forward-looking work plan                                  | no        |
+| `research.md`    | Findings, investigations, what was tried                   | no        |
+| `decisions.md`   | Decision record — what was chosen and why                  | no        |
+| `design.md`      | Architectural / design notes                               | no        |
+| anything else    | The agent creates what the work needs                      | no        |
+
+A fresh session reads `index.md` first, then loads *only* the files relevant to what's being asked (the skill explicitly instructs: don't preload `description.md` or `progress.md` if the user's prompt is about something else — every load costs context budget). Old work isn't pruned, it's filed.
+
+Three operational defences keep the loop tight around that artifact set:
+
+**1. The skill teaches the contract.** On first host launch InfiniContext installs `~/.claude/skills/infinicontext-task/SKILL.md`. Claude Code auto-discovers user-level skills, so every session that opens a `.task/` folder picks up the rules with zero per-session pre-fill cost: read `index.md` first, append to `progress.md` at every state change, use the lock channel for writes.
 
 **2. Context-pressure nudges.** The host watches the running token sum reported in each `result` event against the model's context window. At **60%** it injects a *soft* user turn: *finish the current sub-task, write progress, exit cleanly so I can hand off to a fresh session.* At **85%** it injects a *hard* turn: *flush now, no new work, no clarifying questions.* Each fires at most once per session. Thresholds live in `settings.json` under `tasks.softThresholdPct` / `tasks.hardThresholdPct`.
 
-**3. Clean hand-off via `/task switch`.** Run `/task switch 1` again — minutes or days later. A brand-new `claude` boots, reads `index.md`, then `progress.md`, sees what the previous session was mid-flight on, and continues. Repeat as needed.
+**3. Clean hand-off via `/task switch`.** Run `/task switch 1` again — minutes or days later. A brand-new `claude` boots, reads `index.md`, opens whatever the previous session pointed at in `progress.md`, and continues. Repeat as needed.
 
-Combined: a task can span dozens of sessions across days. Each one ends with `progress.md` up to date. The next begins by reading where the previous one stopped.
+Combined: a task can span dozens of sessions across days. Each one ends with the artifact files up to date. The next begins by reading where the previous one stopped. No opaque summary, no "you forgot what we were doing" moments.
 
 ## Multi-session: one supervisor, many agents
 
