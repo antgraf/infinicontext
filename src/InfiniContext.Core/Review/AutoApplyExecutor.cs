@@ -1,0 +1,215 @@
+using Serilog;
+
+namespace InfiniContext.Core.Review;
+
+/// <summary>
+/// Default <see cref="IAutoApplyExecutor"/>. Applies each <see cref="ConsolidatedFinding"/>'s
+/// <see cref="SuggestedFix"/> to disk under the repo root, then runs the build + test gate via
+/// <see cref="IBuildTestRunner"/>. If either gate fails, every edit applied in this batch is
+/// reverted and every finding is demoted to <see cref="Disposition.NeedsUser"/>.
+///
+/// <para>
+/// Per-finding outcomes (before the batch gate):
+/// </para>
+/// <list type="bullet">
+/// <item><description><b>Applied:</b> file was readable, <c>OldText</c> matched exactly once (Edit) or kind was ReplaceFile, write succeeded.</description></item>
+/// <item><description><b>Demoted with "source diverged":</b> for Edit, OldText didn't match the current file content (or matched multiple times, which is ambiguous).</description></item>
+/// <item><description><b>Demoted with "target file outside repo root":</b> path traversal attempt.</description></item>
+/// <item><description><b>Demoted with "target file does not exist":</b> Edit kind requires an existing file.</description></item>
+/// <item><description><b>Demoted with "fix not auto-applicable":</b> kind=Manual or missing required text.</description></item>
+/// </list>
+/// </summary>
+public sealed class AutoApplyExecutor : IAutoApplyExecutor
+{
+    private readonly IBuildTestRunner _gate;
+    private readonly ILogger _logger;
+
+    public AutoApplyExecutor(IBuildTestRunner gate, ILogger? logger = null)
+    {
+        _gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        _logger = logger ?? Log.ForContext<AutoApplyExecutor>();
+    }
+
+    public async Task<AutoApplyResult> ApplyAsync(
+        string repoRoot,
+        IReadOnlyList<ConsolidatedFinding> findings,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
+        ArgumentNullException.ThrowIfNull(findings);
+        if (!Directory.Exists(repoRoot)) throw new DirectoryNotFoundException($"Repo root does not exist: {repoRoot}");
+
+        var normalizedRoot = Path.GetFullPath(repoRoot);
+
+        // Per-file backups so we can revert if the gate fails. Key is the absolute path on disk;
+        // value is the original bytes (or null when the file didn't exist before the apply тАФ in
+        // which case revert = delete).
+        var backups = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        var applied = new List<ConsolidatedFinding>();
+        var demoted = new List<ConsolidatedFinding>();
+
+        foreach (var finding in findings)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var demotion = await TryApplySingleAsync(finding, normalizedRoot, backups, ct).ConfigureAwait(false);
+            if (demotion is null)
+            {
+                applied.Add(finding);
+            }
+            else
+            {
+                demoted.Add(WithDemotion(finding, demotion));
+            }
+        }
+
+        if (applied.Count == 0)
+        {
+            // Nothing to gate. Return what we have.
+            return new AutoApplyResult(applied, demoted, BuildTestGatePassed: true, GateReversionReason: null);
+        }
+
+        // Build gate.
+        var buildOutcome = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
+        if (!buildOutcome.Passed)
+        {
+            await RevertAsync(backups, ct).ConfigureAwait(false);
+            var reason = $"build broke after auto-apply: {buildOutcome.FailureSummary ?? "no detail"}";
+            _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
+            return new AutoApplyResult(
+                Applied: Array.Empty<ConsolidatedFinding>(),
+                Demoted: applied.Select(f => WithDemotion(f, reason)).Concat(demoted).ToList(),
+                BuildTestGatePassed: false,
+                GateReversionReason: reason);
+        }
+
+        // Test gate.
+        var testOutcome = await _gate.TestAsync(normalizedRoot, ct).ConfigureAwait(false);
+        if (!testOutcome.Passed)
+        {
+            await RevertAsync(backups, ct).ConfigureAwait(false);
+            var reason = $"tests broke after auto-apply: {testOutcome.FailureSummary ?? "no detail"}";
+            _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
+            return new AutoApplyResult(
+                Applied: Array.Empty<ConsolidatedFinding>(),
+                Demoted: applied.Select(f => WithDemotion(f, reason)).Concat(demoted).ToList(),
+                BuildTestGatePassed: false,
+                GateReversionReason: reason);
+        }
+
+        return new AutoApplyResult(applied, demoted, BuildTestGatePassed: true, GateReversionReason: null);
+    }
+
+    // ---------- Per-finding apply ----------
+
+    private async Task<string?> TryApplySingleAsync(
+        ConsolidatedFinding finding,
+        string normalizedRoot,
+        IDictionary<string, byte[]?> backups,
+        CancellationToken ct)
+    {
+        // Return value: null = applied successfully; non-null = demotion reason.
+
+        if (finding.SuggestedFix is null)
+            return "fix not auto-applicable: SuggestedFix is null";
+
+        var fix = finding.SuggestedFix;
+        if (fix.Kind == FixKind.Manual)
+            return "fix not auto-applicable: kind=Manual";
+
+        if (string.IsNullOrWhiteSpace(finding.File))
+            return "fix not auto-applicable: File is empty";
+
+        // Path safety.
+        string fullPath;
+        try { fullPath = Path.GetFullPath(Path.Combine(normalizedRoot, finding.File)); }
+        catch (ArgumentException) { return "target file path is malformed"; }
+
+        if (!fullPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !string.Equals(fullPath, normalizedRoot, StringComparison.Ordinal))
+        {
+            return "target file outside repo root";
+        }
+
+        if (fix.Kind == FixKind.Edit)
+        {
+            if (string.IsNullOrEmpty(fix.OldText) || string.IsNullOrEmpty(fix.NewText))
+                return "fix not auto-applicable: Edit requires non-empty OldText and NewText";
+
+            if (!File.Exists(fullPath)) return "target file does not exist";
+
+            // Snapshot original bytes before any modification (only on first touch).
+            if (!backups.ContainsKey(fullPath))
+                backups[fullPath] = await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false);
+
+            var current = await File.ReadAllTextAsync(fullPath, ct).ConfigureAwait(false);
+            var firstIdx = current.IndexOf(fix.OldText, StringComparison.Ordinal);
+            if (firstIdx < 0) return "source diverged: OldText not found in target file";
+
+            // Ambiguity check: if OldText appears more than once, the fix isn't unambiguously
+            // applicable. Refuse rather than guess.
+            var secondIdx = current.IndexOf(fix.OldText, firstIdx + 1, StringComparison.Ordinal);
+            if (secondIdx >= 0) return "source diverged: OldText is ambiguous (appears more than once)";
+
+            var next = string.Concat(current.AsSpan(0, firstIdx), fix.NewText, current.AsSpan(firstIdx + fix.OldText.Length));
+            await File.WriteAllTextAsync(fullPath, next, ct).ConfigureAwait(false);
+            return null;
+        }
+
+        if (fix.Kind == FixKind.ReplaceFile)
+        {
+            if (string.IsNullOrEmpty(fix.NewText))
+                return "fix not auto-applicable: ReplaceFile requires non-empty NewText";
+
+            // Snapshot: bytes when the file exists, null when it doesn't (revert means delete).
+            if (!backups.ContainsKey(fullPath))
+            {
+                backups[fullPath] = File.Exists(fullPath)
+                    ? await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false)
+                    : null;
+            }
+
+            var dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(fullPath, fix.NewText, ct).ConfigureAwait(false);
+            return null;
+        }
+
+        return $"fix not auto-applicable: unknown FixKind {fix.Kind}";
+    }
+
+    private static async Task RevertAsync(IDictionary<string, byte[]?> backups, CancellationToken ct)
+    {
+        foreach (var (path, original) in backups)
+        {
+            try
+            {
+                if (original is null)
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                }
+                else
+                {
+                    await File.WriteAllBytesAsync(path, original, ct).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Best-effort revert. Leaving a half-reverted state is better than throwing
+                // mid-rollback; the caller is already in a degraded path and gets the gate
+                // failure reason in the result.
+            }
+        }
+    }
+
+    private static ConsolidatedFinding WithDemotion(ConsolidatedFinding f, string reason)
+    {
+        var note = string.IsNullOrEmpty(f.ConsolidatorNote) ? reason : $"{f.ConsolidatorNote} | demoted: {reason}";
+        return f with
+        {
+            Disposition = Disposition.NeedsUser,
+            ConsolidatorNote = note,
+            RejectionReason = null,
+        };
+    }
+}

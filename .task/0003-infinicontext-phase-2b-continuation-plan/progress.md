@@ -596,3 +596,65 @@ Apply algorithm:
 4. Return Applied=findings, Demoted=any-that-couldn't-apply-step-1, BuildTestGatePassed=true.
 
 For tests use a `FakeBuildTestRunner` that returns canned outcomes. Real `ProcessBuildTestRunner` shells out to `dotnet build` / `dotnet test` and parses exit codes (failure summary can be the last N lines of stderr). Production ctor will need wiring in step 9.
+
+## 2026-05-17 (review-gate impl session тАФ step 7: AutoApplyExecutor)
+
+User said "continue" after the step-6 commit. Shipped step 7: `AutoApplyExecutor` (implements the `IAutoApplyExecutor` seam from step 6) + `IBuildTestRunner` abstraction (so tests don't shell out to dotnet).
+
+### Code changes (uncommitted at flush time)
+
+Core (`src/InfiniContext.Core/Review/`):
+
+- `IBuildTestRunner.cs` (new) тАФ interface (`BuildAsync` / `TestAsync` тЖТ `BuildTestOutcome`) + `BuildTestOutcome` record. Production wiring (a `ProcessBuildTestRunner` shelling out to `dotnet build` / `dotnet test`) is a step-9 concern; this step ships the abstraction and a fake-based test suite.
+- `AutoApplyExecutor.cs` (new) тАФ concrete `IAutoApplyExecutor`. Per-finding apply:
+  - Path safety: target file must resolve under `repoRoot` (with `Path.DirectorySeparatorChar` boundary check so `repoRoot-sibling` paths don't sneak through).
+  - **Edit** kind: file must exist; `OldText` must appear *exactly once* (zero or multiple тЖТ demote "source diverged"); writes the spliced result.
+  - **ReplaceFile** kind: writes the new content; creates parent directories; backs up the original (or `null` for "didn't exist before").
+  - **Manual** kind or missing fields: demote with a specific note (`"fix not auto-applicable: kind=Manual"` / `"SuggestedFix is null"` / etc.).
+  - Per-file backups recorded in a `Dictionary<string, byte[]?>` keyed on the absolute path; `null` value means "didn't exist before, revert = delete".
+- After the batch: `BuildAsync` first; on failure, revert every backed-up file and demote every Applied finding with note `"build broke after auto-apply: <summary>"`, return early. On build green, `TestAsync`; on failure, same revert + demote with `"tests broke after auto-apply: <summary>"`. On both green, return the originally-Applied bucket + any per-finding demotions from step 1.
+
+Tests (`tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs`, new): 19 tests, all green. Coverage:
+
+- Argument validation: missing repo root throws `DirectoryNotFoundException`; blank repo root throws `ArgumentException`; null runner throws at ctor.
+- No-findings shortcut: skips the gate entirely (no Build/Test calls).
+- Edit: applies when OldText matches once; demotes "source diverged" when not found; demotes "ambiguous" when found multiple times (and leaves the file untouched); demotes "does not exist" for missing target.
+- Path safety: `"../escape.cs"` demotes "outside repo root".
+- ReplaceFile: overwrites existing file; creates new file when target missing.
+- Manual / null fix demotions with specific notes.
+- Build gate: failure reverts the file and demotes; `TestAsync` not called when build fails; `GateReversionReason` carries the failure summary.
+- Test gate: failure reverts the file and demotes.
+- ReplaceFile that created a new file: revert deletes the created file (doesn't leave it behind).
+- Multi-finding interactions: two findings on different files both apply; two findings on the same file with overlapping OldText тАФ the second demotes "source diverged" after the first's edit changed the source; gate failure reverts every touched file.
+
+Tests use a temp-dir `RepoFixture` (IDisposable) and a `FakeRunner` with `BuildCalls` / `TestCalls` counters + configurable outcomes.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` тАФ green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green.
+- `dotnet test --no-build --filter Review|Tasks` тАФ **455/455 passing**. No regressions.
+- `dotnet format` тАФ applied one whitespace fix and is now green.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1 (FindingModel), 2 (Migration_002), 3 (ScopeResolver), 4 (ReviewerAgentService), 5 (ReviewerPrompts), 6 (ReviewService), 7 (AutoApplyExecutor).
+
+Not done: 8 (ReportRenderer), 9 (CLI: TaskCommand.Review + handler + Program.cs wiring), 10 (Settings), 11 (Skill bump 3->4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/IBuildTestRunner.cs` (new)
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` (new)
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 3 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 7 (AutoApplyExecutor).`
+
+### Handoff to next session
+
+Resume at step 8 (`ReportRenderer.cs`) тАФ turn `ReviewReport` into the markdown artifact (`review-<timestamp>.md`). The design's "Report artifact" section in `review-feature-design.md` has the exact markdown structure (three sections тАФ Applied / Rejected / Awaiting тАФ each grouped by severity, every Rejected entry showing the verbatim `RejectionReason`, plus a `<details>`-wrapped Raw reviewer outputs section). Golden test in step 8.
+
+Then step 9 (CLI) wires it together: `/task review` parses; the handler loads task records, runs `ScopeResolver`, reads `CLAUDE.md` + `decisions.md` from disk, builds the `ReviewRequest`, calls `ReviewService.RunReviewAsync`, renders via `ReportRenderer`, writes the artifact under the lock contract, updates `index.md` + appends to `progress.md`. The handler also needs to build a `ProcessBuildTestRunner` (production `IBuildTestRunner`) тАФ that's the only step-7-adjacent piece that step 9 still has to build.
