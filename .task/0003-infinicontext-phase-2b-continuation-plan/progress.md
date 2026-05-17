@@ -509,3 +509,90 @@ Flow:
 End-to-end test pattern (FakeReviewerAgentService): set up a queue of canned (role, jsonText) responses; service dispatches each call to the next queued response by inspecting the system prompt. Tests verify the partitioning, the unparseable-reviewer fallback, the coordinator-validation-failure demotion path, and that `auto_apply` reaches the executor only when validation passes.
 
 The auto-apply executor (step 7) can be stubbed for step 6 tests via a fake `IAutoApplyExecutor` that just echoes the input back as "all applied" or "all demoted" depending on the test's intent.
+
+## 2026-05-17 (review-gate impl session тАФ step 6: ReviewService orchestrator)
+
+User said "continue" after the step-5 commit. Shipped step 6 тАФ the largest step. `ReviewService` is the orchestrator that wires together steps 1, 3, 4, and 5 plus the step-7 executor seam.
+
+### Design choices made
+
+- **Orchestrator takes a pre-built `ReviewRequest`**, not a task id. Data gathering (load task record, run ScopeResolver, read CLAUDE.md / decisions.md) is the CLI handler's job (step 9). This keeps the orchestrator independent of `TaskService` + `ScopeResolver` and makes it unit-testable without scaffolding the whole task subsystem.
+- **`IAutoApplyExecutor` is a seam, defined here but implemented in step 7.** Orchestrator depends only on the interface; step 6 ships testable today.
+- **Unparseable reviewer output is synthesized on the orchestrator side**, not delegated to the coordinator. The coordinator prompt still tells the agent to do it (per step 5's prompt), but on the host side we'd rather deterministically synthesize than hope the agent remembers. Synthetic findings are `Severity.Warning` + `Disposition.NeedsUser` with the raw text truncated to 800 chars in the summary.
+- **Coordinator validation failure demotes all `auto_*` findings to `NeedsUser`** with a note. Validation runs via `FindingValidator.ValidateAll`; first error message gets embedded in the demotion note.
+- **Reviewer failures don't kill the run.** Each reviewer call is wrapped тАФ a thrown exception or a parse failure becomes one synthetic finding; the coordinator still runs on the surviving reviewers. If *all* five fail, coordinator is skipped (no input to consolidate) and the report ships with five synthetic findings.
+- **`AutoApplyResult.Demoted` findings are written by the executor with their disposition already flipped to `NeedsUser`** тАФ orchestrator just routes them to the awaiting bucket. Keeps the orchestrator from having to re-write findings the executor already adjusted.
+
+### Code changes (uncommitted at flush time)
+
+Core (`src/InfiniContext.Core/Review/`):
+
+- `IAutoApplyExecutor.cs` (new) тАФ interface (`ApplyAsync(repoRoot, findings, ct) -> AutoApplyResult`) + `AutoApplyResult` record (`Applied`, `Demoted`, `BuildTestGatePassed`, `GateReversionReason`). Step 7 will implement.
+- `ReviewRequest.cs` (new) тАФ `ReviewRequest` (TaskId, TaskTitle, RepoRoot, Scope, DescriptionMd, ProgressMd, IndexMd, ClaudeMd, DecisionsMd) + `ReviewOptions` (AutoApplyEnabled).
+- `ReviewService.cs` (new) тАФ the orchestrator. ~350 lines. Public `RunReviewAsync(request, options, ct) -> ReviewReport`. Internal helpers: `RunSingleReviewerAsync`, `RunCoordinatorAsync`, `BuildSlots`, `SplitExcerpts` (path-based routing into file_excerpts / test_excerpts / csproj_diffs slots), `BuildDiffSummary`, `SerializeReviewerOutputs`, `SynthesizeReviewerFailureFinding`, `DemoteAllToNeedsUser`, `DemoteAutoToNeedsUser`, `WithDemotion`. Internal records `ReviewerCallResult` + `CoordinatorCallResult` to thread per-call status through the dispatch.
+
+Tests (`tests/InfiniContext.Tests/Review/ReviewServiceTests.cs`, new): 18 tests, all green. Coverage:
+
+- Argument validation: null request / null options / non-positive TaskId / blank TaskTitle / blank RepoRoot.
+- Happy paths: NeedsUser findings тЖТ Awaiting bucket; AutoApply findings тЖТ executor called тЖТ Applied bucket; AutoReject findings тЖТ Rejected bucket.
+- Auto-apply gating: `AutoApplyEnabled=false` demotes all auto-apply to Awaiting with note `auto-apply disabled by review options`; null executor demotes with note `no auto-apply executor configured`.
+- Reviewer failures: one reviewer throws тЖТ synthesized warning in Awaiting (other four + coordinator still run); one reviewer emits unparseable JSON тЖТ same synthesis; *all* reviewers throw тЖТ coordinator skipped, five synthetics returned.
+- Coordinator failures: unparseable output тЖТ every reviewer finding demoted to NeedsUser with note `coordinator output was unparseable`; output fails validation (e.g. AutoReject without rejection_reason) тЖТ auto_* findings demoted with note `coordinator output failed schema validation`.
+- Report metadata: RawReviewerOutputs has all six role keys; ExcludedFiles propagates with reason; executor's BuildTestGatePassed=false + GateReversionReason flows through.
+
+Tests use a `FakeReviewer` that infers role from system prompt content (matching the role-naming words like "Completeness reviewer", "Code & Logic reviewer", "Coordinator" тАФ all introduced in step 5) and a `FakeAutoApplyExecutor` with a configurable Outcome tuple. No on-disk task scaffolding.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` тАФ green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green.
+- `dotnet test --no-build --filter Review|Tasks` тАФ **436/436 passing**. No regressions.
+- `dotnet format` тАФ green on both Core and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1 (FindingModel), 2 (Migration_002), 3 (ScopeResolver), 4 (ReviewerAgentService), 5 (ReviewerPrompts), 6 (ReviewService).
+
+Not done: 7 (AutoApplyExecutor тАФ `IAutoApplyExecutor` interface already in place from step 6), 8 (ReportRenderer), 9 (CLI), 10 (Settings), 11 (Skill bump 3->4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/IAutoApplyExecutor.cs` (new)
+- `src/InfiniContext.Core/Review/ReviewRequest.cs` (new)
+- `src/InfiniContext.Core/Review/ReviewService.cs` (new)
+- `tests/InfiniContext.Tests/Review/ReviewServiceTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 6 (ReviewService orchestrator).`
+
+### Handoff to next session
+
+Resume at step 7 (`AutoApplyExecutor` тАФ implements `IAutoApplyExecutor`).
+
+API sketch:
+
+```csharp
+public sealed class AutoApplyExecutor : IAutoApplyExecutor
+{
+    public AutoApplyExecutor(IBuildTestRunner gate, ILogger? logger = null);
+    public Task<AutoApplyResult> ApplyAsync(string repoRoot, IReadOnlyList<ConsolidatedFinding> findings, CancellationToken ct);
+}
+
+public interface IBuildTestRunner
+{
+    Task<BuildTestOutcome> BuildAsync(string repoRoot, CancellationToken ct);
+    Task<BuildTestOutcome> TestAsync(string repoRoot, CancellationToken ct);
+}
+
+public sealed record BuildTestOutcome(bool Passed, string? FailureSummary);
+```
+
+Apply algorithm:
+1. For each finding: Read target file. If `SuggestedFix.OldText` doesn't match current content тЖТ demote to NeedsUser with note `source diverged`. Else save original тЖТ apply (Edit for kind=edit, full overwrite for kind=replace-file).
+2. After batch: BuildAsync. If false тЖТ revert every file to its original тЖТ demote all to NeedsUser with note `build broke after auto-apply` тЖТ return.
+3. TestAsync. If false тЖТ revert тЖТ demote тЖТ return.
+4. Return Applied=findings, Demoted=any-that-couldn't-apply-step-1, BuildTestGatePassed=true.
+
+For tests use a `FakeBuildTestRunner` that returns canned outcomes. Real `ProcessBuildTestRunner` shells out to `dotnet build` / `dotnet test` and parses exit codes (failure summary can be the last N lines of stderr). Production ctor will need wiring in step 9.
