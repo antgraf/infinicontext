@@ -141,8 +141,34 @@ if (taskStore is not null)
     {
         lightModelForTasks = lightModelServiceFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
         taskService = new TaskService(taskStore, lightModelForTasks);
-        taskCommandHandler = new TaskCommandHandler(taskService, Console.Out, consoleWriteLock);
-        logging.Logger.Information("tasks: subsystem ready (db={DbPath})", settings.Tasks.ResolvedDbPath());
+
+        // Review subsystem wiring. Reviewer agent uses the user's main model (defaults to the
+        // configured main-model id); auto-apply gates through dotnet build / dotnet test.
+        var reviewerAgent = new InfiniContext.Core.Review.CliReviewerAgentService(
+            new InfiniContext.Core.Review.ReviewerAgentOptions
+            {
+                Model = settings.Models.Main.Id,
+            },
+            supervisor: supervisor,
+            logger: logging.Logger);
+        var autoApplyExecutor = new InfiniContext.Core.Review.AutoApplyExecutor(
+            new InfiniContext.Core.Review.ProcessBuildTestRunner(),
+            logger: logging.Logger);
+        var reviewService = new InfiniContext.Core.Review.ReviewService(
+            reviewerAgent,
+            autoApplyExecutor,
+            logger: logging.Logger);
+        var scopeResolver = new InfiniContext.Core.Review.ScopeResolver(
+            new InfiniContext.Core.Review.ProcessGitRunner());
+
+        taskCommandHandler = new TaskCommandHandler(
+            taskService,
+            Console.Out,
+            consoleWriteLock,
+            reviewService: reviewService,
+            scopeResolver: scopeResolver,
+            input: Console.In);
+        logging.Logger.Information("tasks: subsystem ready (db={DbPath}); review: ready", settings.Tasks.ResolvedDbPath());
     }
     catch (Exception ex)
     {

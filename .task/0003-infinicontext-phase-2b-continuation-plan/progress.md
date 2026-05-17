@@ -797,3 +797,65 @@ Resume at **slice 9b**: the handler + wiring. Key work:
 3. Handler tests: confirmation prompt declines -> no service call; --yes skips prompt; refuses with clear message when no active task and no id given; refuses with clear message when not in a git repo (or task home_cwd doesn't exist).
 
 This will be a sizeable commit тАФ possibly 200-300 lines of handler code plus tests. Should fit in one session if focused.
+
+## 2026-05-17 (review-gate impl session - step 9b: handler + Program.cs wiring)
+
+User said "go next" after the step-9a commit. Shipped slice 9b: `TaskCommandHandler.HandleReviewAsync` + `Program.cs` wiring + handler tests.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - ctor extended with optional `ReviewService?`, `ScopeResolver?`, `TextReader? input`, `Func<DateTimeOffset>? clock`. Defaults to null/UtcNow so existing call sites still compile. New public `HandleReviewAsync(TaskCommand.Review cmd, int? activeTaskId, CancellationToken ct)` method does the whole review flow: refuse if subsystem null; resolve id from `cmd.Id ?? activeTaskId`; load `TaskRecord`; refuse on not-found or missing home_cwd; cost-guard prompt (with input reader) unless `--yes`; read description.md / progress.md / index.md / CLAUDE.md / decisions.md best-effort; resolve scope via `ScopeResolver`; build `ReviewRequest`; call `ReviewService.RunReviewAsync`; render via `ReportRenderer`; write `review-<ISO-timestamp>.md` to the task folder; print applied/rejected/awaiting summary.
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - HelpText updated with the `/task review` line. `HandleAsync`'s switch routes `TaskCommand.Review` to `HandleReviewAsync(cmd, activeTaskId: null, ct)` so non-slash-command callers still work.
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs` - intercepts `TaskCommand.Review` after parsing (mirrors Switch interception) and dispatches to `ctx.TaskHandler.HandleReviewAsync(reviewCmd, ctx.ActiveTaskId, ct)`. This is the only way the active task id flows into the review path.
+- `src/InfiniContext.Cli/Program.cs` - new wiring block right where TaskCommandHandler is constructed: `CliReviewerAgentService` with `ReviewerAgentOptions.Model = settings.Models.Main.Id`; `AutoApplyExecutor` with a `ProcessBuildTestRunner` (defaults to `InfiniContext.slnx`, `Release`); `ReviewService` against the agent + executor; `ScopeResolver` with `ProcessGitRunner`. All threaded into `TaskCommandHandler` via the new optional ctor params, plus `input: Console.In` for the cost-guard prompt.
+
+Tests (`tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs`, new): 12 tests, all green. Coverage: subsystem-null refusal; missing-id-and-active refusal; not-found refusal; missing home_cwd refusal; activeTaskId-fallback path (verifies 6-call sequence: 5 reviewers + coordinator); no-input-reader-without-yes refusal; `n` cancellation; empty-line cancellation; `y` proceed; `--yes` skips prompt; report artifact written to task folder; console summary with counts.
+
+Tests use a real `TaskService` against in-memory `TaskStore` + temp filesystem (task folder really exists on disk for the handler to write into), a real `ReviewService` against a `FakeReviewer` (role inferred from system prompt content), and a `FakeGitRunner` for `ScopeResolver`. No real `claude` spawn.
+
+### v1 follow-ups deferred and noted
+
+- **Glob expansion for `--scope`**: v1 splits on `;` and treats each token as a literal relative path. Adding `Microsoft.Extensions.FileSystemGlobbing` (or a small inline `*`/`**` matcher) is a follow-up.
+- **Lock-contract update of index.md + progress.md**: after writing the timestamped report, v1 doesn't auto-add an index row or progress entry. User has to do it manually if they want the artifact tracked.
+- **`/task done` gate**: still postponed (todo.md section B). This step ships the *tool*; the *gate* is separate.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green (full build still blocked by running CLI processes locking Core.dll, same as prior sessions).
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build --filter Review|Tasks|Cli` - **661/661 passing**. No regressions.
+- `dotnet format` - green on Cli and Tests (Core untouched in this slice).
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1, 2, 3, 4, 5, 6, 7, 8, 9 (both 9a and 9b).
+
+Not done: 10 (Settings: dedicated `review` section in InfiniContextSettings + JSON schema entries), 11 (Skill bump 3 -> 4 with a "Task review" subsection), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (ctor extended; new HandleReviewAsync method; HelpText updated; ReadIfExistsAsync + ReadDecisionsAsync helpers)
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs` (intercept TaskCommand.Review)
+- `src/InfiniContext.Cli/Program.cs` (Review subsystem wiring)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 9b (handler + Program.cs wiring).`
+
+### Handoff to next session
+
+Resume at step 10 (Settings). Small step (~50 lines):
+
+1. `src/InfiniContext.Core/Configuration/InfiniContextSettings.cs` - add a `ReviewSettings` record under a new `Review` property on the root settings type. Fields: `ReviewerModel` (string?, null = inherit from `Models.Main.Id`), `CoordinatorModel` (string?, null = same as reviewer), `ConfidenceFloor` (double, default 0.9), `AutoApplyMaxLinesPerFinding` (int, 50), `AutoApplyMaxFilesPerFinding` (int, 3), `PerFileByteCap` (int, 204800), `InvocationTimeoutSeconds` (int, 600), `SkipBuildTestGate` (bool, false, tests-only).
+2. `settings.schema.json` - mirror the new section so editor autocomplete works.
+3. `settings.json` - add the section with defaults.
+4. `src/InfiniContext.Cli/Program.cs` - thread settings into `ReviewerAgentOptions`, `ScopeResolver` (byteCap), and into `ReviewService` (when it grows options).
+
+Then step 11 (Skill bump 3 -> 4): edit `InfiniContextTaskSkill.cs` to add a "Task review" subsection (one paragraph) and bump `Version` 3 -> 4. The skill installer will pick up the version diff on next host launch.
+
+Then step 12 (Dogfood): run `/task review` on task 0003 itself in a real session. Iterate on the prompts based on observed findings. This is a behavioral pass, not code.

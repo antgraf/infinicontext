@@ -68,6 +68,15 @@ internal sealed class TaskSlashCommand : ISlashCommand
             return;
         }
 
+        // /task review needs the focused session's active task id when the user didn't pass one.
+        // Route directly to HandleReviewAsync with ctx.ActiveTaskId; falls back gracefully when
+        // both are null (handler prints a refusal).
+        if (cmd is TaskCommand.Review reviewCmd)
+        {
+            await ctx.TaskHandler.HandleReviewAsync(reviewCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
+            return;
+        }
+
         await ctx.TaskHandler.HandleAsync(cmd, ct).ConfigureAwait(false);
     }
 

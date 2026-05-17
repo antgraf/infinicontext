@@ -1,3 +1,4 @@
+using InfiniContext.Core.Review;
 using InfiniContext.Core.Tasks;
 
 namespace InfiniContext.Cli.Tasks;
@@ -12,12 +13,27 @@ internal sealed class TaskCommandHandler
     private readonly TaskService _service;
     private readonly TextWriter _output;
     private readonly object _writeLock;
+    private readonly ReviewService? _reviewService;
+    private readonly ScopeResolver? _scopeResolver;
+    private readonly TextReader? _input;
+    private readonly Func<DateTimeOffset> _clock;
 
-    public TaskCommandHandler(TaskService service, TextWriter output, object? writeLock = null)
+    public TaskCommandHandler(
+        TaskService service,
+        TextWriter output,
+        object? writeLock = null,
+        ReviewService? reviewService = null,
+        ScopeResolver? scopeResolver = null,
+        TextReader? input = null,
+        Func<DateTimeOffset>? clock = null)
     {
         _service = service ?? throw new ArgumentNullException(nameof(service));
         _output = output ?? throw new ArgumentNullException(nameof(output));
         _writeLock = writeLock ?? new object();
+        _reviewService = reviewService;
+        _scopeResolver = scopeResolver;
+        _input = input;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     /// <summary>
@@ -73,6 +89,13 @@ internal sealed class TaskCommandHandler
 
                 case TaskCommand.Delete(var deleteId, var removeFolder):
                     await HandleDeleteAsync(deleteId, removeFolder, ct).ConfigureAwait(false);
+                    break;
+
+                case TaskCommand.Review reviewCmd:
+                    // Called without the SlashCommand context (which would supply the active task id);
+                    // dispatch with activeTaskId=null. The handler will refuse with a clear message
+                    // if the user didn't pass an id either.
+                    await HandleReviewAsync(reviewCmd, activeTaskId: null, ct).ConfigureAwait(false);
                     break;
 
                 case TaskCommand.Help:
@@ -186,6 +209,152 @@ internal sealed class TaskCommandHandler
         }
     }
 
+    /// <summary>
+    /// Dispatch <c>/task review</c>. Public so <c>TaskSlashCommand</c> can route the parsed
+    /// command with the focused session's <paramref name="activeTaskId"/> threaded through. When
+    /// the user passes an explicit id (<c>cmd.Id</c>), that wins; otherwise we fall back to the
+    /// active session's task. Refuses with a clear message when neither is available.
+    /// </summary>
+    public async Task HandleReviewAsync(TaskCommand.Review cmd, int? activeTaskId, CancellationToken ct)
+    {
+        if (_reviewService is null || _scopeResolver is null)
+        {
+            Write("[task review] subsystem is unavailable (see startup warnings).\n");
+            return;
+        }
+
+        var id = cmd.Id ?? activeTaskId;
+        if (id is null)
+        {
+            Write("[task review] no task id given and no active task in this session. Pass an explicit id: /task review <id>.\n");
+            return;
+        }
+
+        var details = await _service.GetAsync(id.Value, ct).ConfigureAwait(false);
+        if (details is null)
+        {
+            Write($"[task review] {id.Value:D4} not found.\n");
+            return;
+        }
+
+        var record = details.Record;
+        if (!Directory.Exists(record.HomeCwd))
+        {
+            Write($"[task review] task {record.Id:D4} home_cwd does not exist on disk: {record.HomeCwd}\n");
+            return;
+        }
+
+        // Cost guard. --yes skips. Without --yes, prompt if we have an input reader; otherwise
+        // refuse with a clear message (so the handler stays usable in non-interactive contexts).
+        if (!cmd.SkipConfirm)
+        {
+            var prompt =
+                $"[task review] will spawn 6 sub-Claude agents (5 reviewers + 1 coordinator) for task {record.Id:D4}.\n" +
+                "              This is a real cost. Continue? [y/N]: ";
+            Write(prompt);
+            if (_input is null)
+            {
+                Write("\n[task review] no input reader available for confirmation; pass --yes to skip the prompt.\n");
+                return;
+            }
+            var line = await _input.ReadLineAsync(ct).ConfigureAwait(false);
+            var answer = (line ?? "").Trim();
+            if (!answer.Equals("y", StringComparison.OrdinalIgnoreCase)
+                && !answer.Equals("yes", StringComparison.OrdinalIgnoreCase))
+            {
+                Write("[task review] cancelled.\n");
+                return;
+            }
+        }
+
+        // Gather inputs. Each file is best-effort: missing files become empty strings (the prompts
+        // can handle "<no content>" gracefully).
+        var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
+        var descriptionMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "description.md"), ct).ConfigureAwait(false);
+        var progressMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "progress.md"), ct).ConfigureAwait(false);
+        var indexMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "index.md"), ct).ConfigureAwait(false);
+        var claudeMd = await ReadIfExistsAsync(Path.Combine(record.HomeCwd, "CLAUDE.md"), ct).ConfigureAwait(false);
+        var decisionsMd = await ReadDecisionsAsync(record.HomeCwd, ct).ConfigureAwait(false);
+
+        // --scope: v1 treats the value as a single relative path under HomeCwd; glob expansion is
+        // a v1 follow-up (see review-feature-design.md). Splitting on ';' lets users pass a small
+        // list without needing the full glob matcher.
+        IReadOnlyList<string>? scopeOverridePaths = null;
+        if (!string.IsNullOrWhiteSpace(cmd.Scope))
+        {
+            scopeOverridePaths = cmd.Scope.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+
+        Write($"[task review] resolving scope for {record.Id:D4} \"{record.Title}\"...\n");
+        var progressPath = Path.Combine(folder.Path, "progress.md");
+        var scope = await _scopeResolver.ResolveAsync(
+            record.HomeCwd,
+            record.BaseCommitSha,
+            scopeOverridePaths,
+            File.Exists(progressPath) ? progressPath : null,
+            ct).ConfigureAwait(false);
+
+        Write($"[task review] scope: {scope.Description} ({scope.Files.Count} files, {scope.ExcludedFiles.Count} excluded)\n");
+        Write("[task review] running 5 reviewers + coordinator...\n");
+
+        var request = new ReviewRequest(
+            TaskId: record.Id,
+            TaskTitle: record.Title,
+            RepoRoot: record.HomeCwd,
+            Scope: scope,
+            DescriptionMd: descriptionMd,
+            ProgressMd: progressMd,
+            IndexMd: indexMd,
+            ClaudeMd: claudeMd,
+            DecisionsMd: decisionsMd);
+
+        var report = await _reviewService.RunReviewAsync(request, new ReviewOptions(), ct).ConfigureAwait(false);
+
+        // Render + write the artifact. The filename is timestamped so concurrent re-runs do not
+        // collide; no lock-contract acquisition needed for the initial Write.
+        var rendered = ReportRenderer.Render(report);
+        var timestamp = _clock().UtcDateTime.ToString("yyyy-MM-ddTHHmmss");
+        var reportName = $"review-{timestamp}.md";
+        var reportPath = Path.Combine(folder.Path, reportName);
+        await File.WriteAllTextAsync(reportPath, rendered, ct).ConfigureAwait(false);
+
+        Write($"[task review] done.\n");
+        Write($"              applied={report.Applied.Count} rejected={report.Rejected.Count} awaiting={report.Awaiting.Count}\n");
+        Write($"              report: {reportPath}\n");
+        if (!report.BuildTestGatePassed)
+            Write($"              build/test gate reverted: {report.GateReversionReason}\n");
+        // index.md / progress.md updates under the lock contract are a v1 follow-up - users
+        // currently have to add a row manually if they want the artifact tracked in the index.
+    }
+
+    private static async Task<string> ReadIfExistsAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return "";
+        try { return await File.ReadAllTextAsync(path, ct).ConfigureAwait(false); }
+        catch (IOException) { return ""; }
+    }
+
+    /// <summary>
+    /// Find the project's decisions doc. Tries a small set of well-known paths under
+    /// <paramref name="repoRoot"/>; returns "" if none exists. The architecture reviewer's
+    /// prompt handles an empty value gracefully.
+    /// </summary>
+    private static async Task<string> ReadDecisionsAsync(string repoRoot, CancellationToken ct)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(repoRoot, "docs", "stage2", "decisions.md"),
+            Path.Combine(repoRoot, "docs", "decisions.md"),
+            Path.Combine(repoRoot, "DECISIONS.md"),
+        };
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+                return await ReadIfExistsAsync(candidate, ct).ConfigureAwait(false);
+        }
+        return "";
+    }
+
     private void Write(string s)
     {
         lock (_writeLock)
@@ -207,6 +376,10 @@ internal sealed class TaskCommandHandler
           /task switch <id>                     start a fresh session bound to <id>
           /task delete <id> [--remove-folder]   drop the registry row (folder kept unless
                                                 --remove-folder is passed); refuses if InProgress
+          /task review [<id>] [--scope <glob>] [--yes]
+                                                run a multi-agent review on a task. Defaults id
+                                                to the focused session's task. --yes skips the
+                                                cost prompt (spawns 6 sub-Claude agents).
 
         """;
 
