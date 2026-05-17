@@ -1,6 +1,7 @@
 # InfiniContext per-run logs (see design doc §7.4)
 logs/
 **/logs/
+coverage/
 
 # .NET build outputs
 bin/
