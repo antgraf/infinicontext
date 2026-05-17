@@ -48,6 +48,7 @@ When an item is picked up, **remove it from this file** (or fold it into `docs/t
 - **Multi-parent lineage.** Schema records only one `parent_task_id`; multi-parent is post-MVP. Captured as class-level note on `MergeAsync`. Source: 20260507-tasks-and-sessions-management/progress.md (Phase 3).
 - **Cross-home `/task merge`.** Guard: "All merge sources must share the same home_cwd. Cross-home merge is post-MVP." Source: `TaskService.cs:117-119`, 20260509-manual-testing-session/research.md.
 - **Author `docs/cli/howto/commands.md`** — long-form REPL-only reference; link out to `docs/cli/howto/task-commands.md` rather than duplicate. Explicitly deferred to a separate task. Source: 20260509-improve-cli-repl-help/decisions.md D2/D8, progress.md.
+- **`/issue promote <n>`** тАФ spin an open `issues.md` entry out into a new task: seed `description.md` from the issue body, mark the source issue as `filed-as-task <new-id>`, optionally record `parent_task_id` lineage. Postponed from the v1 `issues.md` design (2026-05-17 conversation) тАФ v1 ships capture (`/issue` + `/task issue` alias) and `/issue list` / `/issue resolve` only. The done-gate / task-completion ceremony is also postponed pending a full requirements + design cycle; v1 has no review gate, user runs `/issue list` on demand. Source: 2026-05-17 issues.md design conversation.
 
 ## C. Stage 2B (multi-session console + macOS)
 
