@@ -934,3 +934,61 @@ Resume at **step 11** (Skill bump). Trivial:
 3. The skill installer (`SkillInstaller.InstallIfMissingOrOutdatedAsync`) will detect the version diff on next host launch and rewrite `~/.claude/skills/infinicontext-task/SKILL.md`.
 
 Then step 12 (Dogfood) - real-session pass with `/task review 0003 --yes` to see how the prompts behave on actual content. Likely outcomes: some false positives ("missing tests" when tests exist under a slightly unusual path; "TODO not addressed" when the TODO is in unrelated code), and some prompt tightening. Update `ReviewerPrompts.cs` strings + re-run. After 2-3 iterations, this surface is shippable.
+
+## 2026-05-17 (review-gate impl session - step 11: Skill bump 3 to 4)
+
+User said "go next" after the step-10 commit. Shipped step 11: skill version bump + "Task review" subsection in `InfiniContextTaskSkill.SkillMarkdown`. Trivial single-file change.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs`:
+  - `Version` 3 -> 4.
+  - Updated the type doc-comment to mention "v4 adds the 'Task review' section".
+  - Added a new `## Task review` section in `SkillMarkdown`, inserted between "Issue hygiene" and "Host context-pressure nudges". One paragraph explaining what `/task review` does, plus three bullets:
+    - "Don't run it yourself" (the user invokes; it costs real money - 6 spawned agents).
+    - "Suggest it when the task feels done" (before saying "this looks complete", recommend the user run review).
+    - "Acting on a report" - guidance for handling Awaiting / Applied / Rejected entries when the user hands the agent a `review-*.md`.
+
+### Skill installer behavior on next host launch
+
+- `SkillInstaller.InstallIfMissingOrOutdatedAsync` parses the version marker (`<!-- infinicontext-task-skill-version: N -->`) at the bottom of the on-disk SKILL.md.
+- Existing on-disk v3 -> installer detects 3 < 4 -> rewrites `~/.claude/skills/infinicontext-task/SKILL.md` (the prior content is backed up as `SKILL.md.bak`).
+- Next time the agent inspects a task-bearing cwd or the host's first user message names this skill, it'll see the new "Task review" subsection.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet test --no-build --filter SkillInstaller|InfiniContextTaskSkill` - 12/12 passing.
+- `dotnet test --no-build` (full suite) - **867/870 passing** (3 macOS-only skips). No regressions.
+- `dotnet format` - green.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1, 2, 3, 4, 5, 6, 7, 8, 9 (a+b), 10, 11.
+
+Not done:
+- 12 (Dogfood: run `/task review` on task 0003 itself; iterate on prompts).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs` (Version 3 -> 4 + new "Task review" section)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 1 source file plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 11 (skill bump v3 -> v4).`
+
+### Handoff to next session
+
+Resume at step 12 (Dogfood). Behavioral pass, not code unless prompt-tightening surfaces issues:
+
+1. Start a host session bound to task 0003 via `/task switch 0003`.
+2. Run `/task review --yes`.
+3. Wait for the 6 agents to complete. Inspect the resulting `review-<timestamp>.md` in `.task/0003-infinicontext-phase-2b-continuation-plan/`.
+4. Look for false positives, weak findings, missing categories. Likely candidates: "tests missing" when tests exist under a non-standard path; "TODO unaddressed" when the TODO is in code outside the task's scope; over-reliance on the diff (a finding's location may not match the changed lines).
+5. Tighten `ReviewerPrompts.cs` strings as needed (the v1 prompts were best-guess). Re-run.
+6. After 2-3 iterations, the surface is shippable: commit a "Step 12: prompt tightening from dogfood" commit per iteration, then declare the review-gate feature v1 complete and update `docs/stage2/todo.md` section B accordingly.
+
+If during dogfood the v1-deferred items become visibly painful (glob expansion, lock-contract update of index.md, separate coordinator model), promote them out of "follow-up" and into immediate post-12 work. Otherwise they stay deferred.

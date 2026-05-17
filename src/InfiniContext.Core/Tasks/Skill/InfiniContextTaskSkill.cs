@@ -27,7 +27,7 @@ public static class InfiniContextTaskSkill
     public const string SkillName = "infinicontext-task";
 
     /// <summary>Embedded version stamp. Increment on every change to <see cref="SkillMarkdown"/>.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     /// <summary>Marker prefix inside the SKILL.md file. The trailing integer is the version.</summary>
     public const string VersionMarkerPrefix = "<!-- infinicontext-task-skill-version: ";
@@ -51,7 +51,8 @@ public static class InfiniContextTaskSkill
     /// <summary>
     /// Full SKILL.md content (frontmatter + body + version marker). Total body kept under
     /// 500 tokens per design.md risk #5. v2 (Phase 7) adds the MCP lock contract; v3 adds the
-    /// "Issue hygiene" section instructing the agent to log out-of-scope findings to issues.md.
+    /// "Issue hygiene" section instructing the agent to log out-of-scope findings to issues.md;
+    /// v4 adds the "Task review" section that tells the agent about <c>/task review</c>.
     /// </summary>
     // The raw-string literal below captures the source file's line endings, which Windows CI
     // converts to CRLF on checkout (`core.autocrlf=true`). The `.Replace` normalizes to LF so the
@@ -112,6 +113,14 @@ public static class InfiniContextTaskSkill
         ```
 
         `issues.md` is optional - create it on first capture (the file header is `# Issues - <task title>`). Local IDs (`0001`, `0002`, ...) are per-task and stable; reference them from `progress.md` / `decisions.md` as needed (`see issues.md#0003`). Add a row to `index.md` the first time you create the file.
+
+        ## Task review
+
+        The user can run `/task review [<id>] [--scope <glob>] [--yes]` to spawn a multi-agent review of the task's solution (completeness, architecture, code & logic, tests, security, plus a coordinator). High-confidence fixes auto-apply through a build + test gate; everything else lands in `review-<timestamp>.md` for the user's decision.
+
+        - **Don't run it yourself.** `/task review` is user-invoked and costs real money (5 reviewer agents + 1 coordinator).
+        - **Suggest it when the task feels done.** Before saying "this looks complete", recommend the user run a review.
+        - **Acting on a report.** When the user hands you a `review-*.md`: "Awaiting" entries are normal work items (read the location, evaluate the suggested fix, apply or refuse with reasoning); "Applied" entries are already in the working tree (verify the diff matches expectations); "Rejected" entries carry the coordinator's explicit reason, surface that reason if the user asks "why didn't this land?".
 
         ## Host context-pressure nudges
 
