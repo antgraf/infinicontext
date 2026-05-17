@@ -127,8 +127,25 @@ internal sealed class MultiSessionHost : IReplActions
             // [turn done:] line lands before the exit summary. Bounded so a misbehaving session
             // can't hang shutdown. Must run BEFORE unsubscribing — otherwise the trailing
             // ResultEvent fragment appends to the transcript but never echoes to the console.
-            try { await Task.WhenAny(_focused.Session.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(_settings.Session.ExitDrainWaitSeconds))).ConfigureAwait(false); }
+            //
+            // Two-phase drain: first wait for the child process to exit (this is what closes the
+            // events-channel writer in ClaudeSession's stdout-loop finally), then wait for the
+            // SessionTranscriptReader's loop to fully terminate. The reader's loop only exits
+            // *after* the synchronous Render→Emit→FragmentAppended chain has run for the last
+            // queued event, which is the deterministic point at which [turn done:] has landed on
+            // the console. Waiting just on Session.WaitForExitAsync, or on Events.Completion,
+            // races the reader's render chain for that final event and intermittently drops the
+            // marker (CI run #2 of Phase 8 was exactly this). The manager path covers production
+            // and the smoke tests; in-process tests pass _manager=null and fall back to the bare
+            // process-exit wait (their FakeSession has no reader to drain anyway).
+            var drainBudget = TimeSpan.FromSeconds(_settings.Session.ExitDrainWaitSeconds);
+            try { await Task.WhenAny(_focused.Session.WaitForExitAsync(), Task.Delay(drainBudget)).ConfigureAwait(false); }
             catch { }
+            if (_manager is not null)
+            {
+                try { await _manager.DrainReaderAsync(_focused.Id, drainBudget).ConfigureAwait(false); }
+                catch { }
+            }
         }
         finally
         {

@@ -33,10 +33,11 @@ Two workflows under `.github/workflows/`:
 
 `gh run list --repo antgraf/infinicontext --limit 5` is the fast way to see recent runs; `gh api repos/antgraf/infinicontext/actions/jobs/<job-id>/logs > out.txt` is the reliable way to fetch a full failed log when `gh run view --log-failed` returns empty.
 
-**CI-only failure modes worth knowing about** (both encountered in CI run 1, both fixed in code):
+**CI-only failure modes worth knowing about** (all encountered in early CI runs, all fixed in code):
 
 - **Windows runners set `core.autocrlf=true` globally.** Any C# raw-string literal that's later compared against an `"\n"`-anchored expectation needs to normalize: `(... raw literal ...).Replace("\r\n", "\n")`. CI checkout flips source `\n` → `\r\n`; the literal captures whatever the source file has on disk. `InfiniContextTaskSkill.SkillMarkdown` is the canonical example. Same hazard applies to any future inline expected-output strings.
 - **`Spectre.Console.Testing.TestConsole` defaults to 80-column width** and `Text` renderables wrap at the profile width. The `runneradmin` temp-dir prefix (`C:\Users\runneradmin\AppData\Local\Temp\...`) plus a 32-char GUID blows past 80 cols, so any `stdout.Should().Contain(longPath)` assertion fails because the path got wrapped mid-string. Fix: `new TestConsole().Width(1000)` in the test fixture. Tests that only check short fragments are unaffected.
+- **Smoke tests racing the `SessionTranscriptReader` drain.** When the focused session's child process exits quickly (FakeClaude replay finishes in ~50 ms), `IClaudeSession.WaitForExitAsync` returns before the per-session reader has rendered every event still in the channel. If the host unsubscribes `FragmentAppended` at that moment, the final `ResultEvent` fragment (the `[turn done:]` marker) is appended to the in-memory transcript but never echoes to stdout, and `Contains("[turn done:")` assertions fail. The host's shutdown drain therefore waits for `SessionManager.DrainReaderAsync` (which awaits the reader's `RunCompletion` task, bounded by `session.exitDrainWaitSeconds`) *after* the process-exit wait. Any new event a future test asserts on must flow through the reader; if you add tests that look for trailing markers on a fast-exiting session, that drain is what guarantees they're observable.
 
 ## Repository layout
 

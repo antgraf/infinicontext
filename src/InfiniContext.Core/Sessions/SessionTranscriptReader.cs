@@ -46,6 +46,15 @@ public sealed class SessionTranscriptReader : IAsyncDisposable
         _eventLoop = Task.Run(() => RunAsync(_cts.Token));
     }
 
+    /// <summary>
+    /// Task that completes when the event-pump loop exits (channel closed and fully drained, or
+    /// the reader was cancelled/disposed). The host awaits this during shutdown so the final
+    /// <c>ResultEvent</c> fragment (the <c>[turn done:]</c> marker) lands on the console before
+    /// <c>FragmentAppended</c> is unsubscribed. <see cref="Task.CompletedTask"/> if
+    /// <see cref="Start"/> hasn't been called yet.
+    /// </summary>
+    public Task RunCompletion => _eventLoop ?? Task.CompletedTask;
+
     /// <summary>Fired with each raw <see cref="ClaudeEvent"/> the reader pulls from the channel,
     /// before transcript fragments are emitted. UI consumers use this to track non-rendered
     /// state like the latest <c>ResultEvent</c>'s cost/turn numbers. Handlers must not block —

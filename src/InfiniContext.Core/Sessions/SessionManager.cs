@@ -297,6 +297,29 @@ public sealed class SessionManager : IAsyncDisposable
         await TryRecordIndexEntryAsync(meta, claudeSessionId, lastState).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Wait for a session's <see cref="SessionTranscriptReader"/> event loop to drain — i.e., the
+    /// events channel is closed (writer completed by <see cref="ClaudeSession"/>'s stdout-loop
+    /// finally) AND every item has been pulled, rendered, and emitted (so any
+    /// <see cref="TranscriptModel.FragmentAppended"/> subscriber has seen the last fragment).
+    /// Bounded so a stuck reader can't hang shutdown.
+    /// </summary>
+    /// <remarks>
+    /// The host calls this between input-loop exit and unsubscribing its
+    /// <c>FragmentAppended</c> handler so the final <c>ResultEvent</c> (the <c>[turn done:]</c>
+    /// marker) lands on the console before the exit summary prints. Equivalent to a no-op if the
+    /// session id is unknown.
+    /// </remarks>
+    public async Task DrainReaderAsync(Guid id, TimeSpan timeout)
+    {
+        SessionTranscriptReader? reader;
+        lock (_gate) { _readers.TryGetValue(id, out reader); }
+        if (reader is null) return;
+        try { await reader.RunCompletion.WaitAsync(timeout).ConfigureAwait(false); }
+        catch (TimeoutException) { /* bounded; caller proceeds */ }
+        catch (Exception ex) { _logger.Warning(ex, "session-manager: reader drain faulted for {HostSessionId}", id); }
+    }
+
     private async Task TryRecordIndexEntryAsync(SessionStartMetadata? meta, Guid? claudeSessionId, string lastState)
     {
         if (meta is null) return;
