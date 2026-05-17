@@ -52,7 +52,10 @@ public static class InfiniContextTaskSkill
     /// Full SKILL.md content (frontmatter + body + version marker). Total body kept under
     /// 500 tokens per design.md risk #5. v2 (Phase 7) adds the MCP lock contract.
     /// </summary>
-    public static string SkillMarkdown { get; } = $$"""
+    // The raw-string literal below captures the source file's line endings, which Windows CI
+    // converts to CRLF on checkout (`core.autocrlf=true`). The `.Replace` normalizes to LF so the
+    // on-disk SKILL.md is byte-identical across clones, and LF-anchored tests stay green.
+    public static string SkillMarkdown { get; } = ($$"""
         ---
         name: {{SkillName}}
         description: Use when working with InfiniContext tasks — artifacts in `.task/<id>-<slug>/` folders. The host invokes this skill at the start of any `/task switch` session and names the active task id. Covers loading the task index, maintaining `progress.md`, reconciling drift, the per-file lock contract for parallel sessions, and complying with host context-pressure nudges.
@@ -107,5 +110,5 @@ public static class InfiniContextTaskSkill
         Files live flat at the task-folder root — there is no `artifacts/` subfolder by design.
 
         {{VersionMarkerPrefix}}{{Version}}{{VersionMarkerSuffix}}
-        """;
+        """).Replace("\r\n", "\n");
 }

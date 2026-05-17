@@ -24,6 +24,20 @@ dotnet test  --filter "DisplayName~Repl_renders"           # one test
 
 End-to-end smoke tests opt-in via env var and are skipped in CI by default; unit/integration tests run real binaries (`InfiniContext.Cli` ↔ `FakeClaude`) via `Process.Start`, not in-process mocks.
 
+## CI
+
+Two workflows under `.github/workflows/`:
+
+- **`ci.yml`** — runs on every push to `main` and every PR. `windows-latest`. Gates in order: `dotnet restore` → `dotnet format --verify-no-changes --no-restore` → `dotnet build -c Release` → `dotnet test -c Release` with `XPlat Code Coverage` → ReportGenerator markdown summary appended to the job step output. The format gate is the canonical formatting authority — fix locally with `dotnet format InfiniContext.slnx` before pushing.
+- **`ci-macos.yml`** — `workflow_dispatch` only (D37). Private-repo `macos-latest` minutes bill at 10× the Windows rate, so this is run manually whenever Phase 7's macOS-specific code (`PosixSignalSupervisor`, `FileSystemNaming`, `[MacOnlyFact]` tests) is touched, or before any release that needs the "killing the host cleans up child processes" exit criterion green on macOS. No format gate here (Windows owns that), no coverage collection.
+
+`gh run list --repo antgraf/infinicontext --limit 5` is the fast way to see recent runs; `gh api repos/antgraf/infinicontext/actions/jobs/<job-id>/logs > out.txt` is the reliable way to fetch a full failed log when `gh run view --log-failed` returns empty.
+
+**CI-only failure modes worth knowing about** (both encountered in CI run 1, both fixed in code):
+
+- **Windows runners set `core.autocrlf=true` globally.** Any C# raw-string literal that's later compared against an `"\n"`-anchored expectation needs to normalize: `(... raw literal ...).Replace("\r\n", "\n")`. CI checkout flips source `\n` → `\r\n`; the literal captures whatever the source file has on disk. `InfiniContextTaskSkill.SkillMarkdown` is the canonical example. Same hazard applies to any future inline expected-output strings.
+- **`Spectre.Console.Testing.TestConsole` defaults to 80-column width** and `Text` renderables wrap at the profile width. The `runneradmin` temp-dir prefix (`C:\Users\runneradmin\AppData\Local\Temp\...`) plus a 32-char GUID blows past 80 cols, so any `stdout.Should().Contain(longPath)` assertion fails because the path got wrapped mid-string. Fix: `new TestConsole().Width(1000)` in the test fixture. Tests that only check short fragments are unaffected.
+
 ## Repository layout
 
 - `src/InfiniContext.Core/` — parser, state machine, session, MCP approval server + lock channel, settings, logging, process supervision, multi-session manager + session index, tasks subsystem (`Tasks/` — `TaskService`/`TaskFolder`/`TaskStore` + SQLite migrations, `ContextPressureMonitor`, `ThresholdInjector`, `TaskActivityCoordinator`), light-model service (`LightModel/`). All non-UI logic.

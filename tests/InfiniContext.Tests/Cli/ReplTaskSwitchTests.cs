@@ -163,7 +163,9 @@ public class ReplTaskSwitchTests
         public required StringWriter Output { get; init; }
         public required string HomeCwd { get; init; }
         public required string TempPath { get; init; }
-        public TestConsole Console { get; } = new();
+        // Default TestConsole width is 80 cols; on CI the runneradmin temp path exceeds that and
+        // gets wrapped mid-string, breaking Contains-the-cwd assertions. Wide enough to never wrap.
+        public TestConsole Console { get; } = new TestConsole().Width(1000);
         public ILogger Logger { get; } = Log.Logger;
 
         public static async Task<Fixture> OpenAsync()
