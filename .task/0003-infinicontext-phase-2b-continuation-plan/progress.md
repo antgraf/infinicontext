@@ -658,3 +658,62 @@ The 3 source/test files plus progress.md are uncommitted. **Recommended commit s
 Resume at step 8 (`ReportRenderer.cs`) тАФ turn `ReviewReport` into the markdown artifact (`review-<timestamp>.md`). The design's "Report artifact" section in `review-feature-design.md` has the exact markdown structure (three sections тАФ Applied / Rejected / Awaiting тАФ each grouped by severity, every Rejected entry showing the verbatim `RejectionReason`, plus a `<details>`-wrapped Raw reviewer outputs section). Golden test in step 8.
 
 Then step 9 (CLI) wires it together: `/task review` parses; the handler loads task records, runs `ScopeResolver`, reads `CLAUDE.md` + `decisions.md` from disk, builds the `ReviewRequest`, calls `ReviewService.RunReviewAsync`, renders via `ReportRenderer`, writes the artifact under the lock contract, updates `index.md` + appends to `progress.md`. The handler also needs to build a `ProcessBuildTestRunner` (production `IBuildTestRunner`) тАФ that's the only step-7-adjacent piece that step 9 still has to build.
+
+## 2026-05-17 (review-gate impl session - step 8: ReportRenderer)
+
+User said "continue" after the step-7 commit. Shipped step 8: `ReportRenderer` - pure function that turns a `ReviewReport` into the markdown body of `review-<timestamp>.md`.
+
+### Code changes (uncommitted at flush time)
+
+Core (`src/InfiniContext.Core/Review/`):
+
+- `ReportRenderer.cs` (new) - `Render(ReviewReport) -> string`. Pure function; CLI handler writes the result under the lock contract. Sections in order: header (date, task, reviewers, scope, excluded files, findings count, build/test gate) -> Applied -> Rejected -> Awaiting -> Raw reviewer outputs.
+  - Each bucket orders findings critical -> warning -> suggestion within itself.
+  - Applied entries show `Fix applied (kind)` block with Before/After code fences.
+  - **Rejected entries surface `RejectionReason` verbatim** prefixed with `**Rejection reason:**`. If a reason is somehow missing (validator should have caught it), renders an explicit "schema violation" marker as a clear flag.
+  - Awaiting entries show `Suggested fix` block (or `_none_` when null); manual fixes show a "manual - host cannot auto-apply" marker.
+  - Locations render as `` `path:line` `` for single-line, `` `path:start-end` `` for ranges; falls back to `_file not specified_` when File is null.
+  - Raw reviewer outputs render in `<details>`/`<summary>` blocks with the role name as the summary, in stable alphabetic order. Empty raw text becomes `(no output)`.
+  - Empty buckets render `_None._` so the section is never blank.
+
+Tests (`tests/InfiniContext.Tests/Review/ReportRendererTests.cs`, new): 26 tests, all green. Coverage: null report throws; header fields (task id padding, findings count, gate status, excluded files); all three buckets always present; severity ordering verified within a bucket; Applied/Rejected/Awaiting per-bucket field rendering; location single-line vs range vs missing; rejection reason verbatim + missing-reason flag; manual-fix marker (asserted via two ASCII anchors around the em-dash to avoid tool-vs-source encoding fights); raw outputs in `<details>` blocks.
+
+### One messy aside
+
+The em-dash literal in the renderer caused several rounds of editing pain - the host's Edit tool wouldn't reliably match em-dash bytes that had been written to disk and rendered with mojibake in the Read view. Workaround: the test asserts the two ASCII anchors flanking the em-dash rather than the literal. Renderer source keeps the em-dash; tests don't try to round-trip it. Going forward, I'll prefer ASCII in code that the host edit tools touch unless the non-ASCII is load-bearing.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build --filter Review|Tasks` - **481/481 passing**. No regressions.
+- `dotnet format` - green on both Core and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1 (FindingModel), 2 (Migration_002), 3 (ScopeResolver), 4 (ReviewerAgentService), 5 (ReviewerPrompts), 6 (ReviewService), 7 (AutoApplyExecutor), 8 (ReportRenderer).
+
+Not done: 9 (CLI: TaskCommand.Review parser + handler + Program.cs wiring + ProcessBuildTestRunner), 10 (Settings: `review` section + schema + binding), 11 (Skill bump 3 -> 4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ReportRenderer.cs` (new)
+- `tests/InfiniContext.Tests/Review/ReportRendererTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 8 (ReportRenderer).`
+
+### Handoff to next session
+
+Resume at step 9 (CLI). This step ties everything together. Touch list:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommand.cs` - add `sealed record Review(int? Id, string? Scope, bool SkipConfirm)` + parser branch for `review` subcommand handling `<id?>`, `--scope <glob>`, `--yes`.
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - `HandleReviewAsync` dispatch. Steps: resolve task id (focused session's if omitted); print cost-guard `[y/N]` unless `--yes`; load task record via `TaskService.GetAsync`; run `ScopeResolver` (need to construct it with `ProcessGitRunner` + glob expansion for `--scope`); read description.md/progress.md/index.md from the task folder; read CLAUDE.md / decisions.md from the repo (best-effort, empty string when missing); build `ReviewRequest`; call `ReviewService.RunReviewAsync`; render via `ReportRenderer`; write `review-<timestamp>.md` to the task folder; acquire lock + update index.md + append progress.md entry.
+- `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs` (new) - production `IBuildTestRunner`. Shells out to `dotnet build` / `dotnet test` from the repo root; captures the last N lines of stderr for the failure summary.
+- `src/InfiniContext.Cli/Program.cs` - construct `ReviewService` + `AutoApplyExecutor` + `ProcessBuildTestRunner` + `CliReviewerAgentService` (from `ReviewerAgentOptions` built from settings); thread `ReviewService` into `TaskCommandHandler`.
+
+The CLI handler is the largest piece. Plan to ship glob expansion via a small helper (`Microsoft.Extensions.FileSystemGlobbing` isn't currently a dep - either add the package or write a minimal `*`/`**` matcher).
+
+After step 9 lands: step 10 (settings) is small (~50 lines to add a `ReviewSettings` record + schema entries + reading in Program.cs). Step 11 (skill bump) is trivial. Step 12 (dogfood) is a behavioral pass - run `/task review` on task 0003 itself and iterate on the prompts.
