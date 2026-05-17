@@ -17,6 +17,7 @@ public static class MigrationRunner
     public static IReadOnlyList<IMigration> BuiltIn { get; } =
     [
         new Migration_001_InitialSchema(),
+        new Migration_002_AddBaseCommitSha(),
     ];
 
     /// <summary>

@@ -149,3 +149,138 @@ No new follow-ups surfaced during implementation; both "open questions" from `is
 ### Not committed yet
 
 The 12 source-tree files listed in "Code changes" above plus the 3 new test files and the .csproj edit are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: issues.md feature (v1)` - the surface ships cohesively (skill bump + service + parser + CLI + tests are interdependent). User to decide split vs single before commit.
+
+## 2026-05-17 (review-gate design session)
+
+Design conversation only - no code changes, no commits. Topic: a `/task review` command that spawns multiple agents to review the current task's solution, consolidates their findings, auto-applies high-confidence fixes, and saves a report.
+
+### Outcome
+
+v1 design for the `/task review` multi-agent review command locked. Full design in `review-feature-design.md` (sibling file). One-paragraph summary:
+
+- `/task review [<id>] [--scope <glob>] [--yes]`. Compiled into `SlashCommandRegistry` (the "installed at startup" mechanism).
+- Five concurrent reviewer agents (completeness, architecture, code & logic, tests, security), each receiving a coordinator-prepared context packet via a new full-model channel (NOT light-model, per user requirement) - parallel pipeline to `CliLightModelInvocation`, isolated managed-cwd, no tools, no MCP.
+- Sixth coordinator agent deduplicates, re-scores, and assigns a disposition: `auto_apply` | `auto_reject` | `needs_user`. Disposition is severity-orthogonal - any severity (critical / warning / suggestion) can auto-apply at high confidence, and any severity can be auto-rejected with an explicit `rejection_reason` (required field).
+- Host-side auto-apply executor: source-divergence check via `old_text` match, batch apply, build gate (`dotnet build -c Release`), test gate (`dotnet test`), revert-on-failure + demote-to-user.
+- Report artifact `review-<timestamp>.md` in the task folder with three sections (Applied / Rejected / Awaiting decision), every Rejected entry carrying the consolidator's verbatim rejection reason. Index row added; progress entry appended.
+- Cost guard: `[y/N]` prompt by default (5+ full-model invocations is real money); `--yes` to skip.
+- New `tasks.base_commit_sha` SQLite column (Migration_002) so the diff range is reproducible; falls back to `merge-base main HEAD` when null.
+- Skill bump 3 -> 4: agent learns the command exists and that it should suggest running it before declaring a task "done".
+
+### User clarifications captured in the design
+
+1. **Auto-apply ceiling.** Severity is NOT a floor for auto-apply - high-confidence `critical` and `warning` findings auto-apply, not just `suggestion`. Gate is confidence + concrete fix + size guards, not severity.
+2. **Critical may be auto-rejected** if the reviewer is plainly wrong, but every rejection (regardless of severity) MUST carry an explicit `rejection_reason` in the report. Schema validator enforces this.
+3. **Reviewers are NOT light-model.** Use full reasoning model (default: same as user's main session model). Coordinator passes them reduced/targeted context packets - reviewers don't need tools to read files themselves.
+4. **Auto-apply is host-side.** Not delegated to a sub-agent.
+
+### Postponed (filed below; still in `docs/stage2/todo.md` section B for the broader feature)
+
+- `--reviewer <name>` single-reviewer re-run.
+- Custom reviewer prompts beyond the five.
+- Cross-task review.
+- Auto-commit (never - user owns commits).
+- The `/task done` gate that *enforces* the review (refuses to mark done if any `critical` lands in "Awaiting decision"). This design ships the *tool*; the *gate* is still a separate command, still postponed.
+- `review.parallelism` setting for serialised invocation (cost predictability) - add if users complain.
+
+### Files touched this session
+
+- `.task/0003-infinicontext-phase-2b-continuation-plan/review-feature-design.md` - new artifact, full v1 design.
+- `.task/0003-infinicontext-phase-2b-continuation-plan/index.md` - added the new artifact row.
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` - this entry.
+
+### Handoff to next session
+
+When the user is ready to implement v1, the entry point is the **Code touch list** section in `review-feature-design.md`. No code changes were made; implementation is fresh start.
+
+Recommended implementation order:
+
+1. `FindingModel.cs` + `FindingModelTests.cs` (POCOs + schema validation are the contract everything else hangs off).
+2. `Migration_002_AddBaseCommitSha` + `TaskStore` / `TaskService.CreateAsync` capture.
+3. `ScopeResolver` + `ScopeResolverTests` (deterministic, no model calls - cheap to iterate on).
+4. `IReviewerAgentService` + `CliReviewerAgentService` (mirror `CliLightModelInvocation` with the model knob).
+5. `ReviewerPrompts` v1 strings - expect to iterate against real runs.
+6. `ReviewService` + fake-reviewer end-to-end test.
+7. `AutoApplyExecutor` + `FakeBuildTestRunner`.
+8. `ReportRenderer` + golden test.
+9. CLI: `TaskCommand.Review` parser, `TaskCommandHandler.HandleReviewAsync`, wiring in `Program.cs`.
+10. Settings entries + schema.
+11. Skill bump 3 -> 4 (last step - skill change implies install on next host launch).
+12. Dogfood: `/task review` on task 0003 itself. Tighten reviewer prompts based on findings.
+
+The four "open questions" listed at the bottom of `review-feature-design.md` are non-blocking; decide at implementation time.
+
+## 2026-05-17 (review-gate impl session тАФ foundational slice)
+
+User said "implement" after the soft context-pressure handoff. Did the foundational slice of the design (steps 1-2 of the 12-step plan) and flushed before context burned out. Steps 3-12 hand off cleanly to a fresh session тАФ every contract the rest of the subsystem hangs off (the JSON schema, the SQLite column for the diff base) is now in code with tests.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/FindingModel.cs` (new) тАФ POCOs for the whole review subsystem contract: `Severity` (`Critical | Warning | Suggestion`), `Disposition` (`AutoApply | AutoReject | NeedsUser`), `FixKind` (`Edit | ReplaceFile | Manual`), `SuggestedFix`, `Finding`, `ReviewerOutput`, `ConsolidatedFinding`, `ConsolidatedReport`, `ReviewReport`. Plus `FindingJson` helpers (shared `JsonSerializerOptions` with snake_case enum policy + fence-aware `ExtractJson` for tolerant agent-output parsing) and `FindingValidator` (the schema invariants тАФ `RejectionReason` required on `AutoReject`, concrete fix + file required on `AutoApply`, etc.).
+- `src/InfiniContext.Core/Tasks/Migrations/Migration_002_AddBaseCommitSha.cs` (new) тАФ `ALTER TABLE tasks ADD COLUMN base_commit_sha TEXT NULL;`.
+- `src/InfiniContext.Core/Tasks/Migrations/MigrationRunner.cs` тАФ added `Migration_002_AddBaseCommitSha` to `BuiltIn`.
+- `src/InfiniContext.Core/Tasks/TaskRecord.cs` тАФ added optional `string? BaseCommitSha = null` ctor parameter (defaults to null so existing call sites still compile).
+- `src/InfiniContext.Core/Tasks/TaskStore.cs` тАФ `CreateAsync` writes `base_commit_sha`; `GetAsync` / `ListAsync` SELECT it; `ReadRecord` populates it.
+- `src/InfiniContext.Core/Tasks/GitHead.cs` (new) тАФ `TryResolveAsync(workingDirectory)` shells out to `git rev-parse HEAD` with a 5s budget, validates the 40-hex-char shape, returns null on any failure. Best-effort by design тАФ review falls back to `merge-base main HEAD` when the column is null.
+- `src/InfiniContext.Core/Tasks/TaskService.cs` тАФ `CreateAsync` calls `GitHead.TryResolveAsync(homeCwd)` before persisting the row; the SHA flows into `TaskRecord.BaseCommitSha`.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/FindingModelTests.cs` (new) тАФ 19 tests. JSON round-trip, snake_case enum serialization both directions, optional-field tolerance, fence extraction (`\`\`\`json` fence / bare `\`\`\`` fence / first-brace-to-last-brace fallback / null on garbage), `TryParseReviewerOutput` happy + sad paths, validator coverage of every schema invariant (rejection reason required for `AutoReject`, fix required for `AutoApply`, manual fix disallowed for `AutoApply`, empty old/new text rejected, file required, confidence range), explicit assertions that severity is orthogonal to disposition (critical can `AutoApply` and `AutoReject`), `ValidateAll` reports one error per offending finding.
+- `tests/InfiniContext.Tests/Tasks/MigrationRunnerTests.cs` тАФ updated three existing tests that hardcoded migration count (now `MigrationRunner.BuiltIn.Count`), added `Migration_002_adds_base_commit_sha_column_to_tasks` that verifies the column via `PRAGMA table_info(tasks)`.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core/InfiniContext.Core.csproj` тАФ succeeded.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ succeeded. (Full-solution build is still blocked locally by running `InfiniContext.Cli.exe` processes locking `InfiniContext.Core.dll` тАФ same gotcha as prior sessions.)
+- `dotnet test --no-build --filter Review|Tasks` тАФ **108/108 passing**. No regressions on existing Tasks-namespace tests.
+- `dotnet format InfiniContext.Core` тАФ green.
+- `dotnet format tests/InfiniContext.Tests` тАФ applied one whitespace fix and is now green.
+
+### What's done vs what's left (vs. the 12-step plan in the design)
+
+Done:
+
+1. тЬЕ `FindingModel.cs` + `FindingModelTests.cs` (the JSON contract everything else hangs off).
+2. тЬЕ `Migration_002` + `TaskStore` / `TaskService.CreateAsync` capture (with `GitHead`).
+
+Not done (hand off to next session, in priority order):
+
+3. `ScopeResolver` + `ScopeResolverTests` тАФ git-diff range resolution (`base_commit_sha` -> `git diff base..HEAD`), fallback to `merge-base main HEAD`, "Files touched" parsing from progress.md, byte-cap exclusion, `--scope` glob override.
+4. `IReviewerAgentService` + `CliReviewerAgentService` тАФ mirror `CliLightModelInvocation` with model knob from settings. The argv shape is documented in CLAUDE.md "Light-model service" тАФ same flags except the model.
+5. `ReviewerPrompts.cs` тАФ five compile-time prompt strings + the coordinator prompt. Expect 2-3 rounds of iteration after dogfooding.
+6. `ReviewService.cs` тАФ orchestrator. Owns scope resolution -> packet building -> reviewer dispatch (Task.WhenAll) -> coordinator -> auto-apply -> report write. End-to-end test with a fake `IReviewerAgentService` that returns canned JSON.
+7. `AutoApplyExecutor.cs` + `IBuildTestRunner` abstraction тАФ applies edits, source-divergence check via `old_text` match, build+test gate with revert-on-failure. `FakeBuildTestRunner` for tests (no real `dotnet` invocation).
+8. `ReportRenderer.cs` тАФ `ReviewReport` -> markdown (the structure shown in the design's "Report artifact" section). Golden test.
+9. CLI: `TaskCommand.Review(int? Id, string? Scope, bool SkipConfirm)` parser, `TaskCommandHandler.HandleReviewAsync`, wiring in `Program.cs`.
+10. Settings: `review` section in `settings.json` + `settings.schema.json` + `ReviewSettings` record + binding.
+11. Skill bump: `InfiniContextTaskSkill.Version` 3 -> 4, add "Task review" subsection.
+12. Dogfood: run `/task review` on task 0003 itself; tighten prompts.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/FindingModel.cs` (new)
+- `src/InfiniContext.Core/Tasks/Migrations/Migration_002_AddBaseCommitSha.cs` (new)
+- `src/InfiniContext.Core/Tasks/Migrations/MigrationRunner.cs` (BuiltIn list)
+- `src/InfiniContext.Core/Tasks/TaskRecord.cs` (added BaseCommitSha param)
+- `src/InfiniContext.Core/Tasks/TaskStore.cs` (read/write base_commit_sha)
+- `src/InfiniContext.Core/Tasks/GitHead.cs` (new)
+- `src/InfiniContext.Core/Tasks/TaskService.cs` (capture HEAD on CreateAsync)
+- `tests/InfiniContext.Tests/Review/FindingModelTests.cs` (new)
+- `tests/InfiniContext.Tests/Tasks/MigrationRunnerTests.cs` (3 updates + 1 new test)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 9 source/test files above are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review foundational slice (FindingModel + Migration_002)` тАФ the surface is cohesive (schema contract + diff-base capture are the two contracts everything in steps 3-12 builds on).
+
+### Handoff to next session
+
+Open `review-feature-design.md` "Code touch list" and resume at step 3 (`ScopeResolver`). The POCOs in `FindingModel.cs` and the `BaseCommitSha` column are the stable contracts the rest of the subsystem hangs off тАФ no need to revisit them.
+
+Open notes for next session:
+
+- Existing `TaskServiceTests` may incidentally invoke `GitHead.TryResolveAsync` against test temp dirs since `CreateAsync` is unconditional about the call. In those tests it returns null and BaseCommitSha stays null тАФ observed via the 108-test pass above. No test breakage; just be aware if you add a TaskService test that asserts on full-record equality.
+- The skill version stays at `3` for now тАФ bump to `4` only when step 11 lands (the on-disk skill should match the code surface).

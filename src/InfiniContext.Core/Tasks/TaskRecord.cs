@@ -11,6 +11,7 @@ namespace InfiniContext.Core.Tasks;
 /// <param name="LastActiveAtUnixMs">Unix epoch milliseconds (UTC). Bumped on session start/exit and other meaningful state changes.</param>
 /// <param name="Status">Lifecycle state.</param>
 /// <param name="ParentTaskId">If this task was forked from another, the parent's id; otherwise null.</param>
+/// <param name="BaseCommitSha">Git HEAD SHA captured at <see cref="TaskService.CreateAsync"/> time, used by <c>/task review</c> as the base of the diff range that defines "the work attributable to this task". Null when the home_cwd wasn't a git repo at create time, or for tasks created before <see cref="Migrations.Migration_002_AddBaseCommitSha"/>.</param>
 public sealed record TaskRecord(
     int Id,
     string HomeCwd,
@@ -18,4 +19,5 @@ public sealed record TaskRecord(
     long CreatedAtUnixMs,
     long LastActiveAtUnixMs,
     TaskItemStatus Status,
-    int? ParentTaskId);
+    int? ParentTaskId,
+    string? BaseCommitSha = null);

@@ -13,12 +13,29 @@ public class MigrationRunnerTests
 
         var applied = await MigrationRunner.ApplyAsync(conn);
 
-        applied.Should().Equal(new[] { 1 });
+        applied.Should().Equal(new[] { 1, 2 });
         var tables = await ObjectNamesAsync(conn);
         tables.Should().BeEquivalentTo(new[] { "__migrations", "idx_tasks_last_active", "task_id_seq", "tasks" });
         // Sequence is initialised and ready to hand out 1 first.
         var seqStart = await ScalarAsync<long>(conn, "SELECT next_id FROM task_id_seq WHERE rowid = 1");
         seqStart.Should().Be(1L);
+    }
+
+    [Fact]
+    public async Task Migration_002_adds_base_commit_sha_column_to_tasks()
+    {
+        await using var conn = await OpenInMemoryAsync();
+        await MigrationRunner.ApplyAsync(conn);
+
+        // PRAGMA table_info returns one row per column: (cid, name, type, notnull, dflt_value, pk).
+        var cols = new List<(string Name, string Type, bool NotNull)>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(tasks);";
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            cols.Add((r.GetString(1), r.GetString(2), r.GetInt32(3) != 0));
+
+        cols.Should().Contain(c => c.Name == "base_commit_sha" && c.Type == "TEXT" && !c.NotNull);
     }
 
     [Fact]
@@ -30,9 +47,9 @@ public class MigrationRunnerTests
         var second = await MigrationRunner.ApplyAsync(conn);
 
         second.Should().BeEmpty();
-        // __migrations still has exactly the original row.
+        // __migrations still has exactly the rows from the first apply (one per built-in migration).
         var rows = await ScalarAsync<long>(conn, "SELECT COUNT(*) FROM __migrations");
-        rows.Should().Be(1L);
+        rows.Should().Be(MigrationRunner.BuiltIn.Count);
     }
 
     [Fact]
@@ -68,13 +85,15 @@ public class MigrationRunnerTests
     {
         await using var conn = await OpenInMemoryAsync();
         await MigrationRunner.ApplyAsync(conn);
-        // Pretend we previously applied a version the current code doesn't know about.
-        await ExecAsync(conn, "INSERT INTO __migrations (version, description, applied_at_unix_ms) VALUES (2, 'unknown', 0);");
+        // Pretend we previously applied a version the current code doesn't know about: use
+        // BuiltIn.Count + 1 so the test stays correct as new migrations land.
+        var unknown = MigrationRunner.BuiltIn.Count + 1;
+        await ExecAsync(conn, $"INSERT INTO __migrations (version, description, applied_at_unix_ms) VALUES ({unknown}, 'unknown', 0);");
 
         var act = () => MigrationRunner.ApplyAsync(conn);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*unknown versions 2*");
+            .WithMessage($"*unknown versions {unknown}*");
     }
 
     [Fact]

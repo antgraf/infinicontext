@@ -131,8 +131,8 @@ public sealed class TaskStore : IAsyncDisposable
         {
             await using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO tasks (id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id)
-                VALUES ($id, $home_cwd, $title, $created, $last_active, $status, $parent);
+                INSERT INTO tasks (id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id, base_commit_sha)
+                VALUES ($id, $home_cwd, $title, $created, $last_active, $status, $parent, $base_sha);
                 """;
             cmd.Parameters.AddWithValue("$id", record.Id);
             cmd.Parameters.AddWithValue("$home_cwd", record.HomeCwd);
@@ -141,6 +141,7 @@ public sealed class TaskStore : IAsyncDisposable
             cmd.Parameters.AddWithValue("$last_active", record.LastActiveAtUnixMs);
             cmd.Parameters.AddWithValue("$status", record.Status.ToString());
             cmd.Parameters.AddWithValue("$parent", (object?)record.ParentTaskId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$base_sha", (object?)record.BaseCommitSha ?? DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -157,7 +158,7 @@ public sealed class TaskStore : IAsyncDisposable
         {
             await using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                SELECT id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id
+                SELECT id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id, base_commit_sha
                 FROM tasks WHERE id = $id;
                 """;
             cmd.Parameters.AddWithValue("$id", id);
@@ -181,7 +182,7 @@ public sealed class TaskStore : IAsyncDisposable
             var rows = new List<TaskRecord>();
             await using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                SELECT id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id
+                SELECT id, home_cwd, title, created_at_unix_ms, last_active_at_unix_ms, status, parent_task_id, base_commit_sha
                 FROM tasks ORDER BY last_active_at_unix_ms DESC, id DESC;
                 """;
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -380,7 +381,8 @@ public sealed class TaskStore : IAsyncDisposable
             CreatedAtUnixMs: reader.GetInt64(3),
             LastActiveAtUnixMs: reader.GetInt64(4),
             Status: status,
-            ParentTaskId: reader.IsDBNull(6) ? null : reader.GetInt32(6));
+            ParentTaskId: reader.IsDBNull(6) ? null : reader.GetInt32(6),
+            BaseCommitSha: reader.IsDBNull(7) ? null : reader.GetString(7));
     }
 
     private static bool IsInMemory(string path) =>
