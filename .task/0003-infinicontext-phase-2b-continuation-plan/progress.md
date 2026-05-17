@@ -410,3 +410,102 @@ Resume at step 5 (`ReviewerPrompts.cs`). Six compile-time strings:
 - One for the coordinator тАФ describes dedup, severity re-scoring, disposition rules (auto_apply / auto_reject / needs_user with the confidence + fix-presence gates from the design), and the requirement that `rejection_reason` be non-empty for `auto_reject`.
 
 Then step 6 (`ReviewService`) is the orchestrator that wires steps 3, 4, and 5 together. The `IReviewerAgentService` interface that landed here is exactly the seam step 6 will use a fake for in its end-to-end tests.
+
+## 2026-05-17 (review-gate impl session тАФ step 5: ReviewerPrompts)
+
+User said "continue" after the step-4 commit. Shipped step 5: `ReviewerPrompts.cs` тАФ six compile-time prompt templates (five reviewer roles + coordinator), slot-fill helper, slot-discovery helper.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/ReviewerPrompts.cs` (new) тАФ public static class. Exposes:
+  - `enum ReviewerRole { Completeness, Architecture, CodeLogic, Tests, Security, Coordinator }`.
+  - `SystemFor(role)` тАФ system prompt (role definition + JSON output schema, no slots). Each reviewer's prompt names the role, lists what to look for + what NOT to look at (other reviewers handle those), and ends with the common output contract (schema + severity definitions + "output ONLY JSON, no fences"). Coordinator prompt is its own thing тАФ describes dedup/re-score/disposition rules, requires `rejection_reason` for auto_reject, explicitly states severity-is-orthogonal-to-disposition.
+  - `UserTemplateFor(role)` тАФ user-payload template with `{slot_name}` markers. The orchestrator fills via `Fill`.
+  - `Fill(template, slots)` тАФ substitutes `{slot_name}` markers; throws on missing slot referenced in template; silently ignores extra slot keys so the orchestrator can pass a uniform packet.
+  - `SlotsReferencedBy(template)` тАФ returns slot keys in document order; used by tests + (eventually) the orchestrator to verify it provides everything a template needs.
+  - `SlotKeys.{TaskTitle, TaskId, DescriptionMd, ProgressMd, IndexMd, ClaudeMd, DecisionsMd, DiffSummary, FileExcerpts, TestExcerpts, TestResults, CsprojDiffs, ReviewerOutputs, ScopeDescription}` тАФ canonical slot names.
+
+Tests (`tests/InfiniContext.Tests/Review/ReviewerPromptsTests.cs`, new): 50 tests, all green.
+
+- Every role returns non-empty SystemFor and UserTemplateFor.
+- Every reviewer system prompt names the three severity levels, mentions the JSON schema fields (severity, confidence, suggested_fix, findings), instructs JSON-only output (regex `Output ONLY.*JSON`), and names its role.
+- Coordinator system mentions all three disposition values, requires `rejection_reason`, surfaces "orthogonal" wording so the agent doesn't default to "critical always needs user".
+- Each reviewer's user template references the slots that role needs (completeness: description/progress/index/diff/excerpts; architecture: claude_md/decisions/excerpts; tests: test_excerpts/test_results; security: csproj_diffs; coordinator: reviewer_outputs).
+- Every user template references task_id/task_title/scope_description (the common metadata).
+- Fill substitutes single slot; substitutes every occurrence of repeated slot; leaves no-slot text unchanged; throws on missing slot with the slot name in the error message; ignores extra keys.
+- SlotsReferencedBy preserves document order.
+- Edge cases: SystemFor throws on unknown role; Fill throws on null template.
+
+### Design choices recorded
+
+- **JSON-only output contract is centralised** as `CommonOutputContract` (private const) shared across all five reviewer system prompts. The coordinator's schema is different (adds disposition fields) so it has its own.
+- **Coordinator gets its own dispositional schema** spelled out in the system prompt, not derived from the reviewer schema. Avoids hoping the agent infers the extra fields.
+- **`rejection_reason` requirement is surfaced as "REQUIRED"** in caps in the coordinator prompt тАФ agents tend to skip optional-looking fields.
+- **Severity-orthogonal language** uses the exact word "orthogonal" so a test can pin it. The prompt says "ANY severity can be auto_reject тАФ the gate is your confidence, not the reviewer's severity choice." Mirror of the user's clarification.
+- **Unparseable reviewer output handling**: coordinator prompt says "surface that as a needs_user finding (severity=warning) rather than dropping it silently". This is the contract the orchestrator depends on in step 6 when a reviewer's output fails `FindingJson.TryParseReviewerOutput`.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` тАФ green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green.
+- `dotnet test --no-build --filter Review|Tasks` тАФ **418/418 passing**. No regressions.
+- `dotnet format` тАФ green on both Core and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1 (FindingModel), 2 (Migration_002), 3 (ScopeResolver), 4 (ReviewerAgentService), 5 (ReviewerPrompts).
+
+Not done (in priority order): 6 (ReviewService тАФ the orchestrator; largest step), 7 (AutoApplyExecutor + IBuildTestRunner), 8 (ReportRenderer), 9 (CLI), 10 (Settings), 11 (Skill bump 3->4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ReviewerPrompts.cs` (new)
+- `tests/InfiniContext.Tests/Review/ReviewerPromptsTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 5 (ReviewerPrompts).`
+
+### Handoff to next session
+
+Resume at step 6 (`ReviewService` тАФ the orchestrator). This is the largest step. It wires together: ScopeResolver (step 3), IReviewerAgentService (step 4), ReviewerPrompts (step 5), and FindingJson + FindingValidator (step 1). Then it calls the AutoApplyExecutor (step 7 тАФ not yet built; can stub) and writes the report via the ReportRenderer (step 8 тАФ not yet built).
+
+API sketch for step 6:
+
+```csharp
+public sealed class ReviewService
+{
+    public ReviewService(
+        TaskService tasks,
+        ScopeResolver scope,
+        IReviewerAgentService reviewer,           // single channel тАФ orchestrator handles N concurrent invocations
+        IAutoApplyExecutor autoApply,              // null-safe: when null, every auto_apply demoted to needs_user
+        Func<DateTimeOffset>? clock = null);
+
+    public Task<ReviewReport> RunReviewAsync(int taskId, ReviewOptions options, CancellationToken ct);
+}
+
+public sealed record ReviewOptions(
+    IReadOnlyList<string>? ScopeOverridePaths = null,
+    bool AutoApplyEnabled = true,
+    double ConfidenceFloor = 0.9,
+    int AutoApplyMaxLinesPerFinding = 50,
+    int AutoApplyMaxFilesPerFinding = 3);
+```
+
+Flow:
+1. Load `TaskRecord` via `TaskService.GetAsync`. Resolve task folder. Read description.md, progress.md, index.md.
+2. Run `ScopeResolver.ResolveAsync` with task's home_cwd and BaseCommitSha.
+3. Build the slot dictionary (PromptSlots in spirit). Render five reviewer user payloads via `ReviewerPrompts.Fill`.
+4. `Task.WhenAll` over five `_reviewer.RunOneShotAsync(SystemFor(role), userPayload, ct)`. Parse each output via `FindingJson.TryParseReviewerOutput`; on parse failure, synthesize a single needs_user warning carrying the raw text.
+5. Build the coordinator user payload (concatenate five reviewer JSON outputs). Run coordinator. Parse via `FindingJson.TryParseConsolidatedReport`. Validate via `FindingValidator.ValidateAll`; on validation failure, demote every auto_* to needs_user with a `"coordinator output failed validation: <msg>"` note.
+6. Hand `auto_apply` findings to `IAutoApplyExecutor.ApplyAsync` (step 7). Get back which actually applied vs. were demoted (build/test failure, source diverged).
+7. Build `ReviewReport` partitioning consolidated findings into Applied / Rejected / Awaiting.
+8. Return. (Step 8's `ReportRenderer` will turn it into the markdown artifact; step 9's CLI handler invokes that.)
+
+End-to-end test pattern (FakeReviewerAgentService): set up a queue of canned (role, jsonText) responses; service dispatches each call to the next queued response by inspecting the system prompt. Tests verify the partitioning, the unparseable-reviewer fallback, the coordinator-validation-failure demotion path, and that `auto_apply` reaches the executor only when validation passes.
+
+The auto-apply executor (step 7) can be stubbed for step 6 tests via a fake `IAutoApplyExecutor` that just echoes the input back as "all applied" or "all demoted" depending on the test's intent.
