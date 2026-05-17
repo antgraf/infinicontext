@@ -8,7 +8,7 @@ namespace InfiniContext.Core.Tasks;
 /// <para>
 /// Per the design's mandatory/optional split: <c>index.md</c>, <c>description.md</c>, and
 /// <c>progress.md</c> are mandatory; <c>plan.md</c>, <c>research.md</c>, <c>decisions.md</c>,
-/// <c>design.md</c> and others are optional and added by the agent on demand. Optional
+/// <c>design.md</c>, <c>issues.md</c> and others are optional and added by the agent on demand. Optional
 /// artifacts get no scaffold here — the agent creates them with content.
 /// </para>
 /// </summary>

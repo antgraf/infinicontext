@@ -1,3 +1,4 @@
+using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.SlashCommands;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Configuration;
@@ -39,6 +40,7 @@ internal sealed class MultiSessionHost : IReplActions
     private readonly Func<ApprovalMode>? _getApprovalMode;
     private readonly Func<ApprovalMode, ApprovalMode>? _switchApprovalMode;
     private readonly TaskCommandHandler? _taskHandler;
+    private readonly IssueCommandHandler? _issueHandler;
     private readonly Func<int, CancellationToken, Task<TaskSwitchPlan?>>? _prepareTaskSwitch;
     private readonly Action<string> _onFragment;
     private readonly Action<StateTransition> _onTransition;
@@ -63,6 +65,7 @@ internal sealed class MultiSessionHost : IReplActions
         Func<ApprovalMode>? getApprovalMode = null,
         Func<ApprovalMode, ApprovalMode>? switchApprovalMode = null,
         TaskCommandHandler? taskHandler = null,
+        IssueCommandHandler? issueHandler = null,
         Func<int, CancellationToken, Task<TaskSwitchPlan?>>? prepareTaskSwitch = null,
         SessionManager? sessionManager = null)
     {
@@ -76,6 +79,7 @@ internal sealed class MultiSessionHost : IReplActions
         _getApprovalMode = getApprovalMode;
         _switchApprovalMode = switchApprovalMode;
         _taskHandler = taskHandler;
+        _issueHandler = issueHandler;
         _prepareTaskSwitch = prepareTaskSwitch;
         _manager = sessionManager;
 
@@ -89,6 +93,7 @@ internal sealed class MultiSessionHost : IReplActions
             new ResumeCommand(),
             new ApprovalCommand(),
             new TaskSlashCommand(),
+            new IssueSlashCommand(),
             new NewSessionCommand(),
             new ListSessionsCommand(),
             new FocusCommand(),
@@ -291,6 +296,8 @@ internal sealed class MultiSessionHost : IReplActions
             SessionManager = _manager,
             Console = _console,
             FocusedHostSessionId = _focused.Id,
+            ActiveTaskId = _focused.ActiveTaskId,
+            IssueHandler = _issueHandler,
         };
 
     public void RequestExit()

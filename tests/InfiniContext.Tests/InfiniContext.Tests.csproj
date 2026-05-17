@@ -47,6 +47,8 @@
     <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommand.cs" Link="Cli\Tasks\TaskCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommandHandler.cs" Link="Cli\Tasks\TaskCommandHandler.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommand.cs" Link="Cli\Issues\IssueCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommandHandler.cs" Link="Cli\Issues\IssueCommandHandler.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\HostResult.cs" Link="Cli\Ui\HostResult.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\MultiSessionHost.cs" Link="Cli\Ui\MultiSessionHost.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ISlashCommand.cs" Link="Cli\SlashCommands\ISlashCommand.cs" />
@@ -59,6 +61,7 @@
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ResumeCommand.cs" Link="Cli\SlashCommands\ResumeCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ApprovalCommand.cs" Link="Cli\SlashCommands\ApprovalCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\TaskSlashCommand.cs" Link="Cli\SlashCommands\TaskSlashCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\IssueSlashCommand.cs" Link="Cli\SlashCommands\IssueSlashCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\NewSessionCommand.cs" Link="Cli\SlashCommands\NewSessionCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ListSessionsCommand.cs" Link="Cli\SlashCommands\ListSessionsCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FocusCommand.cs" Link="Cli\SlashCommands\FocusCommand.cs" />

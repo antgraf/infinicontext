@@ -1,4 +1,5 @@
 using InfiniContext.Cli;
+using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.Mcp;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Cli.Ui;
@@ -130,7 +131,9 @@ var consoleWriteLock = new object();
 // keeps working.
 await using var taskStore = await TryOpenTaskStoreAsync(settings, logging.Logger).ConfigureAwait(false);
 TaskCommandHandler? taskCommandHandler = null;
+IssueCommandHandler? issueCommandHandler = null;
 TaskService? taskService = null;
+IssueService? issueService = null;
 ILightModelService? lightModelForTasks = null;
 if (taskStore is not null)
 {
@@ -158,6 +161,15 @@ await using var _lightModelForTasksDisposable = lightModelForTasks as IAsyncDisp
 // the per-session pipe name as the lock owner id, so locks are reclaimed automatically when
 // each session's channel disposes.
 var lockRegistry = new LockRegistry(logger: logging.Logger);
+
+// IssueService is constructed after the lock registry so issues.md writes flow through the
+// same serialization the agent's MCP-side writes do. It's optional: when the task subsystem is
+// unavailable we skip the issue subsystem too, and /issue reports 'unavailable'.
+if (taskStore is not null)
+{
+    issueService = new IssueService(taskStore, lockRegistry);
+    issueCommandHandler = new IssueCommandHandler(issueService, Console.Out, consoleWriteLock);
+}
 
 var approvalFactory = new ApprovalSinkFactory(settings, consoleWriteLock, Console.Out, logging.Logger, parsed.Cwd, supervisor: supervisor, lightModelServiceFactory: lightModelServiceFactory);
 var initialMode = parsed.ApprovalMode ?? settings.Approval.Mode;
@@ -271,6 +283,7 @@ while (true)
             }
         },
         taskHandler: taskCommandHandler,
+        issueHandler: issueCommandHandler,
         prepareTaskSwitch: taskService is null
             ? null
             : (id, ct) => taskService.PrepareSwitchAsync(id, ct),

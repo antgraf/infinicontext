@@ -1,3 +1,4 @@
+using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Sessions;
@@ -79,4 +80,16 @@ internal sealed record SlashCommandContext(
     /// <summary>Host id of the currently focused session, when there is one. Slash commands that
     /// want to act on the focused session can compare against this without holding a reference.</summary>
     public Guid? FocusedHostSessionId { get; init; }
+
+    /// <summary>The task id (if any) bound to the focused session. Read at slash-command dispatch
+    /// time so commands that target the active task (notably <c>/issue</c>) don't need to
+    /// re-resolve focus through <see cref="SessionManager"/>.</summary>
+    public int? ActiveTaskId { get; init; }
+
+    /// <summary>Issue-subsystem handler. Constructed when the task subsystem initializes
+    /// successfully; null otherwise (the <c>/issue</c> surface prints an "unavailable" message
+    /// in that case). Kept as an init-only property rather than a positional record param so
+    /// callers (tests, future host modes) that don't care about the issue surface don't have to
+    /// thread <c>null</c> through.</summary>
+    public IssueCommandHandler? IssueHandler { get; init; }
 }

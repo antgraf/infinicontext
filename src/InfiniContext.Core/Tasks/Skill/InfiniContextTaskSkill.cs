@@ -27,7 +27,7 @@ public static class InfiniContextTaskSkill
     public const string SkillName = "infinicontext-task";
 
     /// <summary>Embedded version stamp. Increment on every change to <see cref="SkillMarkdown"/>.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     /// <summary>Marker prefix inside the SKILL.md file. The trailing integer is the version.</summary>
     public const string VersionMarkerPrefix = "<!-- infinicontext-task-skill-version: ";
@@ -50,7 +50,8 @@ public static class InfiniContextTaskSkill
 
     /// <summary>
     /// Full SKILL.md content (frontmatter + body + version marker). Total body kept under
-    /// 500 tokens per design.md risk #5. v2 (Phase 7) adds the MCP lock contract.
+    /// 500 tokens per design.md risk #5. v2 (Phase 7) adds the MCP lock contract; v3 adds the
+    /// "Issue hygiene" section instructing the agent to log out-of-scope findings to issues.md.
     /// </summary>
     // The raw-string literal below captures the source file's line endings, which Windows CI
     // converts to CRLF on checkout (`core.autocrlf=true`). The `.Replace` normalizes to LF so the
@@ -94,6 +95,23 @@ public static class InfiniContextTaskSkill
         ## Progress hygiene
 
         Append a brief entry to `progress.md` at every meaningful state change: phase completion, decision recorded, blocker hit, hand-off to a new session. Group entries under day headings (`## YYYY-MM-DD`). Progress is the audit log; future-you will thank present-you.
+
+        ## Issue hygiene
+
+        When you spot an out-of-scope finding (a bug in an unrelated module, a code smell, a follow-up question, a wrong assumption in another file) while doing the work the user actually asked for, **don't fix it inline** and **don't bury it in `progress.md`**. Append a numbered entry to `issues.md` under the lock contract, then continue with the in-scope task.
+
+        Format each entry as:
+
+        ```markdown
+        ## NNNN - <short title>
+        - **Logged:** <ISO 8601> by <session-id-prefix>
+        - **Kind:** bug | smell | followup | question
+        - **Where:** path/to/file.cs:line   (optional)
+        - **Status:** open
+        - **Body:** brief context - what you saw and why it's noteworthy.
+        ```
+
+        `issues.md` is optional - create it on first capture (the file header is `# Issues - <task title>`). Local IDs (`0001`, `0002`, ...) are per-task and stable; reference them from `progress.md` / `decisions.md` as needed (`see issues.md#0003`). Add a row to `index.md` the first time you create the file.
 
         ## Host context-pressure nudges
 

@@ -1,3 +1,4 @@
+using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Tasks;
 
@@ -23,6 +24,28 @@ internal sealed class TaskSlashCommand : ISlashCommand
         if (ctx.TaskHandler is null)
         {
             ctx.Write("[task] subsystem is unavailable (see startup warnings).\n");
+            return;
+        }
+
+        // `/task issue ...` is the cross-namespace alias for `/issue ...` - route the remainder
+        // straight into IssueCommand so both surfaces share one parser + handler. The user-facing
+        // help is identical between the two forms.
+        var trimmed = (argLine ?? string.Empty).TrimStart();
+        if (trimmed.StartsWith("issue", StringComparison.OrdinalIgnoreCase)
+            && (trimmed.Length == 5 || char.IsWhiteSpace(trimmed[5])))
+        {
+            if (ctx.IssueHandler is null)
+            {
+                ctx.Write("[issue] subsystem is unavailable (see startup warnings).\n");
+                return;
+            }
+            var issueRaw = "/issue" + trimmed[5..];
+            if (!IssueCommand.TryParse(issueRaw, out var issueCmd, out var issueErr))
+            {
+                ctx.Write($"[issue] {issueErr}\n");
+                return;
+            }
+            await ctx.IssueHandler.HandleAsync(issueCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
             return;
         }
 
