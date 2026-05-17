@@ -142,12 +142,17 @@ if (taskStore is not null)
         lightModelForTasks = lightModelServiceFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
         taskService = new TaskService(taskStore, lightModelForTasks);
 
-        // Review subsystem wiring. Reviewer agent uses the user's main model (defaults to the
-        // configured main-model id); auto-apply gates through dotnet build / dotnet test.
+        // Review subsystem wiring. Reviewer agent uses settings.review.reviewerModel (null falls
+        // back to the user's main model id); auto-apply gates through dotnet build / dotnet test.
+        var reviewSettings = settings.Review;
+        var reviewerModelId = string.IsNullOrWhiteSpace(reviewSettings.ReviewerModel)
+            ? settings.Models.Main.Id
+            : reviewSettings.ReviewerModel!;
         var reviewerAgent = new InfiniContext.Core.Review.CliReviewerAgentService(
             new InfiniContext.Core.Review.ReviewerAgentOptions
             {
-                Model = settings.Models.Main.Id,
+                Model = reviewerModelId,
+                InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds,
             },
             supervisor: supervisor,
             logger: logging.Logger);
@@ -159,7 +164,8 @@ if (taskStore is not null)
             autoApplyExecutor,
             logger: logging.Logger);
         var scopeResolver = new InfiniContext.Core.Review.ScopeResolver(
-            new InfiniContext.Core.Review.ProcessGitRunner());
+            new InfiniContext.Core.Review.ProcessGitRunner(),
+            byteCap: reviewSettings.PerFileByteCap);
 
         taskCommandHandler = new TaskCommandHandler(
             taskService,

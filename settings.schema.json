@@ -14,7 +14,8 @@
     "versioning": { "$ref": "#/$defs/versioning" },
     "models": { "$ref": "#/$defs/models" },
     "cosmetics": { "$ref": "#/$defs/cosmetics" },
-    "tasks": { "$ref": "#/$defs/tasks" }
+    "tasks": { "$ref": "#/$defs/tasks" },
+    "review": { "$ref": "#/$defs/review" }
   },
   "$defs": {
     "logging": {
@@ -306,6 +307,51 @@
             "approvedMessage": { "type": "string" },
             "deniedMessage": { "type": "string" }
           }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Settings for the /task review multi-agent command (Stage 2B follow-up).",
+      "properties": {
+        "reviewerModel": {
+          "type": ["string", "null"],
+          "description": "Anthropic model id for each reviewer agent. null inherits from models.main.id (the user's main reasoning model)."
+        },
+        "coordinatorModel": {
+          "type": ["string", "null"],
+          "description": "Model for the coordinator agent. null = same as reviewerModel."
+        },
+        "confidenceFloor": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Auto-apply gate: reviewer confidence AND consolidator disposition_confidence must each meet or exceed this. Default 0.9."
+        },
+        "autoApplyMaxLinesPerFinding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Auto-apply size guard: per-finding max lines a fix may touch. Default 50."
+        },
+        "autoApplyMaxFilesPerFinding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Auto-apply size guard: per-finding max files a fix may touch. Default 3."
+        },
+        "perFileByteCap": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "ScopeResolver byte cap per file. Files larger than this go to ExcludedFiles. Default 204800 (200 KB)."
+        },
+        "invocationTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wall-clock budget per reviewer / coordinator invocation. Default 600."
+        },
+        "skipBuildTestGate": {
+          "type": "boolean",
+          "description": "Test-only escape hatch. Production should leave this false."
         }
       }
     }

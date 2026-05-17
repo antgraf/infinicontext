@@ -57,6 +57,17 @@
     "hardThresholdPct": 85
   },
 
+  "review": {
+    "reviewerModel": null,
+    "coordinatorModel": null,
+    "confidenceFloor": 0.9,
+    "autoApplyMaxLinesPerFinding": 50,
+    "autoApplyMaxFilesPerFinding": 3,
+    "perFileByteCap": 204800,
+    "invocationTimeoutSeconds": 600,
+    "skipBuildTestGate": false
+  },
+
   "versioning": {
     "minClaudeVersion": "2.0.0",
     "testedAgainstVersion": "2.1.112"

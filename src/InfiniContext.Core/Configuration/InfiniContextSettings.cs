@@ -20,6 +20,7 @@ public sealed record InfiniContextSettings
     public ModelsOptions Models { get; init; } = new();
     public CosmeticsOptions Cosmetics { get; init; } = new();
     public TasksOptions Tasks { get; init; } = new();
+    public ReviewSettings Review { get; init; } = new();
 }
 
 public sealed record LoggingOptions
@@ -304,4 +305,72 @@ public sealed record TasksOptions
             ".infinicontext",
             "infinicontext.db");
     }
+}
+
+/// <summary>
+/// Settings for the <c>/task review</c> multi-agent review command (the
+/// <see cref="InfiniContext.Core.Review"/> subsystem). Defaults match the design's
+/// <c>review-feature-design.md</c> "Settings additions" section.
+///
+/// <para>
+/// Named <c>ReviewSettings</c> rather than <c>ReviewOptions</c> to avoid colliding with
+/// <see cref="InfiniContext.Core.Review.ReviewOptions"/>, the orchestrator's per-run knobs.
+/// </para>
+/// </summary>
+public sealed record ReviewSettings
+{
+    /// <summary>
+    /// Anthropic model id used by each reviewer agent. <c>null</c> inherits from
+    /// <see cref="MainModelOptions.Id"/>, the user's main reasoning model. The light-model
+    /// default (Haiku-class) is deliberately not the inherited value here; per the design,
+    /// reviewers need reasoning, not classification.
+    /// </summary>
+    public string? ReviewerModel { get; init; }
+
+    /// <summary>
+    /// Model used by the coordinator agent. <c>null</c> = same as <see cref="ReviewerModel"/>
+    /// (which in turn falls back to <see cref="MainModelOptions.Id"/> when null).
+    /// </summary>
+    public string? CoordinatorModel { get; init; }
+
+    /// <summary>
+    /// Auto-apply gate: a finding's <c>confidence</c> AND the consolidator's
+    /// <c>disposition_confidence</c> must both meet or exceed this floor. v1 default 0.9
+    /// matches the design.
+    /// </summary>
+    public double ConfidenceFloor { get; init; } = 0.9;
+
+    /// <summary>
+    /// Auto-apply size guard: per-finding max lines a fix may touch (sum of changed lines).
+    /// The coordinator's prompt also enforces this; the host enforces it again defensively in
+    /// step 7's executor. Default 50 lines.
+    /// </summary>
+    public int AutoApplyMaxLinesPerFinding { get; init; } = 50;
+
+    /// <summary>
+    /// Auto-apply size guard: per-finding max files a fix may touch. Default 3.
+    /// </summary>
+    public int AutoApplyMaxFilesPerFinding { get; init; } = 3;
+
+    /// <summary>
+    /// <see cref="InfiniContext.Core.Review.ScopeResolver"/> byte cap per file (in bytes). Files
+    /// exceeding this go to <c>ExcludedFiles</c> with reason <c>"exceeds byte cap"</c>. Default
+    /// 200 KB, large enough for normal source files and small enough to bound reviewer prompt
+    /// size.
+    /// </summary>
+    public int PerFileByteCap { get; init; } = 204_800;
+
+    /// <summary>
+    /// Wall-clock budget for each reviewer / coordinator invocation. Default 600s (10 min):
+    /// reviewers reading a few-hundred-line packet should finish well inside this; the budget
+    /// exists to catch a wedged child process.
+    /// </summary>
+    public int InvocationTimeoutSeconds { get; init; } = 600;
+
+    /// <summary>
+    /// Test-only escape hatch to disable the post-auto-apply build + test gate. Production
+    /// should always leave this <c>false</c>; the gate is the safety net that reverts edits
+    /// when they break the suite.
+    /// </summary>
+    public bool SkipBuildTestGate { get; init; } = false;
 }

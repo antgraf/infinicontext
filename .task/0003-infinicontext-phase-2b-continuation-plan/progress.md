@@ -859,3 +859,78 @@ Resume at step 10 (Settings). Small step (~50 lines):
 Then step 11 (Skill bump 3 -> 4): edit `InfiniContextTaskSkill.cs` to add a "Task review" subsection (one paragraph) and bump `Version` 3 -> 4. The skill installer will pick up the version diff on next host launch.
 
 Then step 12 (Dogfood): run `/task review` on task 0003 itself in a real session. Iterate on the prompts based on observed findings. This is a behavioral pass, not code.
+
+## 2026-05-17 (review-gate impl session - step 10: Settings)
+
+User said "go next" after the step-9b commit. Shipped step 10: `ReviewSettings` record + settings.json/schema entries + threaded through Program.cs.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Configuration/InfiniContextSettings.cs` - added `Review` property on the root `InfiniContextSettings` record (default `new ReviewSettings()`) and a new `ReviewSettings` record at the bottom of the file with all 8 design-spec fields: `ReviewerModel` (string?, null inherits Models.Main.Id), `CoordinatorModel` (string?, null = same as Reviewer), `ConfidenceFloor` (0.9), `AutoApplyMaxLinesPerFinding` (50), `AutoApplyMaxFilesPerFinding` (3), `PerFileByteCap` (204_800), `InvocationTimeoutSeconds` (600), `SkipBuildTestGate` (false, tests-only).
+- Naming: `ReviewSettings` rather than `ReviewOptions` to avoid clash with `InfiniContext.Core.Review.ReviewOptions` (the orchestrator's per-run knobs). Documented in the type's summary.
+
+Config:
+
+- `settings.json` - new `review` section with the design's default values.
+- `settings.schema.json` - new `$defs.review` entry + property on the root; describes each field with bounds (confidenceFloor 0..1; minimums on the integer guards).
+
+CLI:
+
+- `src/InfiniContext.Cli/Program.cs` - the review-wiring block now reads from `settings.Review`:
+  - `reviewerModelId = settings.Review.ReviewerModel ?? settings.Models.Main.Id`
+  - `ReviewerAgentOptions.InvocationTimeoutSeconds = settings.Review.InvocationTimeoutSeconds`
+  - `ScopeResolver(byteCap: settings.Review.PerFileByteCap)`
+- Settings not yet wired through: `CoordinatorModel` (orchestrator currently uses the reviewer agent for the coordinator role too - need to refactor ReviewService to accept a separate coordinator agent), `ConfidenceFloor` and the auto-apply size guards (currently the coordinator's prompt enforces them; defensive host-side checks are a v1 follow-up), `SkipBuildTestGate` (AutoApplyExecutor doesn't support this knob today). These all defer to v1 follow-ups.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Configuration/InfiniContextSettingsLoaderTests.cs` - added 3 tests under a "ReviewSettings" section: defaults match the design; binds from a JSON file with every field overridden; omitted section keeps compile-time defaults.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite, no filter) - **867/870 passing** (3 macOS-only `[MacOnlyFact]` tests skipped on Windows as expected). No regressions.
+- `dotnet format` - green on Core, Cli, and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1, 2, 3, 4, 5, 6, 7, 8, 9 (a+b), 10.
+
+Not done:
+- 11 (Skill bump 3 -> 4 with a "Task review" subsection in `InfiniContextTaskSkill.SkillMarkdown`).
+- 12 (Dogfood: run `/task review` on task 0003; behavioral pass, not code).
+
+V1 follow-ups (post-12, filed here):
+
+- Wire `CoordinatorModel` end-to-end (requires splitting ReviewService's single `IReviewerAgentService` into reviewer + coordinator channels).
+- Wire `ConfidenceFloor` + `AutoApplyMax*` as host-side defensive checks in AutoApplyExecutor (today only the coordinator's prompt enforces them).
+- Wire `SkipBuildTestGate` as a knob on AutoApplyExecutor (skip both Build and Test gates when true).
+- Glob expansion for `--scope` (currently splits on `;` literally).
+- Lock-contract update of index.md + progress.md after writing the report.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Configuration/InfiniContextSettings.cs` (new Review property + ReviewSettings record)
+- `settings.json` (new review section)
+- `settings.schema.json` (new review $defs + property)
+- `src/InfiniContext.Cli/Program.cs` (settings threaded into ReviewerAgentOptions + ScopeResolver byte cap)
+- `tests/InfiniContext.Tests/Configuration/InfiniContextSettingsLoaderTests.cs` (3 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 5 source/test/config files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 10 (Settings).`
+
+### Handoff to next session
+
+Resume at **step 11** (Skill bump). Trivial:
+
+1. `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs` - in `SkillMarkdown`, add a brief "Task review" subsection (one paragraph) telling the agent that `/task review` exists and that it should suggest running it before declaring a task done.
+2. Bump `Version` 3 -> 4 (same file, top of the class).
+3. The skill installer (`SkillInstaller.InstallIfMissingOrOutdatedAsync`) will detect the version diff on next host launch and rewrite `~/.claude/skills/infinicontext-task/SKILL.md`.
+
+Then step 12 (Dogfood) - real-session pass with `/task review 0003 --yes` to see how the prompts behave on actual content. Likely outcomes: some false positives ("missing tests" when tests exist under a slightly unusual path; "TODO not addressed" when the TODO is in unrelated code), and some prompt tightening. Update `ReviewerPrompts.cs` strings + re-run. After 2-3 iterations, this surface is shippable.

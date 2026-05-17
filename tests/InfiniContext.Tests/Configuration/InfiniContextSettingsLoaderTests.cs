@@ -328,6 +328,65 @@ public class InfiniContextSettingsLoaderTests
         second.Settings.Should().BeEquivalentTo(first.Settings);
     }
 
+    // ---------- ReviewSettings ----------
+
+    [Fact]
+    public void ReviewSettings_defaults_match_the_design()
+    {
+        var review = new ReviewSettings();
+        review.ReviewerModel.Should().BeNull();
+        review.CoordinatorModel.Should().BeNull();
+        review.ConfidenceFloor.Should().Be(0.9);
+        review.AutoApplyMaxLinesPerFinding.Should().Be(50);
+        review.AutoApplyMaxFilesPerFinding.Should().Be(3);
+        review.PerFileByteCap.Should().Be(204_800);
+        review.InvocationTimeoutSeconds.Should().Be(600);
+        review.SkipBuildTestGate.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ReviewSettings_binds_from_settings_json()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            {
+              "review": {
+                "reviewerModel": "claude-opus-4-7",
+                "coordinatorModel": "claude-sonnet-4-6",
+                "confidenceFloor": 0.85,
+                "autoApplyMaxLinesPerFinding": 30,
+                "autoApplyMaxFilesPerFinding": 2,
+                "perFileByteCap": 102400,
+                "invocationTimeoutSeconds": 300,
+                "skipBuildTestGate": true
+              }
+            }
+            """);
+
+        var result = LoadIsolated(temp.Path);
+        result.Settings.Review.ReviewerModel.Should().Be("claude-opus-4-7");
+        result.Settings.Review.CoordinatorModel.Should().Be("claude-sonnet-4-6");
+        result.Settings.Review.ConfidenceFloor.Should().Be(0.85);
+        result.Settings.Review.AutoApplyMaxLinesPerFinding.Should().Be(30);
+        result.Settings.Review.AutoApplyMaxFilesPerFinding.Should().Be(2);
+        result.Settings.Review.PerFileByteCap.Should().Be(102_400);
+        result.Settings.Review.InvocationTimeoutSeconds.Should().Be(300);
+        result.Settings.Review.SkipBuildTestGate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ReviewSettings_omitted_section_keeps_compile_time_defaults()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            { "approval": { "timeoutSeconds": 60 } }
+            """);
+
+        var result = LoadIsolated(temp.Path);
+        result.Settings.Review.ConfidenceFloor.Should().Be(0.9);
+        result.Settings.Review.PerFileByteCap.Should().Be(204_800);
+    }
+
     [Collection(nameof(EnvironmentVariableCollection))]
     public class EnvVarBehavior
     {
