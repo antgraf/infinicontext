@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Tasks;
+using InfiniContext.Tests.Supervision;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Tasks;
@@ -303,11 +304,22 @@ public class TaskServiceTests
         details.Should().BeNull();
     }
 
-    [Theory]
+    // Path-shape note: on Unix, `Path.GetFullPath("C:\\src\\repo")` treats `C:\src\repo` as a
+    // relative path and prepends the runner's cwd (which on a CI test host is itself under
+    // `.../bin/Release/...`), so the heuristic spuriously matches. The Windows-shaped cases below
+    // therefore live in a [WindowsOnlyTheory]; the portable cases stay in a plain [Theory] and run
+    // everywhere.
+    [WindowsOnlyTheory]
     [InlineData(@"C:\src\repo\bin\Debug\net10.0")]
     [InlineData(@"C:\src\repo\bin\Release")]
     [InlineData(@"C:\src\repo\obj")]
     [InlineData(@"C:\src\repo\obj\Debug")]
+    public void LooksLikeBuildOutput_flags_known_build_dirs_windows(string path)
+    {
+        TaskService.LooksLikeBuildOutput(path).Should().BeTrue();
+    }
+
+    [Theory]
     [InlineData("/home/user/proj/bin/Debug/net10.0")]
     [InlineData("/home/user/proj/obj/foo")]
     public void LooksLikeBuildOutput_flags_known_build_dirs(string path)
@@ -315,11 +327,17 @@ public class TaskServiceTests
         TaskService.LooksLikeBuildOutput(path).Should().BeTrue();
     }
 
-    [Theory]
+    [WindowsOnlyTheory]
     [InlineData(@"C:\src\repo")]
     [InlineData(@"C:\src\objections\foo")]   // "obj" inside another word, not a segment
     [InlineData(@"C:\src\binoculars\foo")]   // "bin" inside another word
     [InlineData(@"C:\src\repo\bin")]         // bin alone (not paired with Debug/Release)
+    public void LooksLikeBuildOutput_passes_legitimate_paths_windows(string path)
+    {
+        TaskService.LooksLikeBuildOutput(path).Should().BeFalse();
+    }
+
+    [Theory]
     [InlineData("/home/user/proj")]
     [InlineData("")]
     public void LooksLikeBuildOutput_passes_legitimate_paths(string path)

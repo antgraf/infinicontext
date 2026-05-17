@@ -57,7 +57,13 @@ public sealed class ApprovalChannel : IAsyncDisposable
 
     public string PipeName => _pipeName;
 
-    public static string GeneratePipeName() => $"infinicontext-approval-{Guid.NewGuid():N}";
+    // Keep the suffix short: on macOS, .NET maps a named pipe to a Unix domain socket at
+    // `$TMPDIR/CoreFxPipe_<name>`, and the UDS `sun_path` limit is 104 chars. $TMPDIR on macOS
+    // is typically `/var/folders/<2>/<28>/T/` (~50 chars) + `CoreFxPipe_` (11) = ~61 chars of
+    // unavoidable prefix, leaving ~43 chars for the pipe name. The 23-char `infinicontext-approval-`
+    // prefix + a 12-hex-char id = 35 chars, comfortably inside the budget; 12 hex chars (48 bits)
+    // is far more than needed for per-host uniqueness across concurrent sessions.
+    public static string GeneratePipeName() => $"infinicontext-approval-{Guid.NewGuid():N}"[..35];
 
     /// <summary>
     /// Begins listening. The returned task signals when the listener has reached the
