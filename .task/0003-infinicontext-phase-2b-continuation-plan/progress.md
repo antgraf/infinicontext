@@ -284,3 +284,65 @@ Open notes for next session:
 
 - Existing `TaskServiceTests` may incidentally invoke `GitHead.TryResolveAsync` against test temp dirs since `CreateAsync` is unconditional about the call. In those tests it returns null and BaseCommitSha stays null тАФ observed via the 108-test pass above. No test breakage; just be aware if you add a TaskService test that asserts on full-record equality.
 - The skill version stays at `3` for now тАФ bump to `4` only when step 11 lands (the on-disk skill should match the code surface).
+
+## 2026-05-17 (review-gate impl session тАФ step 3: ScopeResolver)
+
+User said "go next" after the foundational-slice commit. Shipped step 3 of the 12-step plan: `ScopeResolver` + tests. Pure-logic component; no agent invocation, no settings churn тАФ clean stand-alone unit.
+
+### Code changes (uncommitted at flush time)
+
+Core (`src/InfiniContext.Core/Review/`):
+
+- `IGitRunner.cs` (new) тАФ thin abstraction with three methods: `ResolveHeadAsync`, `ResolveMergeBaseAsync`, `DiffNameOnlyAsync`. All return null/empty on failure (no exceptions). Lets tests swap in a fake.
+- `ProcessGitRunner.cs` (new) тАФ production `IGitRunner`. Shells out to `git` with a 10s budget per call, validates 40-hex-char SHAs, swallows all failure modes to null (no git on PATH, not a repo, unreachable ref, timeout).
+- `ScopeResolver.cs` (new) тАФ resolves the review file set. Order: (1) `--scope` override paths take precedence; (2) else `git diff <baseCommitSha>..HEAD --name-only`, unioned with `progress.md` "Files touched" entries (dedup, platform-sensitive path comparer); (3) if `baseCommitSha` is null, fall back to `merge-base main HEAD` and surface the fallback in `ReviewScope.FallbackNote`. Files that don't exist, escape the repo root, or exceed the byte cap (default 200KB) go to `ExcludedFiles` with the reason. Returns `ReviewScope { Description, Files: List<ReviewFile>, ExcludedFiles, FallbackNote }`. Static `ParseFilesTouched(markdownText)` is exposed for tests тАФ finds backtick-quoted paths under any heading containing "files touched" (case-insensitive), with a path-shape filter (must contain `/` or `\`, no spaces).
+
+Tests (`tests/InfiniContext.Tests/Review/ScopeResolverTests.cs`, new): 16 tests, all green. Coverage:
+
+- ResolveAsync: scope-override wins (no git calls); baseCommitSha used when set; merge-base fallback when null + fallback note populated; no-base-resolvable case reports clearly; diff тИк progress.md union; dedup when both contain the same path; byte-cap exclusion; missing-file exclusion; outside-repo-root exclusion; blank repo root throws; non-positive byte cap throws.
+- ParseFilesTouched: finds paths under heading; ignores paths outside the section; filters non-path backticks; case-insensitive heading match; empty input returns empty.
+
+Tests use a local `RepoFixture` (temp dir, IDisposable) and a `FakeGitRunner` (canned `Head`/`MergeBase`/`DiffResult`, records `DiffCalls` + `LastDiffBaseRef`). No git invocation in tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done:
+
+1. тЬЕ FindingModel + tests (prior session).
+2. тЬЕ Migration_002 + base_commit_sha capture (prior session).
+3. тЬЕ ScopeResolver + tests (this session).
+
+Not done (hand off, in priority order):
+
+4. `IReviewerAgentService` + `CliReviewerAgentService` тАФ mirror `CliLightModelInvocation` argv shape with model knob from settings. The Light-model channel argv is documented in `CLAUDE.md` "Light-model service"; reuse everything except switch to the user's main model.
+5. `ReviewerPrompts.cs` тАФ five compile-time reviewer prompts + the coordinator prompt. Expect 2-3 rounds of iteration after dogfooding.
+6. `ReviewService.cs` тАФ orchestrator (scope -> packets -> Task.WhenAll reviewers -> coordinator -> auto-apply -> report). End-to-end test with a fake `IReviewerAgentService`.
+7. `AutoApplyExecutor.cs` + `IBuildTestRunner` abstraction (so tests don't shell out to dotnet). `FakeBuildTestRunner` for unit tests.
+8. `ReportRenderer.cs` + golden test.
+9. CLI: `TaskCommand.Review(int? Id, string? Scope, bool SkipConfirm)` parser, `TaskCommandHandler.HandleReviewAsync`, wiring in `Program.cs`. Glob expansion for `--scope` happens here (caller of `ScopeResolver`).
+10. Settings: `review` section + schema + binding.
+11. Skill bump 3 -> 4.
+12. Dogfood.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` тАФ green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green. (CLI lock workaround still applies.)
+- `dotnet test --no-build --filter Review|Tasks` тАФ **350/350 passing**. No regressions.
+- `dotnet format` тАФ green on both Core and Tests.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/IGitRunner.cs` (new)
+- `src/InfiniContext.Core/Review/ProcessGitRunner.cs` (new)
+- `src/InfiniContext.Core/Review/ScopeResolver.cs` (new)
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 3 (ScopeResolver).`
+
+### Handoff to next session
+
+Resume at step 4 (`IReviewerAgentService` + `CliReviewerAgentService`). Reference: `src/InfiniContext.Core/LightModel/CliLightModelInvocation.cs` is the argv-shape template тАФ same flags except swap the model. The full-model channel needs a `--model` knob driven by `settings.review.reviewerModel` (defaults to user's main model when null).
