@@ -346,3 +346,67 @@ The 4 source/test files plus progress.md are uncommitted. **Recommended commit s
 ### Handoff to next session
 
 Resume at step 4 (`IReviewerAgentService` + `CliReviewerAgentService`). Reference: `src/InfiniContext.Core/LightModel/CliLightModelInvocation.cs` is the argv-shape template тАФ same flags except swap the model. The full-model channel needs a `--model` knob driven by `settings.review.reviewerModel` (defaults to user's main model when null).
+
+## 2026-05-17 (review-gate impl session тАФ step 4: ReviewerAgentService)
+
+User said "continue" after the step-3 commit. Shipped step 4: `IReviewerAgentService` + `CliReviewerAgentService` + `ReviewerAgentOptions`. The full-model invocation channel reviewers use.
+
+### Design decision (recorded in code)
+
+Reused `CliLightModelInvocation` / `CliLightModelChild` as the wire layer rather than duplicating the spawn loop. The user's "agents must not be light models" requirement is satisfied at the *model* level (the `--model` arg carries the user's main reasoning model, not Haiku-class); the spawn argv recipe (`--print --tools "" --strict-mcp-config --mcp-config {} --setting-sources project --disable-slash-commands --no-session-persistence`) is identical between the two channels and there's no value in forking the plumbing. The architectural distinction lives in *what model* gets passed, not in *which spawn machinery*. Comment in `CliReviewerAgentService.cs` records the rationale.
+
+### Code changes (uncommitted at flush time)
+
+Core (`src/InfiniContext.Core/Review/`):
+
+- `IReviewerAgentService.cs` (new) тАФ public interface, single method `RunOneShotAsync(systemPrompt, userPayload, ct) -> Task<string>`. Returns the assistant's full response text; caller uses `FindingJson.ExtractJson` for the JSON payload.
+- `ReviewerAgentOptions.cs` (new) тАФ public record. Model (default `claude-sonnet-4-6`), ClaudeExecutable?, ManagedCwd? (defaults to `%USERPROFILE%/.infinicontext/review-cwd/` тАФ separate from the light-cwd), MaxOutputTokens (default 32_768 тАФ reviewers emit JSON finding lists, not single-token verdicts), ThinkingEnabled (default true), InvocationTimeoutSeconds (default 600), ExtraEnv? (test-only).
+- `CliReviewerAgentService.cs` (new) тАФ concrete impl. Ctor validates Model/MaxOutputTokens/InvocationTimeoutSeconds. `RunOneShotAsync` builds a `LightModelOptions`-shaped config via `internal static BuildLightModelOptions(ReviewerAgentOptions)`, links the caller's ct with a per-invocation timeout cts, and delegates the spawn + turn drive to `CliLightModelChild.Spawn` (same-assembly internal access). Single-shot тАФ every call spawns a fresh process and disposes it; no long-lived sharing.
+
+Tests (`tests/InfiniContext.Tests/Review/CliReviewerAgentServiceTests.cs`, new): 18 tests, all green.
+
+- Ctor: rejects null options, blank model, non-positive MaxOutputTokens, non-positive InvocationTimeoutSeconds.
+- RunOneShotAsync: rejects blank systemPrompt + blank userPayload.
+- BuildLightModelOptions: propagates Model id; forces `Mode=SingleShot`; mirrors MaxOutputTokens to BOTH `MaxOutputTokens` AND `ThinkingMaxOutputTokens` (the light-model split doesn't apply to reviewers); propagates ClaudeExecutable, ManagedCwd (set), ExtraEnv (by reference). When ManagedCwd is null, resolves the default `.infinicontext/review-cwd` path (distinct from `.infinicontext/light-cwd`, so the two channels don't share a cwd).
+- Recipe argv: passing reviewer model id through `CliLightModelInvocation.BuildArgv` produces an argv with `--model <reviewerModel>` and all the recipe isolation flags.
+
+No end-to-end "real spawn" test in step 4 тАФ that surfaces naturally in step 6 (`ReviewService` with a fake `IReviewerAgentService`) and in step 12 (dogfooding).
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` тАФ green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green.
+- `dotnet test --no-build --filter Review|Tasks` тАФ **368/368 passing**. No regressions.
+- `dotnet format` тАФ green on both Core and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done:
+
+1. тЬЕ FindingModel + tests.
+2. тЬЕ Migration_002 + base_commit_sha capture.
+3. тЬЕ ScopeResolver + tests.
+4. тЬЕ IReviewerAgentService + CliReviewerAgentService + tests.
+
+Not done: 5 (ReviewerPrompts), 6 (ReviewService), 7 (AutoApplyExecutor), 8 (ReportRenderer), 9 (CLI: TaskCommand.Review + handler), 10 (Settings), 11 (Skill bump 3->4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/IReviewerAgentService.cs` (new)
+- `src/InfiniContext.Core/Review/ReviewerAgentOptions.cs` (new)
+- `src/InfiniContext.Core/Review/CliReviewerAgentService.cs` (new)
+- `tests/InfiniContext.Tests/Review/CliReviewerAgentServiceTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 4 (ReviewerAgentService).`
+
+### Handoff to next session
+
+Resume at step 5 (`ReviewerPrompts.cs`). Six compile-time strings:
+
+- One per reviewer role (completeness, architecture, code, tests, security) тАФ each describes the role, the JSON schema the reviewer must emit (cross-reference `FindingModel.cs` for field names), and the slot markers the orchestrator fills (e.g. `{description_md}`, `{progress_md}`, `{diff_summary}`, `{file_excerpts}`).
+- One for the coordinator тАФ describes dedup, severity re-scoring, disposition rules (auto_apply / auto_reject / needs_user with the confidence + fix-presence gates from the design), and the requirement that `rejection_reason` be non-empty for `auto_reject`.
+
+Then step 6 (`ReviewService`) is the orchestrator that wires steps 3, 4, and 5 together. The `IReviewerAgentService` interface that landed here is exactly the seam step 6 will use a fake for in its end-to-end tests.
