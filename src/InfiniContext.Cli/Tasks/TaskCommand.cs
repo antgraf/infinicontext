@@ -17,6 +17,7 @@ internal abstract record TaskCommand
     public sealed record Merge(IReadOnlyList<int> Ids) : TaskCommand;
     public sealed record Switch(int Id) : TaskCommand;
     public sealed record Delete(int Id, bool RemoveFolder) : TaskCommand;
+    public sealed record Review(int? Id, string? Scope, bool SkipConfirm) : TaskCommand;
     public sealed record Help : TaskCommand;
 
     /// <summary>
@@ -81,6 +82,9 @@ internal abstract record TaskCommand
             case "delete":
             case "rm":
                 return ParseDelete(tokens, i, out command, out error);
+
+            case "review":
+                return ParseReview(tokens, i, out command, out error);
 
             default:
                 error = $"unknown subcommand '{sub}'. Try /task help.";
@@ -248,6 +252,48 @@ internal abstract record TaskCommand
         if (id is null) { error = "/task delete requires a task id."; return false; }
 
         command = new Delete(id.Value, removeFolder);
+        return true;
+    }
+
+    /// <summary>
+    /// Parse <c>/task review [&lt;id&gt;] [--scope &lt;glob&gt;] [--yes]</c>. The id is optional тАФ
+    /// the handler defaults it to the focused session's active task when omitted.
+    /// </summary>
+    private static bool ParseReview(IReadOnlyList<string> tokens, int i, out TaskCommand command, out string? error)
+    {
+        command = null!;
+        error = null;
+
+        int? id = null;
+        string? scope = null;
+        var skipConfirm = false;
+
+        for (; i < tokens.Count; i++)
+        {
+            var tok = tokens[i];
+            if (tok.Equals("--yes", StringComparison.OrdinalIgnoreCase) || tok.Equals("-y", StringComparison.OrdinalIgnoreCase))
+            {
+                skipConfirm = true;
+                continue;
+            }
+            if (tok.Equals("--scope", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 >= tokens.Count) { error = "--scope requires a glob expression."; return false; }
+                scope = tokens[++i];
+                if (string.IsNullOrWhiteSpace(scope)) { error = "--scope: glob expression may not be empty."; return false; }
+                continue;
+            }
+            if (tok.StartsWith("--", StringComparison.Ordinal))
+            {
+                error = $"/task review: unknown option '{tok}'.";
+                return false;
+            }
+            if (id is not null) { error = "/task review: unexpected extra arguments after the id."; return false; }
+            if (!TryParseId(tok, out var parsed)) { error = $"/task review: '{tok}' is not a valid task id."; return false; }
+            id = parsed;
+        }
+
+        command = new Review(id, scope, skipConfirm);
         return true;
     }
 

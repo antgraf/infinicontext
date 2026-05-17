@@ -717,3 +717,83 @@ Resume at step 9 (CLI). This step ties everything together. Touch list:
 The CLI handler is the largest piece. Plan to ship glob expansion via a small helper (`Microsoft.Extensions.FileSystemGlobbing` isn't currently a dep - either add the package or write a minimal `*`/`**` matcher).
 
 After step 9 lands: step 10 (settings) is small (~50 lines to add a `ReviewSettings` record + schema entries + reading in Program.cs). Step 11 (skill bump) is trivial. Step 12 (dogfood) is a behavioral pass - run `/task review` on task 0003 itself and iterate on the prompts.
+
+## 2026-05-17 (review-gate impl session - step 9a: CLI parser + ProcessBuildTestRunner)
+
+User said "go next" after the step-8 commit. Step 9 (CLI wiring) is the largest remaining step; splitting into two slices for focused commits.
+
+**Slice 9a (this commit):** `TaskCommand.Review` parser + parser tests + `ProcessBuildTestRunner` (the production `IBuildTestRunner`) + tests.
+
+**Slice 9b (next session):** `TaskCommandHandler.HandleReviewAsync` + `Program.cs` wiring + handler tests. That's the bulk of the data-gathering glue.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommand.cs` - added `Review(int? Id, string? Scope, bool SkipConfirm)` discriminated record + `"review"` switch arm + `ParseReview` method. Accepts flags before or after the id (mirrors the `/task new` / `/task delete` before-or-after convention). Recognises `--yes` / `-y` and `--scope <glob>`; rejects unknown options, duplicate ids, and `--scope` without a value.
+
+Core:
+
+- `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs` (new) - production `IBuildTestRunner`. Shells out to `dotnet build` / `dotnet test` from the repo root via `Process.Start`. On non-zero exit, captures last 20 lines (or 2K chars, whichever smaller) of stderr (falling back to stdout) into `BuildTestOutcome.FailureSummary`. Linked CancellationTokenSource gives each invocation its own timeout budget; default 10 min for build, 15 min for test (long, because a tight budget on a slow CI host would false-positive the gate and revert good edits).
+- `ProcessBuildTestRunnerOptions` record - `Solution` (default `InfiniContext.slnx`), `Configuration` (default `Release`), `BuildTimeoutSeconds`, `TestTimeoutSeconds`, `ExtraBuildArgs`, `ExtraTestArgs`.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandTests.cs` - appended 11 review-parser tests: bare `/task review` defaults to all-nulls; explicit id; zero-padded id; `--yes` and `-y`; `--scope <glob>`; mixed flag-and-id order; rejects unknown option / missing scope value / two positional ids / non-numeric id.
+- `tests/InfiniContext.Tests/Review/ProcessBuildTestRunnerTests.cs` (new) - 4 tests for option defaults, record `with` overrides, and argument validation (blank repo root throws on both Build and Test). No real `dotnet` spawn here - that's covered by step 12's dogfood run.
+
+### One build-system note
+
+`Task<string>.AsTask()` doesn't exist (the method I wrote was for ValueTask). Compiler caught it; fixed to drop the `.AsTask()` calls тАФ `ReadToEndAsync(CancellationToken)` already returns `Task<string>` directly.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green (full Cli build still blocked by the running CLI processes that lock Core.dll; using `-t:Compile` bypasses the copy step that fails).
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build --filter Review|Tasks|Cli.Tasks` - **496/496 passing**. No regressions.
+- `dotnet format` - green on Core, Cli, and Tests.
+
+### What's done vs what's left (vs. the 12-step plan)
+
+Done: 1, 2, 3, 4, 5, 6, 7, 8, **9a** (parser + ProcessBuildTestRunner).
+
+Not done: 9b (`TaskCommandHandler.HandleReviewAsync` + `Program.cs` wiring + handler tests), 10 (Settings), 11 (Skill bump 3 -> 4), 12 (Dogfood).
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommand.cs` (added Review variant + parser branch + ParseReview)
+- `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs` (new)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandTests.cs` (appended 11 tests)
+- `tests/InfiniContext.Tests/Review/ProcessBuildTestRunnerTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review step 9a (CLI parser + ProcessBuildTestRunner).`
+
+### Handoff to next session
+
+Resume at **slice 9b**: the handler + wiring. Key work:
+
+1. `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - add a `HandleReviewAsync` branch. Steps the handler must do:
+   - Resolve the task id (CLI arg if present; else focused session's `ActiveTaskId`; else refuse with a clear message).
+   - Cost-guard prompt `[y/N]` unless `--yes`. Use whatever console-prompt helper the existing handler uses for similar cases (see how `/task delete` confirms, if it does).
+   - Load `TaskRecord` via `TaskService.GetAsync`.
+   - Build the `TaskFolder` from the record; read `description.md`, `progress.md`, `index.md` (best-effort - empty string when missing).
+   - Read `CLAUDE.md` from `record.HomeCwd` (best-effort).
+   - Read `docs/stage2/decisions.md` (or any single `docs/**/decisions.md` if path is uncertain) - best-effort.
+   - Glob expansion for `--scope`: a minimal `*`/`**` matcher (or add `Microsoft.Extensions.FileSystemGlobbing` to `InfiniContext.Cli.csproj`).
+   - Construct `ProcessGitRunner` + `ScopeResolver(byteCap = settings.review.perFileByteCap, default 200KB)`.
+   - Run `ScopeResolver.ResolveAsync(homeCwd, record.BaseCommitSha, globResolvedPaths, progressMdPath)`.
+   - Build `ReviewRequest`, call `_reviewService.RunReviewAsync(req, options)`.
+   - Render via `ReportRenderer.Render(report)`.
+   - Write `review-<YYYY-MM-DDTHHmmss>.md` to the task folder.
+   - Acquire lock on `index.md` -> append row -> release. Acquire lock on `progress.md` -> append entry -> release.
+   - Print a console summary: applied/rejected/awaiting counts + report file path.
+
+2. `src/InfiniContext.Cli/Program.cs` - construct `CliReviewerAgentService`, `AutoApplyExecutor` (with `ProcessBuildTestRunner`), `ReviewService`. Thread `ReviewService` into `TaskCommandHandler` ctor.
+
+3. Handler tests: confirmation prompt declines -> no service call; --yes skips prompt; refuses with clear message when no active task and no id given; refuses with clear message when not in a git repo (or task home_cwd doesn't exist).
+
+This will be a sizeable commit тАФ possibly 200-300 lines of handler code plus tests. Should fit in one session if focused.

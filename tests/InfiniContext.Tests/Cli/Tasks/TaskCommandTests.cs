@@ -300,4 +300,86 @@ public class TaskCommandTests
     {
         TaskCommand.Tokenize(input).Should().Equal(expected);
     }
+
+    // ---------- /task review ----------
+
+    [Fact]
+    public void Review_bare_defaults_id_to_null_and_no_scope_and_not_skip_confirm()
+    {
+        TaskCommand.TryParse("/task review", out var cmd, out var error).Should().BeTrue();
+        error.Should().BeNull();
+        cmd.Should().Be(new TaskCommand.Review(Id: null, Scope: null, SkipConfirm: false));
+    }
+
+    [Fact]
+    public void Review_with_explicit_id()
+    {
+        TaskCommand.TryParse("/task review 42", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: 42, Scope: null, SkipConfirm: false));
+    }
+
+    [Fact]
+    public void Review_accepts_zero_padded_id()
+    {
+        TaskCommand.TryParse("/task review 0007", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: 7, Scope: null, SkipConfirm: false));
+    }
+
+    [Fact]
+    public void Review_with_yes_flag()
+    {
+        TaskCommand.TryParse("/task review --yes", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: null, Scope: null, SkipConfirm: true));
+    }
+
+    [Fact]
+    public void Review_accepts_short_y_flag()
+    {
+        TaskCommand.TryParse("/task review -y", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: null, Scope: null, SkipConfirm: true));
+    }
+
+    [Fact]
+    public void Review_with_scope_glob()
+    {
+        TaskCommand.TryParse("/task review --scope src/InfiniContext.Core/**", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: null, Scope: "src/InfiniContext.Core/**", SkipConfirm: false));
+    }
+
+    [Fact]
+    public void Review_with_id_scope_and_yes_in_any_order()
+    {
+        // The parser must accept flags before or after the id, mirroring the /task new / delete
+        // convention.
+        TaskCommand.TryParse("/task review --scope foo/** 42 --yes", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Review(Id: 42, Scope: "foo/**", SkipConfirm: true));
+    }
+
+    [Fact]
+    public void Review_rejects_unknown_option()
+    {
+        TaskCommand.TryParse("/task review --whatever", out _, out var error).Should().BeFalse();
+        error.Should().Contain("--whatever");
+    }
+
+    [Fact]
+    public void Review_rejects_scope_without_value()
+    {
+        TaskCommand.TryParse("/task review --scope", out _, out var error).Should().BeFalse();
+        error.Should().Contain("--scope requires a glob expression");
+    }
+
+    [Fact]
+    public void Review_rejects_two_positional_ids()
+    {
+        TaskCommand.TryParse("/task review 1 2", out _, out var error).Should().BeFalse();
+        error.Should().Contain("unexpected extra arguments");
+    }
+
+    [Fact]
+    public void Review_rejects_non_numeric_id()
+    {
+        TaskCommand.TryParse("/task review abc", out _, out var error).Should().BeFalse();
+        error.Should().Contain("not a valid task id");
+    }
 }
