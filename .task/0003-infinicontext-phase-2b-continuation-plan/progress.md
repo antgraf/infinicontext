@@ -1514,3 +1514,72 @@ Behind that, in priority order: dogfood (step 12), then CoordinatorModel split.
 
 Soft context-pressure threshold (~73%). Most of the budget went to reading the 1488-line `progress.md`. A fresh session can pick up glob expansion with only the tail of `progress.md` + `TaskCommandHandler.HandleReviewAsync` in context.
 
+## 2026-05-17 (review-gate impl session - glob expansion for `--scope`)
+
+User said "move next" after the soft handoff. Pushed through and shipped the next v1 follow-up: glob expansion for `/task review --scope` so users can pass patterns like `--scope "src/**/*.cs"` instead of literal paths.
+
+### Design choice
+
+Used `Microsoft.Extensions.FileSystemGlobbing` 9.0.0 (added as a package ref to `InfiniContext.Cli.csproj`). Rationale: same 9.0.0 line as the other `Microsoft.Extensions.*` packages already in `InfiniContext.Core`; well-tested `Matcher` API handles `*` / `**` semantics correctly; avoids hand-rolling a glob matcher that could go wrong in subtle ways. The matcher's case sensitivity is set per-OS to mirror `ScopeResolver.PathComparer` (Windows: OrdinalIgnoreCase; others: Ordinal).
+
+Tokens with no `*` pass through unchanged - preserves the v1 literal-path behaviour and lets `ScopeResolver` surface "file does not exist" for typos. `?` is NOT a wildcard in `M.E.FileSystemGlobbing.Matcher` (verified by a test that produced an empty match against `src/?.cs`); the helper treats it as a literal character. Doc-comment notes this explicitly so a future reader doesn't think `?` is supported.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/InfiniContext.Cli.csproj` - new `Microsoft.Extensions.FileSystemGlobbing` 9.0.0 package ref.
+- `src/InfiniContext.Cli/Tasks/ScopeGlobExpander.cs` (new) - `internal static` helper. Single public method `Expand(string? scopeArg, string repoRoot) -> IReadOnlyList<string>`. Splits on `;`, routes each token through either pass-through (no `*`) or `Matcher` (has `*`). Dedup via per-OS string comparer. Returns relative paths with forward-slash separators.
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - `HandleReviewAsync` now calls `ScopeGlobExpander.Expand(cmd.Scope, record.HomeCwd)` instead of `cmd.Scope.Split(';', ...)`. Doc-comment updated to describe the new semantics.
+
+Tests:
+
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` - added the mirror `Microsoft.Extensions.FileSystemGlobbing` package ref (because `ScopeGlobExpander.cs` is link-compiled into the test assembly) + a `<Compile Include="..\..\src\InfiniContext.Cli\Tasks\ScopeGlobExpander.cs">` line.
+- `tests/InfiniContext.Tests/Cli/Tasks/ScopeGlobExpanderTests.cs` (new) - 13 tests, all green. Coverage: null/blank input returns empty; literal path passes through; multi-token literal preserves order; backslash normalisation; single-star matches one directory only; double-star matches recursively; mixed literal + glob; wildcard with no matches returns empty for that token; wildcard with no matches doesn't drop sibling tokens; glob/literal overlap dedup; two-glob overlap dedup; empty tokens skipped; blank root throws when scope is non-empty.
+
+Tests use a `IDisposable` `_root` fixture pattern (one temp dir per test, cleaned up best-effort in `Dispose`) so file-system state doesn't leak between cases.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green (full CLI build still blocked by running CLI processes locking Core.dll - persistent local gotcha, doesn't affect CI).
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **943/946 passing** (3 macOS-only skips). 13 new tests in `ScopeGlobExpanderTests`; no regressions on the 930-test baseline from the `/flush` commit.
+- `dotnet format InfiniContext.slnx --verify-no-changes` - green.
+
+### One build-system gotcha worth recording
+
+First attempt at the `.csproj` comment used `--scope` literally, which XML rejects (a `--` is illegal inside an XML comment per the spec). Fixed by rewriting to "the /task review scope glob expansion." Lesson: avoid double-dashes in any XML-comment text, even when describing CLI flags.
+
+### What's NOT in v1 (deferred)
+
+- **Per-token "matched nothing" diagnostic.** When `--scope "src/A.cs;ghost/**"` matches A.cs but `ghost/**` matches zero files, the user gets just `["src/A.cs"]` in `ResolveAsync` with no feedback about `ghost/**`. The empty-scope short-circuit catches the all-zero case clearly; partial-zero is silent. Add if dogfood shows users tripping on it.
+- **Negation patterns** (`!exclude/**`). `Matcher.AddExclude` supports them but the expander doesn't expose the syntax yet. Add if needed.
+
+### Remaining v1 follow-ups
+
+- **`CoordinatorModel` channel split** - `ReviewSettings.CoordinatorModel` silently no-ops; needs `ReviewService` refactor to split reviewer + coordinator agents. Biggest remaining piece.
+- **Step 12 (Dogfood)** - run `/task review 0003 --yes` in a real session; iterate on `ReviewerPrompts.cs` if false-positives surface.
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/InfiniContext.Cli.csproj` (new package ref)
+- `src/InfiniContext.Cli/Tasks/ScopeGlobExpander.cs` (new)
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (call site swap; doc-comment update)
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (new package ref + linked compile)
+- `tests/InfiniContext.Tests/Cli/Tasks/ScopeGlobExpanderTests.cs` (new)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 5 source/test/config files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - glob expansion for --scope.`
+
+### Handoff to next session
+
+Two remaining items, in priority order:
+
+1. **Dogfood (step 12)** - the cheap win. Spin up a session bound to task 0003, run `/task review 0003 --yes`, inspect the resulting `review-<timestamp>.md`. Iterate on the prompts in `ReviewerPrompts.cs` if false-positives surface. Likely 2-3 prompt-tightening commits before the surface is shippable.
+2. **`CoordinatorModel` channel split** - bigger refactor. `ReviewService` currently takes a single `IReviewerAgentService` and uses it for both reviewers and the coordinator. To honor `ReviewSettings.CoordinatorModel`, split the constructor to accept reviewer + coordinator services (or one service plus a coordinator model id override that the service threads through). Tests in `ReviewServiceTests` would need updating to inject both seams.
+
+Dogfood first - real findings are cheaper feedback than guessing at the prompts; CoordinatorModel can wait until after dogfood confirms whether a separate coordinator model is actually wanted.
+

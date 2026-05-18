@@ -7,6 +7,9 @@
       stable version; Dependabot/manual upgrades happen as separate PRs).
     -->
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
+    <!-- Microsoft.Extensions.FileSystemGlobbing powers the /task review scope glob expansion.
+         Same 9.0.0 line as the other Microsoft.Extensions.* deps in InfiniContext.Core. -->
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="9.0.0" />
   </ItemGroup>
 
   <PropertyGroup>

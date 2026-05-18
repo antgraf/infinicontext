@@ -17,6 +17,9 @@
          (TestConsole, capture API) so MultiSessionHostTests can drive a fake console. -->
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Spectre.Console.Testing" Version="0.55.2" />
+    <!-- Mirrors the InfiniContext.Cli reference; required because ScopeGlobExpander.cs is
+         link-compiled into this assembly and uses Microsoft.Extensions.FileSystemGlobbing. -->
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="9.0.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
@@ -47,6 +50,7 @@
     <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommand.cs" Link="Cli\Tasks\TaskCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommandHandler.cs" Link="Cli\Tasks\TaskCommandHandler.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\ScopeGlobExpander.cs" Link="Cli\Tasks\ScopeGlobExpander.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommand.cs" Link="Cli\Issues\IssueCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommandHandler.cs" Link="Cli\Issues\IssueCommandHandler.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\HostResult.cs" Link="Cli\Ui\HostResult.cs" />

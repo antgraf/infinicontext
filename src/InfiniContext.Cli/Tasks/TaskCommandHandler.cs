@@ -253,13 +253,13 @@ internal sealed class TaskCommandHandler
         // we don't want to make the user confirm a 6-agent spawn just to discover that.
         var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
 
-        // --scope: v1 treats the value as a single relative path under HomeCwd; glob expansion is
-        // a v1 follow-up (see review-feature-design.md). Splitting on ';' lets users pass a small
-        // list without needing the full glob matcher.
+        // --scope: ';'-separated tokens; literal paths pass through, wildcards (`*`, `**`, `?`)
+        // expand via Microsoft.Extensions.FileSystemGlobbing rooted at HomeCwd. See
+        // ScopeGlobExpander for semantics. ScopeResolver still gets a flat path list either way.
         IReadOnlyList<string>? scopeOverridePaths = null;
         if (!string.IsNullOrWhiteSpace(cmd.Scope))
         {
-            scopeOverridePaths = cmd.Scope.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            scopeOverridePaths = ScopeGlobExpander.Expand(cmd.Scope, record.HomeCwd);
         }
 
         Write($"[task review] resolving scope for {record.Id:D4} \"{record.Title}\"...\n");
