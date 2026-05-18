@@ -1298,3 +1298,57 @@ Tests:
 ### Not committed yet
 
 The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - secret-file exclusion in ScopeResolver.`
+
+## 2026-05-17 (review-gate impl session - same-day heading collapse in progress.md)
+
+User pushed and said "continue". Picked the next follow-up: collapse multiple `/task review` runs on the same day under one `## YYYY-MM-DD (review)` heading instead of opening a new heading per run. The previous behavior violated the skill's "Group entries under day headings" guidance for high-frequency review use.
+
+### Behavior change
+
+`AppendProgressEntry` now:
+
+1. Searches for an existing `## YYYY-MM-DD (review)` heading (exact-match on the trimmed line so user-written same-day headings like `## 2026-05-17 (impl session)` don't collide with the auto-emitted one).
+2. If found: appends the new bullet at the end of that section (just before the next `## ` or `# ` heading, or EOF). Trailing blank lines inside the section get squeezed so the bullet sits cleanly.
+3. If not found: opens a fresh `## YYYY-MM-DD (review)` heading at the end of the file (the prior behavior).
+
+Also fixed: line-ending preservation. The function now detects the file's existing convention (CRLF vs LF) and uses the same separator for any appended content - no mixing CRLF/LF in a single file. Previously `StringBuilder.AppendLine` used `Environment.NewLine` unconditionally; on Windows that wrote CRLF into LF files.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs`:
+  - `AppendProgressEntry` rewritten: split-on-newline тЖТ search-for-heading тЖТ insert-bullet-at-section-end (or append-fresh-heading at EOF). Uses `lines.Split(newline)` and `string.Join(newline, lines)` to preserve CRLF/LF.
+  - Doc-comment updated to describe the collapse + line-ending behavior.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs`:
+  - `AppendProgressEntry_collapses_under_existing_same_day_heading`: two runs same day тЖТ one heading, both bullets under it.
+  - `AppendProgressEntry_inserts_bullet_before_next_heading_when_section_is_not_last`: today's heading exists with a later-dated heading after it; new bullet lands inside today's section, not at EOF, not in the later section.
+  - `AppendProgressEntry_does_not_reuse_a_review_heading_from_a_different_date`: yesterday's review heading + today's run тЖТ both headings exist, no collision.
+  - `AppendProgressEntry_does_not_collide_with_user_written_same_day_session_headings`: user-written `## 2026-05-17 (impl session)` stays untouched; the auto path opens a separate `## 2026-05-17 (review)`.
+  - `AppendProgressEntry_preserves_crlf_line_endings`: feed a CRLF file in, assert no lone-LF appears in the output.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **921/924 passing** (3 macOS-only skips). 5 new tests; no regressions.
+- `dotnet format` - green on Cli and Tests.
+
+### Remaining v1 follow-ups
+
+- Empty-scope short-circuit (don't spawn 6 agents when 0 files in scope).
+- Glob expansion for `--scope`.
+- `CoordinatorModel` channel split (ReviewService refactor; biggest of these).
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (AppendProgressEntry rewritten)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs` (5 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - same-day progress.md heading collapse.`

@@ -402,12 +402,56 @@ internal sealed class TaskCommandHandler
         var gateStatus = report.BuildTestGatePassed
             ? "green"
             : $"reverted ({report.GateReversionReason ?? "no detail"})";
+        var bullet = $"- Ran `/task review`. {summary}. Report: `{reportName}`. Build/test gate: {gateStatus}.";
+        var todayHeading = $"## {today:yyyy-MM-dd} (review)";
+
+        // Preserve the file's existing line-ending convention so we don't mix CRLF/LF in one file.
+        var newline = existing.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = existing.Split(newline).ToList();
+
+        // Look for an existing same-day-review heading. Match on the full trimmed line so a
+        // user-written heading like "## 2026-05-17 (impl session)" doesn't accidentally collide
+        // with the auto-emitted "## 2026-05-17 (review)".
+        var headingIdx = -1;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].Trim() == todayHeading) { headingIdx = i; break; }
+        }
+
+        if (headingIdx >= 0)
+        {
+            // Find the end of this section: next heading at level 2 or 1, or EOF.
+            var sectionEnd = lines.Count;
+            for (var i = headingIdx + 1; i < lines.Count; i++)
+            {
+                var t = lines[i].TrimStart();
+                if (t.StartsWith("## ", StringComparison.Ordinal) || t.StartsWith("# ", StringComparison.Ordinal))
+                {
+                    sectionEnd = i;
+                    break;
+                }
+            }
+            // Trim trailing blank lines inside the section so the new bullet sits cleanly.
+            while (sectionEnd > headingIdx + 1 && string.IsNullOrWhiteSpace(lines[sectionEnd - 1]))
+                sectionEnd--;
+            lines.Insert(sectionEnd, bullet);
+            // Reinstate a blank separator before the next heading (if any).
+            if (sectionEnd + 1 < lines.Count
+                && (lines[sectionEnd + 1].TrimStart().StartsWith("## ", StringComparison.Ordinal)
+                    || lines[sectionEnd + 1].TrimStart().StartsWith("# ", StringComparison.Ordinal)))
+            {
+                lines.Insert(sectionEnd + 1, "");
+            }
+            return string.Join(newline, lines);
+        }
+
+        // No existing today's heading: append a fresh one at end of file.
         var sb = new System.Text.StringBuilder(existing);
-        if (existing.Length > 0 && !existing.EndsWith('\n')) sb.Append('\n');
-        if (existing.Length > 0 && !existing.EndsWith("\n\n")) sb.Append('\n');
-        sb.Append("## ").Append(today.ToString("yyyy-MM-dd")).AppendLine(" (review)");
-        sb.AppendLine();
-        sb.Append("- Ran `/task review`. ").Append(summary).Append(". Report: `").Append(reportName).Append("`. Build/test gate: ").Append(gateStatus).AppendLine(".");
+        if (existing.Length > 0 && !existing.EndsWith(newline)) sb.Append(newline);
+        if (existing.Length > 0 && !existing.EndsWith(newline + newline)) sb.Append(newline);
+        sb.Append(todayHeading).Append(newline);
+        sb.Append(newline);
+        sb.Append(bullet).Append(newline);
         return sb.ToString();
     }
 

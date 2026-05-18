@@ -265,6 +265,126 @@ public class TaskCommandHandlerReviewTests
     }
 
     [Fact]
+    public void AppendProgressEntry_collapses_under_existing_same_day_heading()
+    {
+        // First review opens "## 2026-05-17 (review)"; second review the same day should NOT
+        // open another heading - it should append the second bullet under the existing one.
+        var existing = """
+            # Progress
+
+            ## 2026-05-17 (review)
+
+            - Ran `/task review`. applied=0 rejected=0 awaiting=0. Report: `review-A.md`. Build/test gate: green.
+            """;
+        var report = MakeReport(applied: 1, rejected: 0, awaiting: 2, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-B.md", report, new DateOnly(2026, 5, 17));
+
+        // Heading appears exactly once.
+        System.Text.RegularExpressions.Regex.Matches(updated, @"## 2026-05-17 \(review\)").Count.Should().Be(1);
+        // Both bullets are present.
+        updated.Should().Contain("Report: `review-A.md`");
+        updated.Should().Contain("Report: `review-B.md`");
+        // The two bullets sit under the same heading.
+        var headingIdx = updated.IndexOf("## 2026-05-17 (review)", StringComparison.Ordinal);
+        updated.IndexOf("review-A.md", headingIdx, StringComparison.Ordinal).Should().BeGreaterThan(headingIdx);
+        updated.IndexOf("review-B.md", headingIdx, StringComparison.Ordinal).Should().BeGreaterThan(headingIdx);
+    }
+
+    [Fact]
+    public void AppendProgressEntry_inserts_bullet_before_next_heading_when_section_is_not_last()
+    {
+        // Today's review heading exists but is followed by a later-dated heading. The new
+        // bullet must land BEFORE the next heading, inside today's section.
+        var existing = """
+            # Progress
+
+            ## 2026-05-17 (review)
+
+            - Ran `/task review`. applied=0 rejected=0 awaiting=0. Report: `review-A.md`. Build/test gate: green.
+
+            ## 2026-05-18 (impl session)
+
+            - Some other work.
+            """;
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 1, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-B.md", report, new DateOnly(2026, 5, 17));
+
+        // Heading exactly once.
+        System.Text.RegularExpressions.Regex.Matches(updated, @"## 2026-05-17 \(review\)").Count.Should().Be(1);
+        // The new bullet appears BEFORE the next heading.
+        var newBulletIdx = updated.IndexOf("review-B.md", StringComparison.Ordinal);
+        var nextHeadingIdx = updated.IndexOf("## 2026-05-18", StringComparison.Ordinal);
+        newBulletIdx.Should().BeGreaterThan(0);
+        nextHeadingIdx.Should().BeGreaterThan(0);
+        newBulletIdx.Should().BeLessThan(nextHeadingIdx);
+        // The succeeding heading's content is preserved.
+        updated.Should().Contain("Some other work.");
+    }
+
+    [Fact]
+    public void AppendProgressEntry_does_not_reuse_a_review_heading_from_a_different_date()
+    {
+        // Yesterday's review heading exists. Today's run must open a fresh heading.
+        var existing = """
+            # Progress
+
+            ## 2026-05-16 (review)
+
+            - Ran `/task review`. applied=0 rejected=0 awaiting=0. Report: `review-A.md`. Build/test gate: green.
+            """;
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 0, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-B.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("## 2026-05-16 (review)");
+        updated.Should().Contain("## 2026-05-17 (review)");
+    }
+
+    [Fact]
+    public void AppendProgressEntry_does_not_collide_with_user_written_same_day_session_headings()
+    {
+        // A user-written "## 2026-05-17 (impl session)" must NOT be matched as a review-section
+        // heading. The exact-match comparison guards against this.
+        var existing = """
+            # Progress
+
+            ## 2026-05-17 (impl session - step X)
+
+            - Some work.
+            """;
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 0, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-A.md", report, new DateOnly(2026, 5, 17));
+
+        // The user's heading stays unchanged AND a new (review) heading opens.
+        updated.Should().Contain("## 2026-05-17 (impl session - step X)");
+        updated.Should().Contain("## 2026-05-17 (review)");
+    }
+
+    [Fact]
+    public void AppendProgressEntry_preserves_crlf_line_endings()
+    {
+        // Windows checkouts may store progress.md with CRLF. The function shouldn't mix
+        // conventions by writing LF separators into a CRLF file.
+        var existing = "# Progress\r\n\r\n## 2026-05-17 (review)\r\n\r\n- Earlier bullet.\r\n";
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 1, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-B.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("\r\n");
+        // The append shouldn't produce a lone \n that wasn't preceded by \r.
+        for (var i = 0; i < updated.Length; i++)
+        {
+            if (updated[i] == '\n')
+            {
+                (i > 0 && updated[i - 1] == '\r').Should().BeTrue($"lone LF found at index {i}");
+            }
+        }
+    }
+
+    [Fact]
     public void AppendProgressEntry_surfaces_gate_reversion_reason()
     {
         var report = MakeReport(applied: 0, rejected: 0, awaiting: 1, gatePassed: false, gateReason: "tests broke");
