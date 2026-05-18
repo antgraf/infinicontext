@@ -166,6 +166,13 @@ if (taskStore is not null)
             logger: logging.Logger);
         var autoApplyExecutor = new InfiniContext.Core.Review.AutoApplyExecutor(
             new InfiniContext.Core.Review.ProcessBuildTestRunner(),
+            new InfiniContext.Core.Review.AutoApplyOptions
+            {
+                ConfidenceFloor = reviewSettings.ConfidenceFloor,
+                MaxLinesPerFinding = reviewSettings.AutoApplyMaxLinesPerFinding,
+                MaxFilesPerFinding = reviewSettings.AutoApplyMaxFilesPerFinding,
+                SkipBuildTestGate = reviewSettings.SkipBuildTestGate,
+            },
             logger: logging.Logger);
         var reviewService = new InfiniContext.Core.Review.ReviewService(
             reviewerAgent,

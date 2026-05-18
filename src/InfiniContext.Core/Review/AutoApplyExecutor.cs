@@ -22,11 +22,19 @@ namespace InfiniContext.Core.Review;
 public sealed class AutoApplyExecutor : IAutoApplyExecutor
 {
     private readonly IBuildTestRunner _gate;
+    private readonly AutoApplyOptions _options;
     private readonly ILogger _logger;
 
-    public AutoApplyExecutor(IBuildTestRunner gate, ILogger? logger = null)
+    public AutoApplyExecutor(IBuildTestRunner gate, AutoApplyOptions? options = null, ILogger? logger = null)
     {
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        _options = options ?? new AutoApplyOptions();
+        if (_options.ConfidenceFloor < 0 || _options.ConfidenceFloor > 1)
+            throw new ArgumentException("AutoApplyOptions.ConfidenceFloor must be in [0,1].", nameof(options));
+        if (_options.MaxLinesPerFinding <= 0)
+            throw new ArgumentException("AutoApplyOptions.MaxLinesPerFinding must be positive.", nameof(options));
+        if (_options.MaxFilesPerFinding <= 0)
+            throw new ArgumentException("AutoApplyOptions.MaxFilesPerFinding must be positive.", nameof(options));
         _logger = logger ?? Log.ForContext<AutoApplyExecutor>();
     }
 
@@ -45,7 +53,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         // post-apply gate would either blame our edits for pre-existing failures (and revert
         // good work) or cover them up. Refuse the batch with a clear message instead. Only pay
         // the baseline cost when there's actually something to auto-apply.
-        if (findings.Count > 0)
+        if (findings.Count > 0 && !_options.SkipBuildTestGate)
         {
             var baselineBuild = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
             if (!baselineBuild.Passed)
@@ -99,6 +107,12 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
             return new AutoApplyResult(applied, demoted, BuildTestGatePassed: true, GateReversionReason: null);
         }
 
+        if (_options.SkipBuildTestGate)
+        {
+            // Skip path: applied as-is, no post-apply gate. Production should never use this.
+            return new AutoApplyResult(applied, demoted, BuildTestGatePassed: true, GateReversionReason: null);
+        }
+
         // Build gate.
         var buildOutcome = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
         if (!buildOutcome.Passed)
@@ -149,6 +163,19 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
 
         if (string.IsNullOrWhiteSpace(finding.File))
             return "fix not auto-applicable: File is empty";
+
+        // Defensive confidence + size gates. The coordinator prompt also enforces these, but a
+        // misbehaving or out-of-date coordinator could emit auto_apply for an out-of-spec
+        // finding; the host re-checks so the gate is reliable regardless of prompt drift.
+        if (finding.Confidence < _options.ConfidenceFloor)
+            return $"reviewer confidence {finding.Confidence:0.00} is below floor {_options.ConfidenceFloor:0.00}";
+
+        if (finding.DispositionConfidence < _options.ConfidenceFloor)
+            return $"coordinator disposition_confidence {finding.DispositionConfidence:0.00} is below floor {_options.ConfidenceFloor:0.00}";
+
+        var lineCount = CountLines(fix.OldText) + CountLines(fix.NewText);
+        if (lineCount > _options.MaxLinesPerFinding)
+            return $"fix touches {lineCount} lines, exceeds MaxLinesPerFinding {_options.MaxLinesPerFinding}";
 
         // Path safety.
         string fullPath;
@@ -291,6 +318,23 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
                 newText = newText.Replace("\r\n", "\n");
         }
         return (oldText, newText);
+    }
+
+    /// <summary>
+    /// Count the number of lines in <paramref name="text"/>. A null or empty string counts as 0;
+    /// a single line with no terminator counts as 1; <c>\n</c>-terminated lines count one per
+    /// newline. CRLF counted as one line break, not two.
+    /// </summary>
+    private static int CountLines(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        var lines = 1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n') lines++;
+            // Skip the \r in \r\n so we don't double-count.
+        }
+        return lines;
     }
 
     private static bool LooksAlreadyCrlf(string s)

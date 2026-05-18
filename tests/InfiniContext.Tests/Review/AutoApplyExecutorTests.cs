@@ -575,7 +575,125 @@ public class AutoApplyExecutorTests
         }
     }
 
+    // ---------- AutoApplyOptions: defensive confidence + size gates ----------
+
+    [Fact]
+    public async Task ApplyAsync_demotes_when_reviewer_confidence_below_floor()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited") with { Confidence = 0.85 };
+
+        var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("reviewer confidence 0.85 is below floor 0.90"));
+        fx.Read("src/Foo.cs").Should().Be("original"); // untouched
+    }
+
+    [Fact]
+    public async Task ApplyAsync_demotes_when_coordinator_disposition_confidence_below_floor()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited") with { DispositionConfidence = 0.7 };
+
+        var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("disposition_confidence 0.70 is below floor 0.90"));
+        fx.Read("src/Foo.cs").Should().Be("original");
+    }
+
+    [Fact]
+    public async Task ApplyAsync_demotes_when_fix_exceeds_max_lines_per_finding()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "line1\nline2\nline3\nline4\nline5\n");
+
+        // Edit with a multi-line OldText that exceeds the cap.
+        var bigOld = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"line{i}"));
+        var bigNew = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"newline{i}"));
+        var finding = NewEditFinding("src/Foo.cs", bigOld, bigNew);
+
+        var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { MaxLinesPerFinding = 5 });
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("exceeds MaxLinesPerFinding 5"));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_applies_when_confidence_matches_floor_exactly()
+    {
+        // Boundary: confidence == floor is allowed (>=).
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited")
+            with
+        { Confidence = 0.9, DispositionConfidence = 0.9 };
+
+        var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().ContainSingle();
+        fx.Read("src/Foo.cs").Should().Be("edited");
+    }
+
+    // ---------- AutoApplyOptions: SkipBuildTestGate ----------
+
+    [Fact]
+    public async Task ApplyAsync_skips_both_baseline_and_post_apply_gates_when_SkipBuildTestGate_is_set()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited");
+
+        // Runner returns red for everything; with SkipBuildTestGate=true the executor should
+        // never call into it, so the fix still applies.
+        var runner = new FakeRunner
+        {
+            BuildOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "would normally block"),
+            TestOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "would normally block"),
+        };
+        var sut = new AutoApplyExecutor(runner, new AutoApplyOptions { SkipBuildTestGate = true });
+
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().ContainSingle();
+        result.BuildTestGatePassed.Should().BeTrue();
+        result.GateReversionReason.Should().BeNull();
+        runner.BuildCalls.Should().Be(0);
+        runner.TestCalls.Should().Be(0);
+        fx.Read("src/Foo.cs").Should().Be("edited");
+    }
+
     // ---------- Ctor ----------
+
+    [Theory]
+    [InlineData(-0.1)]
+    [InlineData(1.1)]
+    public void Ctor_rejects_out_of_range_confidence_floor(double bad)
+    {
+        var act = () => new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = bad });
+        act.Should().Throw<ArgumentException>().WithMessage("*ConfidenceFloor*");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void Ctor_rejects_non_positive_MaxLinesPerFinding(int bad)
+    {
+        var act = () => new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { MaxLinesPerFinding = bad });
+        act.Should().Throw<ArgumentException>().WithMessage("*MaxLinesPerFinding*");
+    }
+
+    [Fact]
+    public void Ctor_rejects_non_positive_MaxFilesPerFinding()
+    {
+        var act = () => new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { MaxFilesPerFinding = 0 });
+        act.Should().Throw<ArgumentException>().WithMessage("*MaxFilesPerFinding*");
+    }
 
     [Fact]
     public void Ctor_throws_on_null_runner()

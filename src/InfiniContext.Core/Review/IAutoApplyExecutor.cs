@@ -21,6 +21,41 @@ public interface IAutoApplyExecutor
         CancellationToken ct);
 }
 
+/// <summary>
+/// Runtime knobs for <see cref="AutoApplyExecutor"/>, mirrored from <c>ReviewSettings</c>. The
+/// executor enforces these as defense-in-depth: the coordinator prompt also instructs the agent
+/// to respect the same thresholds, but the host re-checks on the way in so an over-eager
+/// coordinator can't sneak an out-of-spec fix past the gate.
+/// </summary>
+public sealed record AutoApplyOptions
+{
+    /// <summary>
+    /// Minimum value for both <see cref="ConsolidatedFinding.Confidence"/> and
+    /// <see cref="ConsolidatedFinding.DispositionConfidence"/>. Findings below this floor are
+    /// demoted to <see cref="Disposition.NeedsUser"/> with an explanatory note. Default 0.9.
+    /// </summary>
+    public double ConfidenceFloor { get; init; } = 0.9;
+
+    /// <summary>
+    /// Maximum lines a single finding's <c>SuggestedFix.OldText</c> may span. Hand the user a
+    /// review entry instead of auto-applying a sweeping rewrite. Default 50.
+    /// </summary>
+    public int MaxLinesPerFinding { get; init; } = 50;
+
+    /// <summary>
+    /// Maximum files a single finding may touch. v1 fix kinds (Edit, ReplaceFile) only touch
+    /// one file each; this knob is forward-looking for a future multi-file fix kind. Default 3.
+    /// </summary>
+    public int MaxFilesPerFinding { get; init; } = 3;
+
+    /// <summary>
+    /// Test-only escape hatch: when true, both the baseline gate and the post-apply build+test
+    /// gate are skipped. Used by tests that exercise the apply path without spawning
+    /// <c>dotnet</c>. Production should leave this <c>false</c>.
+    /// </summary>
+    public bool SkipBuildTestGate { get; init; } = false;
+}
+
 /// <summary>Outcome of an <see cref="IAutoApplyExecutor.ApplyAsync"/> call.</summary>
 /// <param name="Applied">Findings that applied cleanly and survived the build+test gate. Disposition remains <see cref="Disposition.AutoApply"/>.</param>
 /// <param name="Demoted">Findings that could not apply, or applied but the gate reverted them. Disposition is flipped to <see cref="Disposition.NeedsUser"/>; <see cref="ConsolidatedFinding.ConsolidatorNote"/> carries the reason.</param>

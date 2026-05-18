@@ -1164,3 +1164,68 @@ The test is in the same `AutoApplyExecutorTests` file alongside the `CancellingR
 ### Not committed yet
 
 The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - cancellation-safe revert.`
+
+## 2026-05-17 (review-gate impl session - wire AutoApply settings end-to-end)
+
+User said "continue". Picked the next follow-up: stop the silently-no-op `ReviewSettings.AutoApply*` and `SkipBuildTestGate` fields. These were advertised in the schema and `settings.json` but ignored by the executor at runtime - a user setting `confidenceFloor: 0.99` would get false confidence that they were tightening the gate.
+
+### What's wired now
+
+`AutoApplyExecutor` accepts a new `AutoApplyOptions` record. Settings тЖТ options translation lives in `Program.cs`:
+
+- `ConfidenceFloor` (default 0.9): each `ConsolidatedFinding`'s `Confidence` AND the coordinator's `DispositionConfidence` must both meet or exceed this. Below-floor findings demote to NeedsUser with a specific reason citing the actual value vs the floor.
+- `MaxLinesPerFinding` (default 50): combined line count of `OldText` + `NewText` is bounded. Demote with `"fix touches X lines, exceeds MaxLinesPerFinding Y"`.
+- `MaxFilesPerFinding` (default 3): currently a no-op at runtime since v1 fix kinds (Edit, ReplaceFile) only touch one file each; reserved for a future multi-file fix kind. Ctor still validates it's positive.
+- `SkipBuildTestGate` (default false): when true, both the baseline gate AND the post-apply build+test gate are bypassed. The fix applies; `BuildAsync`/`TestAsync` are never called. Used by tests that exercise the apply path without spawning `dotnet`. Production should never set this.
+
+`coordinatorModel` from `ReviewSettings` is **still no-op** - wiring it requires a `ReviewService` refactor to split the single `IReviewerAgentService` into reviewer + coordinator channels. Filed as remaining v1 follow-up.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/IAutoApplyExecutor.cs` - new `AutoApplyOptions` record placed next to the interface (its consumer). Public ctor params validated by `AutoApplyExecutor`.
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs`:
+  - Ctor: new optional `AutoApplyOptions? options = null` parameter; validates `ConfidenceFloor` in [0,1] and positive `MaxLines*`/`MaxFilesPerFinding`.
+  - `ApplyAsync`: baseline-gate check now also guarded by `!_options.SkipBuildTestGate`; after the apply phase, if `SkipBuildTestGate` is true the post-apply gate path is skipped (return as-is with `BuildTestGatePassed=true`).
+  - `TryApplySingleAsync`: new defensive checks BEFORE writing - reviewer confidence below floor тЖТ demote; coordinator disposition_confidence below floor тЖТ demote; combined `CountLines(OldText) + CountLines(NewText)` > `MaxLinesPerFinding` тЖТ demote. Each demotion carries a specific note with the actual value vs the floor/limit.
+  - `CountLines(string?)`: helper. Null/empty тЖТ 0; otherwise `1 + count('\n')`. CRLF counted as one break (does not double-count via `\r`).
+
+CLI:
+
+- `src/InfiniContext.Cli/Program.cs`: when constructing `AutoApplyExecutor`, builds an `AutoApplyOptions` from `settings.Review` fields (`ConfidenceFloor`, `AutoApplyMaxLinesPerFinding`, `AutoApplyMaxFilesPerFinding`, `SkipBuildTestGate`).
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs`:
+  - 4 tests on the confidence + size gates: reviewer-confidence-below-floor demotes; coordinator-disposition-confidence-below-floor demotes; multi-line OldText/NewText exceeding `MaxLinesPerFinding` demotes; boundary case (confidence == floor) applies.
+  - 1 test on `SkipBuildTestGate=true`: runner returns red for build AND test, but the executor never calls into it, so the fix still applies. Asserts `BuildCalls == 0`, `TestCalls == 0`.
+  - 5 new ctor-validation tests: out-of-range `ConfidenceFloor` (both bounds), non-positive `MaxLinesPerFinding`, non-positive `MaxFilesPerFinding`.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **894/897 passing** (3 macOS-only skips). 10 new tests in AutoApplyExecutorTests (now 39 in that class); no regressions.
+- `dotnet format` - green on Core, Cli, and Tests.
+
+### Remaining v1 follow-ups
+
+- Secret-file exclusion in `ScopeResolver` (defense against leaking `.env` / `*.key` / `settings.user.json` into reviewer prompts and the on-disk report).
+- Same-day `## YYYY-MM-DD (review)` heading collapse in `progress.md`.
+- Empty-scope short-circuit (don't spawn 6 agents when there are 0 files to review).
+- Glob expansion for `--scope`.
+- `CoordinatorModel` channel split (ReviewService refactor).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/IAutoApplyExecutor.cs` (new AutoApplyOptions record)
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` (ctor accepts options; baseline gate / post-apply gate / per-finding checks honor options)
+- `src/InfiniContext.Cli/Program.cs` (settings -> options translation)
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` (10 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - wire AutoApply settings end-to-end.`
