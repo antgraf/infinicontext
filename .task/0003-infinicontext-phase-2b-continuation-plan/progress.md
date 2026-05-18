@@ -1486,3 +1486,31 @@ Test csproj:
 ### Not committed yet
 
 The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Add /flush slash command for user-triggered task-data flush.`
+
+## 2026-05-17 (status-check session)
+
+Fresh session bound to task 0003. User asked "what's next?", got the summary, then immediately hit a soft context-pressure handoff (~73%) and asked for a flush before any work started.
+
+### What happened
+
+- Read `index.md`, the full `progress.md` (1488 lines, in three chunks), and the relevant slice of `docs/stage2/todo.md` to summarize remaining work.
+- Reported back the queue: two `/task review` v1 follow-ups (glob expansion for `--scope`; CoordinatorModel channel split via a ReviewService refactor), plus step 12 (dogfood `/task review 0003 --yes`), plus the orthogonal `ci-macos.yml` workflow_dispatch.
+- Recommended glob expansion as the next pick: small, self-contained, user-visible. CoordinatorModel split is bigger and is easier to scope correctly *after* dogfood reveals whether a separate coordinator model is wanted in practice.
+
+### No code changes
+
+Working tree clean at session start; clean at exit. The prior "Not committed yet" subsections in this file are historical тАФ `git log` shows everything through `1b8425f Add /flush slash command ...` is on `main`.
+
+### Handoff to next session
+
+User left the next pick open. Standing recommendation: **glob expansion for `--scope`**. The change is local to `TaskCommandHandler.HandleReviewAsync` (today it splits `cmd.Scope` on `;` and feeds literal tokens to `ScopeResolver`) plus a small glob helper. Two viable shapes:
+
+- Add `Microsoft.Extensions.FileSystemGlobbing` (a `Matcher` over the repo root, ~well-tested, one new dep on `InfiniContext.Cli.csproj`); or
+- Write a minimal in-line `*` / `**` matcher (~30 LOC + tests, no new dep).
+
+Behind that, in priority order: dogfood (step 12), then CoordinatorModel split.
+
+### Why exiting now
+
+Soft context-pressure threshold (~73%). Most of the budget went to reading the 1488-line `progress.md`. A fresh session can pick up glob expansion with only the tail of `progress.md` + `TaskCommandHandler.HandleReviewAsync` in context.
+
