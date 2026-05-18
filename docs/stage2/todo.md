@@ -1,6 +1,6 @@
 # InfiniContext — Consolidated TODO / Future Work
 
-**Snapshot date:** 2026-05-16 (Stage 2B Phase 8 shipped; Stage 2B complete on Windows; macOS-side CI pending first `ci-macos.yml` dispatch)
+**Snapshot date:** 2026-05-17 (`/task review` v1 + `/task spawn` shipped; all code-side `/task review` follow-ups closed; macOS-side CI still pending first `ci-macos.yml` dispatch)
 **Scope:** every "deferred", "open question", "post-MVP", "for Stage 2/3" or "not yet implemented" item found across `CLAUDE.md`, `README.md`, `docs/`, `tests/`, and every `.claude/tasks/*/` and `.task/*/` folder.
 
 Items already actionable today (with files-to-touch, acceptance criteria and cost estimates) live in `docs/todo.md`. **This file is the broader queue** — design-open questions, stage roadmap items, research follow-ups, and small hardening items that haven't been promoted to the actionable queue yet.
@@ -48,7 +48,7 @@ When an item is picked up, **remove it from this file** (or fold it into `docs/t
 - **Multi-parent lineage.** Schema records only one `parent_task_id`; multi-parent is post-MVP. Captured as class-level note on `MergeAsync`. Source: 20260507-tasks-and-sessions-management/progress.md (Phase 3).
 - **Cross-home `/task merge`.** Guard: "All merge sources must share the same home_cwd. Cross-home merge is post-MVP." Source: `TaskService.cs:117-119`, 20260509-manual-testing-session/research.md.
 - **Author `docs/cli/howto/commands.md`** — long-form REPL-only reference; link out to `docs/cli/howto/task-commands.md` rather than duplicate. Explicitly deferred to a separate task. Source: 20260509-improve-cli-repl-help/decisions.md D2/D8, progress.md.
-- **`/issue promote <n>`** тАФ spin an open `issues.md` entry out into a new task: seed `description.md` from the issue body, mark the source issue as `filed-as-task <new-id>`, optionally record `parent_task_id` lineage. Postponed from the v1 `issues.md` design (2026-05-17 conversation) тАФ v1 ships capture (`/issue` + `/task issue` alias) and `/issue list` / `/issue resolve` only. The done-gate / task-completion ceremony is also postponed pending a full requirements + design cycle; v1 has no review gate, user runs `/issue list` on demand. Source: 2026-05-17 issues.md design conversation.
+- **`/issue promote <n>`** -- spin an open `issues.md` entry out into a new task: seed `description.md` from the issue body, mark the source issue as `filed-as-task <new-id>`, optionally record `parent_task_id` lineage. Postponed from the v1 `issues.md` design (2026-05-17 conversation) -- v1 ships capture (`/issue` + `/task issue` alias) and `/issue list` / `/issue resolve` only. The done-gate / task-completion ceremony is also postponed pending a full requirements + design cycle; v1 has no review gate, user runs `/issue list` on demand. Source: 2026-05-17 issues.md design conversation.
 
 ## C. Stage 2B (multi-session console + macOS)
 
@@ -136,6 +136,23 @@ Status snapshot **as of Phase 8 shipped (2026-05-16)**: all eight planned phases
 - **Produce state-machine `<scenario>.expected-trace.txt` files** as part of state-machine tests. Source: `tests/fixtures/README.md`.
 - **Lock recordings in `tests/fixtures/`** — confirm exact NDJSON event schema vs current SDK source. Source: `infinicontext-initial-design.md` §4.2 / §8 #2.
 - **Confirm 60 s approval-MCP timeout.** Pick another if real users find it too short. Source: `infinicontext-initial-design.md` §8 #4, 20260506-poc/decisions.md §Pending.
+
+## I. /task review and /task spawn follow-ups (2026-05-17)
+
+`/task review` v1 shipped over a stack of 12 small commits (steps 1-11) plus 9 follow-up commits (lock-contract index/progress update, CRLF + baseline-green gate, cancellation-safe revert, wire AutoApply settings end-to-end, secret-file exclusion in ScopeResolver, same-day heading collapse, empty-scope short-circuit, glob expansion for `--scope`, CoordinatorModel channel split). All code-side v1 follow-ups are now closed. `/task spawn <id>` shipped 2026-05-17 (commit `b450ae8`) -- a parallel-pane sibling of `/task switch` that creates a new task-bound SessionContext alongside the current one. Items below are the residual follow-ups that didn't fit v1.
+
+### `/task review`
+
+- **Dogfood the surface.** Step 12 of the 12-step plan: run `/task review 0003 --yes` on this task itself, inspect the resulting `review-<timestamp>.md`, tighten `ReviewerPrompts.cs` if false-positives surface. Behavioral pass, not code. User-driven; can't be done from inside an agent session. Likely 2-3 prompt-tightening commits before the surface is shippable. Source: progress.md handoff at the end of `0003-infinicontext-phase-2b-continuation-plan` (review-gate impl session - step 11).
+- **Configurable secret-file patterns via `ReviewSettings.ExcludedFilePatterns`.** v1 hardcodes a conservative list (`.env*`, `*.key`, `*.pem`, `*.pfx`, `*.p12`, `*.secret*`, `id_rsa`, `id_ed25519`, `settings.user.json`). Add when dogfood surfaces a false-positive / missed-positive that the user wants to override per-project. Files: `src/InfiniContext.Core/Review/ScopeResolver.cs` (the static `SecretFilenames`/`SecretFilenamePrefixes`/`SecretExtensions` arrays), `InfiniContextSettings.ReviewSettings`. Source: 2026-05-17 secret-file exclusion progress entry.
+- **`.gitignore` integration for ScopeResolver.** No `git check-ignore` plumbing today; the secret-file guard is heuristic-only. If a project's `.gitignore` adds new secret shapes that the hardcoded list misses, ScopeResolver won't know. Files: new `IGitRunner.CheckIgnoreAsync`. Source: same as above.
+- **Per-token "matched nothing" diagnostic in `--scope` glob expansion.** When `--scope "src/A.cs;ghost/**"` matches A.cs but `ghost/**` matches zero files, the user gets just `["src/A.cs"]` in `ResolveAsync` with no feedback that `ghost/**` was a typo. The empty-scope short-circuit catches the all-zero case clearly; partial-zero is silent. Add if dogfood shows users tripping on it. Files: `src/InfiniContext.Cli/Tasks/ScopeGlobExpander.cs` (return shape change). Source: 2026-05-17 glob expansion progress entry.
+- **Negation patterns (`!exclude/**`) in `--scope` glob expansion.** `Matcher.AddExclude` supports them but the expander doesn't expose the syntax yet. Add if needed (so users can say `--scope "src/**;!src/Generated/**"`). Files: same as above. Source: same.
+
+### `/task spawn`
+
+- **Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`.** When a `/task spawn`-spawned (or `/n`-spawned) session is closed mid-host-lifecycle (user-invoked or host shutdown), the coordinator's task claim is NOT released. The task row stays at InProgress until the host process restarts. This gap pre-exists for every non-focused multi-session path (only the focused-session-per-iteration outer loop calls LeaveAsync today); `/task spawn` makes the gap more visible because it's now a routine flow rather than an edge case. Files: `src/InfiniContext.Core/Sessions/SessionManager.CloseAsync` + a `SessionContext.OnDispose` hook. Source: 2026-05-17 `/task spawn` progress entry.
+- **End-to-end test for `/task spawn`** against real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. v1 ships with only parser tests (`TaskCommandTests` x 4); the helper-side flow (`TrySpawnTaskSessionAsync` -- local pre-check, plan build, CreateAsync, coordinator Enter with rollback-on-refusal) is integration-only and uncovered. Files: new `tests/InfiniContext.Tests/Cli/SlashCommands/TaskSpawnSlashCommandTests.cs` or fold into the existing `TaskCommandHandlerReviewTests` scaffold (reuse the in-memory TaskStore + temp-fs fixture). Source: same.
 
 ## H. Already-actionable items from `docs/todo.md` (canonical queue)
 
