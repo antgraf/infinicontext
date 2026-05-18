@@ -1415,3 +1415,74 @@ Tests:
 ### Not committed yet
 
 The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - empty-scope short-circuit.`
+
+## 2026-05-17 (new top-level `/flush` slash command)
+
+User requested a new `/flush` command to "forcely flush all task data ... to finish some actions or prepare to split the task". Shipped as the user-triggered analogue of the context-pressure hard-threshold injector.
+
+### Design
+
+`/flush` is a top-level slash command. It injects a synthetic user turn into the focused session telling the agent to:
+
+1. Update `progress.md` with where you are and what's left (lock-aware).
+2. Update `index.md` if any new artifacts exist (lock-aware).
+3. Acknowledge with `[flushed]` and stop.
+
+The wording mirrors the language the `infinicontext-task` skill already uses for the hard-threshold nudge ("flush now ... update progress.md with where you are and what's left, then exit"), so the agent recognises the intent without needing skill changes.
+
+The session stays open after the agent flushes. The user can then `/quit` (closes the host) or `/task switch` to a fresh session against the same task - the "prepare to split" workflow.
+
+`/flush` refuses when the focused session has no bound task. There's no `.task/` folder to flush to, so the command would be meaningless. Mirrors `/issue`'s refusal pattern.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/SlashCommands/FlushSlashCommand.cs` (new) - implements `ISlashCommand`. Takes no arguments. Checks `ctx.ActiveTaskId`, refuses if null. Sends the canned nudge via `ctx.Session.SendUserMessageAsync` and prints `[flush] requested for task NNNN; the agent will acknowledge with "[flushed]" when done.`
+- `FlushNudgeTemplate` is exposed as `internal const string` so tests can pin the invariants (mentions `progress.md`, `index.md`, lock-aware, `[flushed]`, "do not start new work").
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` - registered `new FlushSlashCommand()` in the slash-command registry list (right after `IssueSlashCommand`).
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/SlashCommands/FlushSlashCommandTests.cs` (new) - 6 tests, stand-alone (no `SessionManager` needed since `/flush` works against `ctx.Session` directly):
+  - Refuses when `ActiveTaskId` is null.
+  - Sends nudge with the task id substituted (verifies the body contains `0042`, `progress.md`, `index.md`, `[flushed]`; verifies the console message includes "task 0042").
+  - Pads the task id to 4 digits (id=7 -> "0007" in both nudge and console).
+  - Refuses when arguments are provided ("[flush] this command takes no arguments").
+  - Surfaces dispatch failure cleanly when `SendUserMessageAsync` throws ("[flush] dispatch failed: pipe closed").
+  - `FlushNudgeTemplate` invariants test: pins the template's references to the load-bearing strings so a future edit can't silently drift the nudge wording.
+
+Test seam uses a minimal `FakeSession` modeled on the one in `BroadcastCommandTests.cs` (records sent messages, has `SendThrows` for the failure path).
+
+Test csproj:
+
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` - added `<Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FlushSlashCommand.cs" Link="..." />` so the test assembly can instantiate the `internal sealed class FlushSlashCommand` directly (same pattern every other `SlashCommand` test file uses).
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **930/933 passing** (3 macOS-only skips). 6 new tests; no regressions.
+- `dotnet format` - green on Cli and Tests.
+
+### What's intentionally NOT in v1
+
+- **`--end` flag** to auto-close the session after the agent flushes. The host has no per-session-close action today (only `RequestExit` which closes the whole host). Adding one is a separate piece of plumbing; deferred. Users who want to split a task can manually `/quit` after `[flushed]`, or use `/task switch <id>` if `RequestSwitch` is plumbed for their context.
+- **Skill update** documenting the `/flush` command. The agent already knows what to do (matches the existing hard-threshold language); no skill bump needed.
+
+### Remaining `/task review` v1 follow-ups
+
+- Glob expansion for `--scope`.
+- `CoordinatorModel` channel split.
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/SlashCommands/FlushSlashCommand.cs` (new)
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` (register the command)
+- `tests/InfiniContext.Tests/Cli/SlashCommands/FlushSlashCommandTests.cs` (new)
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (link the new source file into the test assembly)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Add /flush slash command for user-triggered task-data flush.`

@@ -66,6 +66,7 @@
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ListSessionsCommand.cs" Link="Cli\SlashCommands\ListSessionsCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FocusCommand.cs" Link="Cli\SlashCommands\FocusCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\BroadcastCommand.cs" Link="Cli\SlashCommands\BroadcastCommand.cs" />
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FlushSlashCommand.cs" Link="Cli\SlashCommands\FlushSlashCommand.cs" />
   </ItemGroup>
 
 </Project>

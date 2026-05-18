@@ -94,6 +94,7 @@ internal sealed class MultiSessionHost : IReplActions
             new ApprovalCommand(),
             new TaskSlashCommand(),
             new IssueSlashCommand(),
+            new FlushSlashCommand(),
             new NewSessionCommand(),
             new ListSessionsCommand(),
             new FocusCommand(),
