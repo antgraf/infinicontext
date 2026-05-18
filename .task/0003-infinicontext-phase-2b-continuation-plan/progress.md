@@ -1719,3 +1719,76 @@ The 7 source/test files plus progress.md are uncommitted. **Recommended commit s
 - Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync` (or a SessionContext disposal hook) so coordinator state stays consistent when a spawned session is closed mid-host-lifecycle. Pre-existing gap that this feature surfaces but doesn't fix.
 - End-to-end test that drives `/task spawn` through a real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. The slash-command helper logic is the more interesting part to test but requires more scaffolding than the parser tests it currently has.
 
+## 2026-05-18 (review)
+
+- Ran `/task review`. applied=1 rejected=1 awaiting=19. Report: `review-2026-05-18T041337.md`. Build/test gate: green.
+
+## 2026-05-18 (skill v5: autonomy default)
+
+User asked for a review of the prior session's behavior on an ambiguous `next?` prompt and said the host's north star is to be **as autonomous as possible**. Self-review identified two recurring failure modes inside task sessions: (a) reading whole `progress.md` / `todo.md` files when a targeted `Grep` would suffice, and (b) enumerating two-or-three plausible next steps and asking "which one?" instead of picking a default and acting. Both make the agent more deferential than the north star wants.
+
+### Resolution
+
+Injected an `Autonomy default` section into the host-installed user-level skill so every future task-bound session inherits the disposition, not just this conversation. Skill is the right surface (not the pointer message) because it already carries operational rules (lock contract, issue hygiene, task review, context-pressure nudges) and bumping its content costs the same per-session tokens regardless of how many tasks the host serves.
+
+### Code changes
+
+- `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs` - `Version` 4 -> 5; doc-comment extended to record what v5 adds; new `## Autonomy default` section inserted after `## On session start` with five bullets:
+  - Pick a default and start (reversible work needs no permission).
+  - Confirm only on irreversible / shared-state actions (commit/push/branch-delete/external messages).
+  - Report after, not before.
+  - Use `TaskCreate` for >=3-step work.
+  - "Operators correct; agents act." - the disposition in one line.
+- Also tightened the `Read only what you need` rule in `## On session start` to say explicitly: for "what's next?" prompts, `Grep` `progress.md` for the most recent `Handoff to next session` heading rather than loading the whole file. Closes the narrow-reading gap from the self-review.
+
+### Skill propagation
+
+`SkillInstaller` parses the `<!-- infinicontext-task-skill-version: N -->` marker on every host launch and rewrites the on-disk `~/.claude/skills/infinicontext-task/SKILL.md` when the in-code `Version` is higher. Bumping 4 -> 5 means the next host launch overwrites the v4 SKILL.md automatically; no manual install step is needed. Current session is still running v4 in its loaded skill body - the change takes effect for the next task-bound session that activates the skill.
+
+### Build / test
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green (Cli `.dll` is locked by two running `InfiniContext.Cli` processes + Visual Studio, same gotcha noted in prior handoffs - workaround unchanged).
+- `dotnet test --no-build --filter SkillInstaller` - 12 / 12 passing. The tests reference `InfiniContextTaskSkill.Version` and `SkillMarkdown` symbolically (not literal 4) and check version-marker round-trip, so the bump is safe by construction.
+- `dotnet test --no-build` (full suite) - **950 passing + 3 macOS-only skipped (953 total)**. No regressions vs the post-`/task spawn` baseline.
+- `dotnet format --verify-no-changes --include <touched file>` - green.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs` (version bump + doc-comment + new Autonomy section + tightened narrow-read rule)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+`index.md` does not need updating - no new artifact files, only edits to existing rows would be needed and the touched file is outside `.task/`.
+
+### Not committed yet
+
+The skill change + this progress entry are uncommitted. Working tree also carries the parallel-session review-gate dogfood: one auto-applied fix in `src/InfiniContext.Core/Review/ScopeResolver.cs` (proper directory-boundary check using `Path.DirectorySeparatorChar` - a real bug fix surfaced by the security reviewer agent), the new `review-2026-05-18T041337.md` report (19 awaiting items), and the review-gate's own one-line progress entry + index row.
+
+The review-gate work and the autonomy-skill work are independent and could ship as two commits or one. Operator decision.
+
+### Handoff to next session
+
+Two open work items at flush time:
+
+1. **Walk the 19 awaiting items in `review-2026-05-18T041337.md`** - this is the post-dogfood step that closes out the `/task review` v1 surface (step 12 of the 12-step plan). Each entry is a normal work item: read the location, evaluate the suggested fix, apply or refuse with reasoning. The fact that the auto-apply gate only landed 1 of 21 findings means the prompts in `ReviewerPrompts.cs` likely need tightening - the awaiting backlog is the raw feedback for that.
+2. **Two `/task spawn` follow-ups still filed** in `docs/stage2/todo.md` section I: wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`; E2E test for `/task spawn` against real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. Neither is touched by this session.
+
+The autonomy-skill injection itself is feature-complete from a code perspective; the next iteration is behavioral (does the next task-bound session that picks up SKILL.md v5 actually act more autonomously?).
+
+### Session ended on host context-pressure threshold
+
+Host reported context at 259% of 1M-token capacity (Opus 4.7 1M-context). This entry is the final flush.
+
+**Open operator question at session end.** Asked at end-of-turn: which commit shape (single combined commit covering both the skill v5 work and the parallel review-gate dogfood, or two separate commits), and whether any wording in the autonomy text needs adjusting. No answer arrived before the flush.
+
+**Working tree snapshot at flush time** (re-verify with `git status --short` on resume; parallel sessions may have advanced things):
+
+- M `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs` (this session: skill v5 autonomy injection)
+- M `src/InfiniContext.Core/Review/ScopeResolver.cs` (parallel review-gate dogfood: directory-boundary fix)
+- M `.task/0003-.../index.md` (parallel review-gate dogfood: review-report row)
+- M `.task/0003-.../progress.md` (this session + parallel review-gate dogfood)
+- ?? `.task/0003-.../review-2026-05-18T041337.md` (parallel review-gate dogfood: 19 awaiting items)
+
+**Validation state.** Build green; 950 / 953 tests passing (3 macOS-only skips); format gate green on touched files. Safe to commit as-is.
+
+**Behavioral validation deferred.** The v4 SKILL.md is the body loaded in this conversation, so the autonomy-default change cannot self-validate here. The first task-bound session spun up after the next host launch is the natural validation point; `SkillInstaller` rewrites the on-disk SKILL.md to v5 on host startup once the in-code version exceeds the marker.

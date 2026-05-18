@@ -266,7 +266,8 @@ public sealed class ScopeResolver
             }
 
             var full = Path.GetFullPath(Path.Combine(repoRoot, trimmed));
-            if (!full.StartsWith(repoRoot, StringComparison.Ordinal))
+            if (!full.StartsWith(repoRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !string.Equals(full, repoRoot, StringComparison.Ordinal))
             {
                 excluded.Add(new ExcludedFile(rel, "outside repo root"));
                 continue;

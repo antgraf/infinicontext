@@ -27,7 +27,7 @@ public static class InfiniContextTaskSkill
     public const string SkillName = "infinicontext-task";
 
     /// <summary>Embedded version stamp. Increment on every change to <see cref="SkillMarkdown"/>.</summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     /// <summary>Marker prefix inside the SKILL.md file. The trailing integer is the version.</summary>
     public const string VersionMarkerPrefix = "<!-- infinicontext-task-skill-version: ";
@@ -52,7 +52,10 @@ public static class InfiniContextTaskSkill
     /// Full SKILL.md content (frontmatter + body + version marker). Total body kept under
     /// 500 tokens per design.md risk #5. v2 (Phase 7) adds the MCP lock contract; v3 adds the
     /// "Issue hygiene" section instructing the agent to log out-of-scope findings to issues.md;
-    /// v4 adds the "Task review" section that tells the agent about <c>/task review</c>.
+    /// v4 adds the "Task review" section that tells the agent about <c>/task review</c>;
+    /// v5 adds the "Autonomy default" section pushing the agent to act-then-report for open
+    /// prompts rather than enumerate options and wait, matching the host's north-star vision
+    /// of maximally autonomous multi-session progress.
     /// </summary>
     // The raw-string literal below captures the source file's line endings, which Windows CI
     // converts to CRLF on checkout (`core.autocrlf=true`). The `.Replace` normalizes to LF so the
@@ -70,8 +73,19 @@ public static class InfiniContextTaskSkill
         ## On session start
 
         1. **Read `index.md` first.** It lists every artifact file with a one-line description and a "last updated" date. Use it to decide what else to read.
-        2. **Read only what you need.** Don't preload `description.md` or `progress.md` if the user's prompt is about something else. Each load costs context budget.
+        2. **Read only what you need.** Don't preload `description.md` or `progress.md` if the user's prompt is about something else. Each load costs context budget. For "what's next?" prompts, `Grep` `progress.md` for the most recent `Handoff to next session` heading (or read just the tail of the latest day's entry) instead of loading the whole file.
         3. **If the host's first user message says files are missing from the index, reconcile:** add a row to `index.md` for each missing file (description = your best one-liner; date = today).
+
+        ## Autonomy default
+
+        The host's north star is autonomous multi-session progress. For open prompts ("next?", "continue", "do that", "go") inside a task session, **act, then report** - don't enumerate options and ask "which one?".
+
+        - **Pick a default and start.** When two or three paths look plausible, name the one you're taking in one sentence with the reason, then begin work. Reversible work (file reads, code edits in your working tree, running tests, drafting commits) doesn't need permission.
+        - **Confirm only on irreversible or shared-state actions.** `git commit`, `git push`, branch deletes, force-pushes, anything touching infra or sending external messages still pause for the operator. Local writes don't.
+        - **Report after, not before.** One or two sentences when a unit lands: what changed, what's next. Skip step-by-step pre-announcement.
+        - **Use `TaskCreate` for >=3-step work.** Visible progress lets the operator redirect mid-stream without you having to stop and ask.
+
+        A wrong-but-reversible action followed by an operator correction is faster than the right answer reached by asking permission three times. Operators correct; agents act.
 
         ## Editing artifacts: the lock contract (parallel-session safety)
 
