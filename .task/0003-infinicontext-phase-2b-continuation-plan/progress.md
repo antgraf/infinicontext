@@ -1117,3 +1117,50 @@ Remaining v1 follow-ups (not addressed this session):
 ### Not committed yet
 
 The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - unblock auto-apply (CRLF + baseline gate).`
+
+## 2026-05-17 (review-gate impl session - cancellation-safe revert)
+
+User said "continue" after the CRLF + baseline-gate commit. Picked the next v1 follow-up from my own /review pass: Critical #2 - cancellation-safe revert.
+
+### The bug
+
+`RevertAsync` honored the caller's CancellationToken on every `File.WriteAllBytesAsync(path, original, ct)`. When the user hit Ctrl-C (or any other path canceled the CT) AFTER the executor had committed to reverting, the first `WriteAllBytesAsync` would fail-fast with OperationCanceledException; the try/catch swallowed it; the foreach moved to the next file; the next `WriteAllBytesAsync` also fail-fasted; ... net result: zero files were restored even though the executor's promise was to revert all of them on gate failure. The working tree silently kept its mid-flight edits.
+
+### Fix
+
+- `RevertAsync` no longer takes a CancellationToken parameter. Internally it passes `CancellationToken.None` to `File.WriteAllBytesAsync`, so canceled caller tokens don't propagate to the revert writes.
+- Per-file IO failures (file locked, disk full, etc.) are still tolerated via the existing try/catch - one wedged file doesn't abort the rest of the rollback.
+- Both call sites in `ApplyAsync` updated to `RevertAsync(backups)` (no ct).
+- Comment in `RevertAsync` records the rationale: "once we've committed to reverting, do NOT honor caller cancellation. A partial revert leaves the working tree in a mixed state worse than the gate failure itself."
+
+### Test that proves the fix
+
+`ApplyAsync_completes_full_revert_even_when_token_cancels_during_gate` (new) sets up three files, three findings, and a `CancellingRunner` whose second `TestAsync` call cancels the CT before returning red. Without the fix: file `src/A.cs` is left at `AAA-edited` because the first revert write fail-fasts (verified by temporarily reverting the fix - test failed with `AAA-edited` instead of `AAA-original`). With the fix: all three files restored to their originals; result demoted with `BuildTestGatePassed=false`; Demoted count = 3.
+
+The test is in the same `AutoApplyExecutorTests` file alongside the `CancellingRunner` helper. The test was empirically verified to fail without the fix and pass with it, with a force-rebuild + targeted rerun.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **884/887 passing** (3 macOS-only skips). 1 new test in AutoApplyExecutorTests (now 29 in that class); no regressions.
+- `dotnet format` - green on Core and Tests.
+
+### Remaining v1 follow-ups (in priority order)
+
+- Schema-advertised settings that silently no-op: `coordinatorModel`, `confidenceFloor`, `autoApplyMax*`, `skipBuildTestGate`.
+- Secret-file exclusion in `ScopeResolver` (defense against leaking `.env` / `*.key` / `settings.user.json` into reviewer prompts and the on-disk report).
+- Same-day `## YYYY-MM-DD (review)` heading collapse in `progress.md` (skill says "Group entries under day headings", multiple runs/day currently violate).
+- Empty-scope short-circuit (don't spawn 6 agents when there are 0 files to review).
+- Glob expansion for `--scope` (currently splits on `;` literally).
+- `CoordinatorModel` channel split (ReviewService refactor).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` (RevertAsync drops ct param; uses CancellationToken.None internally; both call sites updated)
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` (new test + CancellingRunner helper)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - cancellation-safe revert.`

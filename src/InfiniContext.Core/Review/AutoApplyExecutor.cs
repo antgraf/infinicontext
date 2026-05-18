@@ -103,7 +103,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         var buildOutcome = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
         if (!buildOutcome.Passed)
         {
-            await RevertAsync(backups, ct).ConfigureAwait(false);
+            await RevertAsync(backups).ConfigureAwait(false);
             var reason = $"build broke after auto-apply: {buildOutcome.FailureSummary ?? "no detail"}";
             _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
             return new AutoApplyResult(
@@ -117,7 +117,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         var testOutcome = await _gate.TestAsync(normalizedRoot, ct).ConfigureAwait(false);
         if (!testOutcome.Passed)
         {
-            await RevertAsync(backups, ct).ConfigureAwait(false);
+            await RevertAsync(backups).ConfigureAwait(false);
             var reason = $"tests broke after auto-apply: {testOutcome.FailureSummary ?? "no detail"}";
             _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
             return new AutoApplyResult(
@@ -216,8 +216,15 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         return $"fix not auto-applicable: unknown FixKind {fix.Kind}";
     }
 
-    private static async Task RevertAsync(IDictionary<string, byte[]?> backups, CancellationToken ct)
+    private static async Task RevertAsync(IDictionary<string, byte[]?> backups)
     {
+        // Once we've committed to reverting, do NOT honor caller cancellation. A partial revert
+        // (some files restored, others left edited) leaves the working tree in a mixed state
+        // worse than the gate failure itself. The user's Ctrl-C is too late at this point; the
+        // alternative is silent corruption. Each File.WriteAllBytesAsync gets
+        // CancellationToken.None so a canceled outer token doesn't fail-fast every write.
+        // Per-file IO errors are still tolerated (try/catch) because one wedged file shouldn't
+        // abort the rest of the rollback.
         foreach (var (path, original) in backups)
         {
             try
@@ -228,14 +235,12 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
                 }
                 else
                 {
-                    await File.WriteAllBytesAsync(path, original, ct).ConfigureAwait(false);
+                    await File.WriteAllBytesAsync(path, original, CancellationToken.None).ConfigureAwait(false);
                 }
             }
             catch
             {
-                // Best-effort revert. Leaving a half-reverted state is better than throwing
-                // mid-rollback; the caller is already in a degraded path and gets the gate
-                // failure reason in the result.
+                // Best-effort: one file's IO failure shouldn't abort the rest of the revert.
             }
         }
     }

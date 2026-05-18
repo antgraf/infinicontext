@@ -512,6 +512,69 @@ public class AutoApplyExecutorTests
         fx.Read("src/B.cs").Should().Be("BBB");
     }
 
+    [Fact]
+    public async Task ApplyAsync_completes_full_revert_even_when_token_cancels_during_gate()
+    {
+        // Once the executor decides to revert, it must finish the revert regardless of caller
+        // cancellation. A partial revert (some files restored, others left edited) is worse
+        // than the gate failure itself - the user can't undo a half-state. Before the fix,
+        // a canceled CT made File.WriteAllBytesAsync fail-fast on every revert iteration,
+        // leaving every edited file in its modified form.
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/A.cs", "AAA-original");
+        fx.WriteFile("src/B.cs", "BBB-original");
+        fx.WriteFile("src/C.cs", "CCC-original");
+
+        var findings = new[]
+        {
+            NewEditFinding("src/A.cs", "AAA-original", "AAA-edited"),
+            NewEditFinding("src/B.cs", "BBB-original", "BBB-edited"),
+            NewEditFinding("src/C.cs", "CCC-original", "CCC-edited"),
+        };
+
+        using var cts = new CancellationTokenSource();
+        // CancellingRunner cancels the CT on its second TestAsync call (after baseline test
+        // passes and before the post-apply test runs). This puts a canceled CT in front of
+        // the revert path that RevertAsync used to honor.
+        var runner = new CancellingRunner(cts);
+        var sut = new AutoApplyExecutor(runner);
+
+        var result = await sut.ApplyAsync(fx.Root, findings, cts.Token);
+
+        // Every file restored to its original despite the canceled token.
+        fx.Read("src/A.cs").Should().Be("AAA-original");
+        fx.Read("src/B.cs").Should().Be("BBB-original");
+        fx.Read("src/C.cs").Should().Be("CCC-original");
+
+        result.BuildTestGatePassed.Should().BeFalse();
+        result.Demoted.Should().HaveCount(3);
+    }
+
+    private sealed class CancellingRunner : IBuildTestRunner
+    {
+        private readonly CancellationTokenSource _cts;
+        private int _testCalls;
+
+        public CancellingRunner(CancellationTokenSource cts) { _cts = cts; }
+
+        public Task<BuildTestOutcome> BuildAsync(string repoRoot, CancellationToken ct)
+            => Task.FromResult(new BuildTestOutcome(Passed: true, FailureSummary: null));
+
+        public Task<BuildTestOutcome> TestAsync(string repoRoot, CancellationToken ct)
+        {
+            var call = Interlocked.Increment(ref _testCalls);
+            if (call == 1)
+            {
+                // Baseline test: pass.
+                return Task.FromResult(new BuildTestOutcome(Passed: true, FailureSummary: null));
+            }
+            // Post-apply test: cancel the CT (the side-effect being tested) and return red so
+            // the executor enters the revert path.
+            _cts.Cancel();
+            return Task.FromResult(new BuildTestOutcome(Passed: false, FailureSummary: "tests red"));
+        }
+    }
+
     // ---------- Ctor ----------
 
     [Fact]
