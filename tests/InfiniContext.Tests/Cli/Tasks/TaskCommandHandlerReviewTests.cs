@@ -1,5 +1,6 @@
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.LightModel;
+using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Review;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -155,6 +156,125 @@ public class TaskCommandHandlerReviewTests
     }
 
     [Fact]
+    public async Task Appends_row_to_index_md_after_review_run()
+    {
+        await using var fx = await Fixture.OpenAsync(withReview: true, withLockRegistry: true);
+        var task = await fx.CreateTaskAsync("Test task");
+        fx.Reviewer.QueueAllReviewersEmpty();
+        fx.Reviewer.QueueCoordinator(CoordinatorEmptyJson());
+
+        var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
+        var indexPath = Path.Combine(folder.Path, "index.md");
+        var beforeContent = await File.ReadAllTextAsync(indexPath);
+
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
+
+        var afterContent = await File.ReadAllTextAsync(indexPath);
+        afterContent.Should().StartWith(beforeContent.TrimEnd()); // existing content preserved
+        afterContent.Should().Contain("| review-");
+        afterContent.Should().Contain("Review report (applied=0 rejected=0 awaiting=0)");
+    }
+
+    [Fact]
+    public async Task Appends_entry_to_progress_md_after_review_run()
+    {
+        await using var fx = await Fixture.OpenAsync(withReview: true, withLockRegistry: true);
+        var task = await fx.CreateTaskAsync("Test task");
+        fx.Reviewer.QueueAllReviewersEmpty();
+        fx.Reviewer.QueueCoordinator(CoordinatorEmptyJson());
+
+        var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
+        var progressPath = Path.Combine(folder.Path, "progress.md");
+        var beforeContent = await File.ReadAllTextAsync(progressPath);
+
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
+
+        var afterContent = await File.ReadAllTextAsync(progressPath);
+        afterContent.Should().StartWith(beforeContent.TrimEnd()); // existing content preserved
+        afterContent.Should().Contain("(review)");
+        afterContent.Should().Contain("Ran `/task review`. applied=0 rejected=0 awaiting=0");
+        afterContent.Should().Contain("Build/test gate: green");
+    }
+
+    [Fact]
+    public async Task Works_without_lock_registry_too()
+    {
+        // Tests run without a LockRegistry; the handler must still write the report and update
+        // index.md / progress.md (it falls back to direct file writes).
+        await using var fx = await Fixture.OpenAsync(withReview: true, withLockRegistry: false);
+        var task = await fx.CreateTaskAsync("Test task");
+        fx.Reviewer.QueueAllReviewersEmpty();
+        fx.Reviewer.QueueCoordinator(CoordinatorEmptyJson());
+
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
+
+        var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
+        var indexAfter = await File.ReadAllTextAsync(Path.Combine(folder.Path, "index.md"));
+        indexAfter.Should().Contain("| review-");
+    }
+
+    // ---------- AppendIndexRow / AppendProgressEntry static helpers ----------
+
+    [Fact]
+    public void AppendIndexRow_adds_row_with_summary_and_date()
+    {
+        var existing = """
+            # Task index
+
+            | File | Description | Last updated |
+            |------|-------------|--------------|
+            | description.md | Full task spec | 2026-05-16 |
+            """;
+        var report = MakeReport(applied: 2, rejected: 1, awaiting: 4, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendIndexRow(existing, "review-2026-05-17T120000.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("| description.md | Full task spec | 2026-05-16 |");
+        updated.Should().Contain("| review-2026-05-17T120000.md | Review report (applied=2 rejected=1 awaiting=4) | 2026-05-17 |");
+    }
+
+    [Fact]
+    public void AppendIndexRow_handles_existing_without_trailing_newline()
+    {
+        var existing = "| description.md | x | 2026-05-16 |"; // no trailing newline
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 0, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendIndexRow(existing, "review-x.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("\n| review-x.md |");
+    }
+
+    [Fact]
+    public void AppendProgressEntry_inserts_h2_heading_and_summary_bullet()
+    {
+        var existing = """
+            # Progress
+
+            ## 2026-05-16
+
+            - Earlier work.
+            """;
+        var report = MakeReport(applied: 1, rejected: 0, awaiting: 2, gatePassed: true);
+
+        var updated = TaskCommandHandler.AppendProgressEntry(existing, "review-2026-05-17T120000.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("## 2026-05-17 (review)");
+        updated.Should().Contain("Ran `/task review`. applied=1 rejected=0 awaiting=2.");
+        updated.Should().Contain("Report: `review-2026-05-17T120000.md`");
+        updated.Should().Contain("Build/test gate: green");
+    }
+
+    [Fact]
+    public void AppendProgressEntry_surfaces_gate_reversion_reason()
+    {
+        var report = MakeReport(applied: 0, rejected: 0, awaiting: 1, gatePassed: false, gateReason: "tests broke");
+
+        var updated = TaskCommandHandler.AppendProgressEntry("# Progress", "review-x.md", report, new DateOnly(2026, 5, 17));
+
+        updated.Should().Contain("Build/test gate: reverted (tests broke)");
+    }
+
+    [Fact]
     public async Task Prints_summary_with_applied_rejected_awaiting_counts()
     {
         await using var fx = await Fixture.OpenAsync(withReview: true);
@@ -178,6 +298,25 @@ public class TaskCommandHandlerReviewTests
         { "reviewer": "{{reviewer}}", "findings": [], "notes": null }
         """;
 
+    private static ReviewReport MakeReport(int applied, int rejected, int awaiting, bool gatePassed, string? gateReason = null) => new(
+        TaskId: 42,
+        TaskTitle: "Test",
+        RanAt: new DateTimeOffset(2026, 5, 17, 12, 0, 0, TimeSpan.Zero),
+        ScopeDescription: "test scope",
+        ExcludedFiles: Array.Empty<string>(),
+        Applied: Enumerable.Range(0, applied).Select(i => MakeBlankFinding($"a-{i}")).ToList(),
+        Rejected: Enumerable.Range(0, rejected).Select(i => MakeBlankFinding($"r-{i}")).ToList(),
+        Awaiting: Enumerable.Range(0, awaiting).Select(i => MakeBlankFinding($"w-{i}")).ToList(),
+        BuildTestGatePassed: gatePassed,
+        GateReversionReason: gateReason,
+        RawReviewerOutputs: new Dictionary<string, string>());
+
+    private static ConsolidatedFinding MakeBlankFinding(string id) => new(
+        Id: id, Severity: Severity.Warning, Title: "t", Summary: "s", Why: null,
+        File: null, LineStart: null, LineEnd: null, SuggestedFix: null, Confidence: 0.5,
+        Reviewers: Array.Empty<string>(), Disposition: Disposition.NeedsUser,
+        DispositionConfidence: 0.5, RejectionReason: null, ConsolidatorNote: null);
+
     private sealed class Fixture : IAsyncDisposable
     {
         public required TaskStore Store { get; init; }
@@ -190,7 +329,7 @@ public class TaskCommandHandlerReviewTests
 
         public string Captured => Writer.ToString();
 
-        public static async Task<Fixture> OpenAsync(bool withReview, TextReader? input = null)
+        public static async Task<Fixture> OpenAsync(bool withReview, TextReader? input = null, bool withLockRegistry = false)
         {
             var temp = Path.Combine(Path.GetTempPath(), $"cp-taskreview-{Guid.NewGuid():N}");
             var home = Path.Combine(temp, "repo");
@@ -205,6 +344,7 @@ public class TaskCommandHandlerReviewTests
 
             var writer = new StringWriter();
             var reviewer = new FakeReviewer();
+            var lockRegistry = withLockRegistry ? new LockRegistry() : null;
 
             TaskCommandHandler handler;
             if (withReview)
@@ -215,12 +355,14 @@ public class TaskCommandHandlerReviewTests
                     service, writer, writeLock: null,
                     reviewService: reviewService,
                     scopeResolver: scopeResolver,
-                    input: input);
+                    input: input,
+                    lockRegistry: lockRegistry);
             }
             else
             {
                 handler = new TaskCommandHandler(service, writer, writeLock: null,
-                    reviewService: null, scopeResolver: null, input: input);
+                    reviewService: null, scopeResolver: null, input: input,
+                    lockRegistry: lockRegistry);
             }
 
             return new Fixture

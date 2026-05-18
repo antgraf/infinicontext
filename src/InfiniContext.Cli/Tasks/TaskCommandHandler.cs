@@ -1,3 +1,4 @@
+using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Review;
 using InfiniContext.Core.Tasks;
 
@@ -17,6 +18,8 @@ internal sealed class TaskCommandHandler
     private readonly ScopeResolver? _scopeResolver;
     private readonly TextReader? _input;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly LockRegistry? _lockRegistry;
+    private readonly string _lockOwnerId = "host-review-" + Guid.NewGuid().ToString("N")[..8];
 
     public TaskCommandHandler(
         TaskService service,
@@ -25,7 +28,8 @@ internal sealed class TaskCommandHandler
         ReviewService? reviewService = null,
         ScopeResolver? scopeResolver = null,
         TextReader? input = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        LockRegistry? lockRegistry = null)
     {
         _service = service ?? throw new ArgumentNullException(nameof(service));
         _output = output ?? throw new ArgumentNullException(nameof(output));
@@ -34,6 +38,7 @@ internal sealed class TaskCommandHandler
         _scopeResolver = scopeResolver;
         _input = input;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _lockRegistry = lockRegistry;
     }
 
     /// <summary>
@@ -318,13 +323,92 @@ internal sealed class TaskCommandHandler
         var reportPath = Path.Combine(folder.Path, reportName);
         await File.WriteAllTextAsync(reportPath, rendered, ct).ConfigureAwait(false);
 
+        // Append a row to index.md + an entry to progress.md so the artifact is discoverable
+        // without manual updates. Both go through the lock contract when one is configured;
+        // otherwise we write directly (tests run without a LockRegistry).
+        var today = DateOnly.FromDateTime(_clock().UtcDateTime);
+        await UpdateFileUnderLockAsync(
+            Path.Combine(folder.Path, "index.md"),
+            existing => AppendIndexRow(existing, reportName, report, today),
+            ct).ConfigureAwait(false);
+        await UpdateFileUnderLockAsync(
+            Path.Combine(folder.Path, "progress.md"),
+            existing => AppendProgressEntry(existing, reportName, report, today),
+            ct).ConfigureAwait(false);
+
         Write($"[task review] done.\n");
         Write($"              applied={report.Applied.Count} rejected={report.Rejected.Count} awaiting={report.Awaiting.Count}\n");
         Write($"              report: {reportPath}\n");
         if (!report.BuildTestGatePassed)
             Write($"              build/test gate reverted: {report.GateReversionReason}\n");
-        // index.md / progress.md updates under the lock contract are a v1 follow-up - users
-        // currently have to add a row manually if they want the artifact tracked in the index.
+    }
+
+    /// <summary>
+    /// Read <paramref name="filePath"/>, apply <paramref name="transform"/>, write the result.
+    /// Wraps the read+write in <see cref="LockRegistry"/> acquire/release when a registry is
+    /// configured; otherwise writes directly (test code path). A lock-acquire timeout is
+    /// surfaced to the user but isn't fatal тАФ the review report itself is already on disk.
+    /// </summary>
+    private async Task UpdateFileUnderLockAsync(string filePath, Func<string, string> transform, CancellationToken ct)
+    {
+        if (_lockRegistry is null)
+        {
+            var existing = File.Exists(filePath) ? await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false) : "";
+            await File.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
+            return;
+        }
+
+        var outcome = await _lockRegistry.AcquireAsync(
+            filePath, _lockOwnerId, ttl: TimeSpan.FromSeconds(30), maxWait: TimeSpan.FromSeconds(5), ct)
+            .ConfigureAwait(false);
+        if (!outcome.Ok || outcome.Token is null)
+        {
+            Write($"[task review] warning: could not acquire lock on {Path.GetFileName(filePath)}; the artifact is still on disk but {Path.GetFileName(filePath)} was not updated.\n");
+            return;
+        }
+        try
+        {
+            var existing = File.Exists(filePath) ? await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false) : "";
+            await File.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lockRegistry.Release(outcome.Token);
+        }
+    }
+
+    /// <summary>
+    /// Append a row to the task's <c>index.md</c> table. Assumes the table extends to the file's
+    /// end (the v1 convention; the drift detector flags any deviation). The row is added on a
+    /// new line after the existing content.
+    /// </summary>
+    internal static string AppendIndexRow(string existing, string reportName, ReviewReport report, DateOnly today)
+    {
+        var summary = $"applied={report.Applied.Count} rejected={report.Rejected.Count} awaiting={report.Awaiting.Count}";
+        var row = $"| {reportName} | Review report ({summary}) | {today:yyyy-MM-dd} |";
+        var sb = new System.Text.StringBuilder(existing);
+        if (existing.Length > 0 && !existing.EndsWith('\n')) sb.Append('\n');
+        sb.Append(row).Append('\n');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Append a short entry to the task's <c>progress.md</c>. Always opens a fresh heading rather
+    /// than parsing for an existing one for today тАФ keeps the writes additive and side-effect-free.
+    /// </summary>
+    internal static string AppendProgressEntry(string existing, string reportName, ReviewReport report, DateOnly today)
+    {
+        var summary = $"applied={report.Applied.Count} rejected={report.Rejected.Count} awaiting={report.Awaiting.Count}";
+        var gateStatus = report.BuildTestGatePassed
+            ? "green"
+            : $"reverted ({report.GateReversionReason ?? "no detail"})";
+        var sb = new System.Text.StringBuilder(existing);
+        if (existing.Length > 0 && !existing.EndsWith('\n')) sb.Append('\n');
+        if (existing.Length > 0 && !existing.EndsWith("\n\n")) sb.Append('\n');
+        sb.Append("## ").Append(today.ToString("yyyy-MM-dd")).AppendLine(" (review)");
+        sb.AppendLine();
+        sb.Append("- Ran `/task review`. ").Append(summary).Append(". Report: `").Append(reportName).Append("`. Build/test gate: ").Append(gateStatus).AppendLine(".");
+        return sb.ToString();
     }
 
     private static async Task<string> ReadIfExistsAsync(string path, CancellationToken ct)

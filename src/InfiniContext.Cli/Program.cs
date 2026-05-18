@@ -130,6 +130,14 @@ var consoleWriteLock = new object();
 // degrade to a "subsystem unavailable" message but the rest of the host (sessions, approvals)
 // keeps working.
 await using var taskStore = await TryOpenTaskStoreAsync(settings, logging.Logger).ConfigureAwait(false);
+
+// Phase 7: one host-scope LockRegistry shared by every spawned session. ApprovalChannel uses
+// the per-session pipe name as the lock owner id, so locks are reclaimed automatically when
+// each session's channel disposes. Constructed early so the TaskCommandHandler's review path
+// (which updates index.md + progress.md under the lock contract after writing the report) and
+// the IssueService below can both share it.
+var lockRegistry = new LockRegistry(logger: logging.Logger);
+
 TaskCommandHandler? taskCommandHandler = null;
 IssueCommandHandler? issueCommandHandler = null;
 TaskService? taskService = null;
@@ -173,7 +181,8 @@ if (taskStore is not null)
             consoleWriteLock,
             reviewService: reviewService,
             scopeResolver: scopeResolver,
-            input: Console.In);
+            input: Console.In,
+            lockRegistry: lockRegistry);
         logging.Logger.Information("tasks: subsystem ready (db={DbPath}); review: ready", settings.Tasks.ResolvedDbPath());
     }
     catch (Exception ex)
@@ -189,10 +198,6 @@ if (taskStore is not null)
 // Single-shot and the SDK back ends don't implement IAsyncDisposable, so the cast yields null
 // and the await using is a no-op.
 await using var _lightModelForTasksDisposable = lightModelForTasks as IAsyncDisposable;
-// Phase 7: one host-scope LockRegistry shared by every spawned session. ApprovalChannel uses
-// the per-session pipe name as the lock owner id, so locks are reclaimed automatically when
-// each session's channel disposes.
-var lockRegistry = new LockRegistry(logger: logging.Logger);
 
 // IssueService is constructed after the lock registry so issues.md writes flow through the
 // same serialization the agent's MCP-side writes do. It's optional: when the task subsystem is

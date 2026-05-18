@@ -992,3 +992,69 @@ Resume at step 12 (Dogfood). Behavioral pass, not code unless prompt-tightening 
 6. After 2-3 iterations, the surface is shippable: commit a "Step 12: prompt tightening from dogfood" commit per iteration, then declare the review-gate feature v1 complete and update `docs/stage2/todo.md` section B accordingly.
 
 If during dogfood the v1-deferred items become visibly painful (glob expansion, lock-contract update of index.md, separate coordinator model), promote them out of "follow-up" and into immediate post-12 work. Otherwise they stay deferred.
+
+## 2026-05-17 (review-gate impl session - v1 follow-up: lock-contract update of index.md + progress.md)
+
+User pushed the previous 10 commits and asked for a v1 follow-up. Shipped the lock-contract update so the review report is auto-discoverable in the task's `index.md` and a short summary lands in `progress.md` - clears the v1 follow-up I'd filed "lock-contract update of index.md + progress.md after writing report".
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs`:
+  - New optional ctor param `LockRegistry? lockRegistry`. Stored as `_lockRegistry`; per-instance `_lockOwnerId` = `"host-review-<8-hex>"`.
+  - `HandleReviewAsync` now, after writing `review-<timestamp>.md`, calls two new helpers: append a row to `index.md` and append an entry to `progress.md`. Both go through `UpdateFileUnderLockAsync`.
+  - `UpdateFileUnderLockAsync(path, transform, ct)`: when `_lockRegistry` is set, acquires (30s TTL, 5s max wait), reads, applies transform, writes, releases. When the registry is null (tests), writes directly. Lock-acquire timeout surfaces a soft warning to the user but isn't fatal - the review report itself is already on disk.
+  - `AppendIndexRow(existing, reportName, report, today)` static internal helper: appends `| <name> | Review report (applied=A rejected=R awaiting=W) | <date> |` to the existing markdown. Handles missing trailing newline.
+  - `AppendProgressEntry(existing, reportName, report, today)` static internal helper: appends a fresh `## YYYY-MM-DD (review)` heading + a bullet summarizing applied/rejected/awaiting counts and the build/test gate status. Always opens a fresh heading rather than parsing for an existing one for today; keeps writes additive.
+
+Program:
+
+- `src/InfiniContext.Cli/Program.cs`:
+  - Moved `var lockRegistry = new LockRegistry(logger: logging.Logger);` up to right after `taskStore` is opened (was constructed later, after the task subsystem block). This is the host-scope singleton; both the review path and the issue path share it.
+  - Threaded `lockRegistry` into the `TaskCommandHandler` ctor.
+  - Removed the duplicate construction below the task block.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs`:
+  - `Fixture.OpenAsync` extended with `bool withLockRegistry = false` knob; constructs a real `LockRegistry` when requested.
+  - 7 new tests:
+    - `Appends_row_to_index_md_after_review_run` - end-to-end through the handler (with `withLockRegistry: true`); verifies `| review-` row + the summary substring appear and that existing content is preserved.
+    - `Appends_entry_to_progress_md_after_review_run` - end-to-end; verifies `## YYYY-MM-DD (review)` heading + the summary bullet appear.
+    - `Works_without_lock_registry_too` - the `_lockRegistry is null` fallback path; review still completes and index.md still gets the row.
+    - `AppendIndexRow_adds_row_with_summary_and_date` - pure unit test on the static helper.
+    - `AppendIndexRow_handles_existing_without_trailing_newline` - boundary case.
+    - `AppendProgressEntry_inserts_h2_heading_and_summary_bullet` - pure unit test.
+    - `AppendProgressEntry_surfaces_gate_reversion_reason` - branch when build/test gate failed.
+  - New `MakeReport` + `MakeBlankFinding` helpers in the test class so we can construct `ReviewReport` instances with the right shape.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **874/877 passing** (3 macOS-only skips). No regressions.
+- `dotnet format` - green on Cli and Tests.
+
+### Status
+
+12-step plan: 1-11 done in code; 12 (dogfood) is the user-driven behavioral pass.
+
+V1 follow-ups status:
+
+- [x] **Lock-contract update of index.md + progress.md** - shipped this session.
+- [ ] Glob expansion for `--scope` (currently splits on `;` literally).
+- [ ] Wire `CoordinatorModel` end-to-end (needs ReviewService refactor to split reviewer/coordinator channels).
+- [ ] Wire `ConfidenceFloor` + `AutoApplyMax*` as host-side defensive checks in AutoApplyExecutor.
+- [ ] Wire `SkipBuildTestGate` as a knob on AutoApplyExecutor.
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (new lock-aware update helpers + index/progress writes)
+- `src/InfiniContext.Cli/Program.cs` (moved LockRegistry up; threaded into TaskCommandHandler)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs` (7 new tests + Fixture knob + MakeReport helper)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 3 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - lock-contract update of index.md + progress.md.`
