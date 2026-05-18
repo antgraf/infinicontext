@@ -151,11 +151,16 @@ if (taskStore is not null)
         taskService = new TaskService(taskStore, lightModelForTasks);
 
         // Review subsystem wiring. Reviewer agent uses settings.review.reviewerModel (null falls
-        // back to the user's main model id); auto-apply gates through dotnet build / dotnet test.
+        // back to the user's main model id); coordinator uses settings.review.coordinatorModel
+        // (null falls back to the reviewer model). When both null, all six agents share the main
+        // model. Auto-apply gates through dotnet build / dotnet test.
         var reviewSettings = settings.Review;
         var reviewerModelId = string.IsNullOrWhiteSpace(reviewSettings.ReviewerModel)
             ? settings.Models.Main.Id
             : reviewSettings.ReviewerModel!;
+        var coordinatorModelId = string.IsNullOrWhiteSpace(reviewSettings.CoordinatorModel)
+            ? reviewerModelId
+            : reviewSettings.CoordinatorModel!;
         var reviewerAgent = new InfiniContext.Core.Review.CliReviewerAgentService(
             new InfiniContext.Core.Review.ReviewerAgentOptions
             {
@@ -164,6 +169,18 @@ if (taskStore is not null)
             },
             supervisor: supervisor,
             logger: logging.Logger);
+        // Reuse the same instance when the model ids match: avoids spinning two identical CLI
+        // children's worth of resources for what is the common case (no override configured).
+        var coordinatorAgent = string.Equals(coordinatorModelId, reviewerModelId, StringComparison.Ordinal)
+            ? reviewerAgent
+            : new InfiniContext.Core.Review.CliReviewerAgentService(
+                new InfiniContext.Core.Review.ReviewerAgentOptions
+                {
+                    Model = coordinatorModelId,
+                    InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds,
+                },
+                supervisor: supervisor,
+                logger: logging.Logger);
         var autoApplyExecutor = new InfiniContext.Core.Review.AutoApplyExecutor(
             new InfiniContext.Core.Review.ProcessBuildTestRunner(),
             new InfiniContext.Core.Review.AutoApplyOptions
@@ -176,6 +193,7 @@ if (taskStore is not null)
             logger: logging.Logger);
         var reviewService = new InfiniContext.Core.Review.ReviewService(
             reviewerAgent,
+            coordinatorAgent,
             autoApplyExecutor,
             logger: logging.Logger);
         var scopeResolver = new InfiniContext.Core.Review.ScopeResolver(

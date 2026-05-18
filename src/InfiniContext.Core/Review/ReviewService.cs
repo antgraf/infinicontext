@@ -20,20 +20,45 @@ namespace InfiniContext.Core.Review;
 public sealed class ReviewService
 {
     private readonly IReviewerAgentService _reviewer;
+    private readonly IReviewerAgentService _coordinator;
     private readonly IAutoApplyExecutor? _autoApply;
     private readonly Func<DateTimeOffset> _clock;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// Construct a review orchestrator with separate reviewer and coordinator channels.
+    /// <para>
+    /// The coordinator gets its own <see cref="IReviewerAgentService"/> so the host can drive
+    /// it with a different model than the reviewers (per <c>ReviewSettings.CoordinatorModel</c>).
+    /// When the two channels should use the same model, callers pass the same instance for
+    /// both <paramref name="reviewer"/> and <paramref name="coordinator"/>.
+    /// </para>
+    /// </summary>
     public ReviewService(
         IReviewerAgentService reviewer,
+        IReviewerAgentService coordinator,
         IAutoApplyExecutor? autoApply = null,
         Func<DateTimeOffset>? clock = null,
         ILogger? logger = null)
     {
         _reviewer = reviewer ?? throw new ArgumentNullException(nameof(reviewer));
+        _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _autoApply = autoApply;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _logger = logger ?? Log.ForContext<ReviewService>();
+    }
+
+    /// <summary>
+    /// Convenience ctor: same agent service handles both reviewer and coordinator roles.
+    /// Equivalent to passing <paramref name="reviewer"/> twice to the primary ctor.
+    /// </summary>
+    public ReviewService(
+        IReviewerAgentService reviewer,
+        IAutoApplyExecutor? autoApply = null,
+        Func<DateTimeOffset>? clock = null,
+        ILogger? logger = null)
+        : this(reviewer, reviewer, autoApply, clock, logger)
+    {
     }
 
     public async Task<ReviewReport> RunReviewAsync(ReviewRequest request, ReviewOptions options, CancellationToken ct)
@@ -208,7 +233,10 @@ public sealed class ReviewService
         {
             var system = ReviewerPrompts.SystemFor(ReviewerRole.Coordinator);
             var user = ReviewerPrompts.Fill(ReviewerPrompts.UserTemplateFor(ReviewerRole.Coordinator), slots);
-            var text = await _reviewer.RunOneShotAsync(system, user, ct).ConfigureAwait(false);
+            // Coordinator goes through its own channel so ReviewSettings.CoordinatorModel can
+            // drive a different model than the reviewers (e.g. a stronger reasoning model for
+            // dedup/disposition while reviewers run on a cheaper tier).
+            var text = await _coordinator.RunOneShotAsync(system, user, ct).ConfigureAwait(false);
             var parsed = FindingJson.TryParseConsolidatedReport(text);
             return new CoordinatorCallResult(parsed, text);
         }

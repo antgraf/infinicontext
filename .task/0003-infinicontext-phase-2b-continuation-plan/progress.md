@@ -1583,3 +1583,76 @@ Two remaining items, in priority order:
 
 Dogfood first - real findings are cheaper feedback than guessing at the prompts; CoordinatorModel can wait until after dogfood confirms whether a separate coordinator model is actually wanted.
 
+## 2026-05-17 (review-gate impl session - CoordinatorModel channel split)
+
+User said "push and continue" after the glob-expansion push (commit `fd3288b`). Shipped the last code-side v1 follow-up: `ReviewSettings.CoordinatorModel` now drives a separate `IReviewerAgentService` for the coordinator role instead of silently no-opping.
+
+### Design
+
+Added a second `IReviewerAgentService _coordinator` field to `ReviewService` and routed the coordinator call (`RunCoordinatorAsync`) through it. The primary ctor now takes two channels explicitly: `(reviewer, coordinator, autoApply?, clock?, logger?)`. A convenience ctor `(reviewer, autoApply?, clock?, logger?)` forwards to `(reviewer, reviewer, ...)` so every existing test site and call still compiles.
+
+`Program.cs` honors `settings.review.coordinatorModel`:
+
+- Null/blank coordinator model тЖТ reuse the reviewer's `CliReviewerAgentService` instance for both channels (the common case). Avoids spinning a second identical child process for no benefit.
+- Non-null coordinator model that differs from the reviewer model тЖТ construct a second `CliReviewerAgentService` with its own `ReviewerAgentOptions { Model = coordinatorModelId }`.
+
+This closes the last silently-no-op review setting; everything in `ReviewSettings` (apart from `SkipBuildTestGate` which is tests-only) now has runtime effect.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/ReviewService.cs` - new `_coordinator` field; primary ctor takes both channels; convenience ctor forwards `(reviewer, reviewer, ...)` for backwards compat; `RunCoordinatorAsync` uses `_coordinator.RunOneShotAsync` (the only call-site change inside the orchestrator). Doc-comment on the new ctor explains the rationale.
+
+CLI:
+
+- `src/InfiniContext.Cli/Program.cs` - added `coordinatorModelId` resolution from `reviewSettings.CoordinatorModel ?? reviewerModelId`. When the two ids match by ordinal compare, reuses the reviewer `CliReviewerAgentService` instance. Otherwise constructs a second `CliReviewerAgentService` with the coordinator model. `new ReviewService(reviewerAgent, coordinatorAgent, autoApplyExecutor, ...)` uses the primary two-channel ctor.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/ReviewServiceTests.cs` - 3 new tests:
+  - `RunReviewAsync_routes_coordinator_through_the_coordinator_channel`: two distinct `FakeReviewer` instances; verifies the reviewer instance receives exactly 5 reviewer-role calls (none for coordinator), the coordinator instance receives exactly 1 coordinator-role call, and the report uses the coordinator's response.
+  - `RunReviewAsync_passing_same_instance_to_both_channels_still_works`: single-arg ctor path; verifies the one instance sees all 6 calls.
+  - `Ctor_throws_when_either_channel_is_null`: both ctor parameters are validated; param names check out.
+
+All 18 prior `ReviewServiceTests` cases unchanged тАФ the convenience ctor preserves the single-arg semantics they used.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **946/949 passing** (3 macOS-only skips). +3 new tests in `ReviewServiceTests` (now 21 in that class); no regressions on the 943-test baseline.
+- `dotnet format InfiniContext.slnx --verify-no-changes` - green.
+
+### What this leaves
+
+The `/task review` v1 follow-ups are now ALL shipped in code:
+
+- [x] Lock-contract update of `index.md` + `progress.md` (prior session).
+- [x] CRLF/LF normalization + baseline-green gate (prior session).
+- [x] Cancellation-safe revert (prior session).
+- [x] Wire `AutoApply*` settings end-to-end (prior session).
+- [x] Secret-file exclusion in `ScopeResolver` (prior session).
+- [x] Same-day `## YYYY-MM-DD (review)` heading collapse in `progress.md` (prior session).
+- [x] Empty-scope short-circuit (prior session).
+- [x] Glob expansion for `--scope` (`fd3288b`).
+- [x] `CoordinatorModel` channel split (this session).
+
+The only remaining 12-step item is **step 12: Dogfood** - a user-driven behavioral pass (run `/task review 0003 --yes`, inspect findings, tighten prompts if needed). That is not a code task and can't be done from inside this conversation.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ReviewService.cs` (two-channel ctor + RunCoordinatorAsync call-site swap)
+- `src/InfiniContext.Cli/Program.cs` (CoordinatorModel resolution + second CliReviewerAgentService when ids differ)
+- `tests/InfiniContext.Tests/Review/ReviewServiceTests.cs` (3 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 3 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - CoordinatorModel channel split.`
+
+### Handoff to next session
+
+The only remaining item is the user-driven dogfood pass. The /task review surface is feature-complete from a code perspective; the next iteration is behavioral (run it, observe, tighten `ReviewerPrompts.cs` strings if false-positives surface). No code work is queued.
+

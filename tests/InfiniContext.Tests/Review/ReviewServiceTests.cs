@@ -288,6 +288,63 @@ public class ReviewServiceTests
         report.Awaiting.Should().ContainSingle(f => f.Id == "code-003");
     }
 
+    // ---------- Coordinator channel split (CoordinatorModel routing) ----------
+
+    [Fact]
+    public async Task RunReviewAsync_routes_coordinator_through_the_coordinator_channel()
+    {
+        var reviewer = AllReviewersEmpty();
+        var coordinator = new FakeReviewer();
+        coordinator.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson(MakeNeedsUserFinding("code-001"));
+
+        var sut = new ReviewService(reviewer, coordinator);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+
+        // Reviewer channel: exactly the five reviewer roles, never the coordinator.
+        reviewer.Calls.Should().HaveCount(5);
+        reviewer.Calls.Select(c => c.role).Should().BeEquivalentTo(new[]
+        {
+            ReviewerRole.Completeness,
+            ReviewerRole.Architecture,
+            ReviewerRole.CodeLogic,
+            ReviewerRole.Tests,
+            ReviewerRole.Security,
+        });
+        reviewer.Calls.Should().NotContain(c => c.role == ReviewerRole.Coordinator);
+
+        // Coordinator channel: exactly one Coordinator-role call, never a reviewer-role call.
+        coordinator.Calls.Should().ContainSingle();
+        coordinator.Calls[0].role.Should().Be(ReviewerRole.Coordinator);
+
+        report.Awaiting.Should().ContainSingle(f => f.Id == "code-001");
+    }
+
+    [Fact]
+    public async Task RunReviewAsync_passing_same_instance_to_both_channels_still_works()
+    {
+        // The convenience ctor (single-arg) forwards to ctor(reviewer, reviewer, ...) тАФ verify
+        // the single-instance path keeps prior semantics: one instance sees all six calls.
+        var both = AllReviewersEmpty();
+        both.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();
+
+        var sut = new ReviewService(both);
+        await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+
+        both.Calls.Should().HaveCount(6);
+        both.Calls.Should().Contain(c => c.role == ReviewerRole.Coordinator);
+    }
+
+    [Fact]
+    public void Ctor_throws_when_either_channel_is_null()
+    {
+        var fake = new FakeReviewer();
+        Action a = () => new ReviewService(reviewer: null!, coordinator: fake);
+        Action b = () => new ReviewService(reviewer: fake, coordinator: null!);
+
+        a.Should().Throw<ArgumentNullException>().WithParameterName("reviewer");
+        b.Should().Throw<ArgumentNullException>().WithParameterName("coordinator");
+    }
+
     // ---------- Helpers ----------
 
     private static ReviewRequest MakeRequest() => new(
