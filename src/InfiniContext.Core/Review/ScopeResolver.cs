@@ -169,6 +169,62 @@ public sealed class ScopeResolver
         return s.Contains('/') || s.Contains('\\');
     }
 
+    /// <summary>
+    /// Conservative heuristic for "this path is almost certainly a secret-bearing file".
+    /// Match is on the FILENAME, not the full path, so a project laying out secrets under
+    /// <c>config/prod/.env</c> still gets caught. Public for tests; not part of the resolver's
+    /// behavioural contract beyond the documented exclusion.
+    /// </summary>
+    public static bool LooksLikeSecret(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return false;
+        var fileName = Path.GetFileName(relativePath.Replace('\\', '/'));
+        if (string.IsNullOrEmpty(fileName)) return false;
+
+        foreach (var name in SecretFilenames)
+            if (fileName.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+
+        foreach (var prefix in SecretFilenamePrefixes)
+            if (fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var ext = Path.GetExtension(fileName);
+        if (!string.IsNullOrEmpty(ext))
+        {
+            foreach (var e in SecretExtensions)
+                if (ext.Equals(e, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Filenames that are always secrets, regardless of extension.</summary>
+    private static readonly string[] SecretFilenames =
+    [
+        ".env",
+        "settings.user.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+    ];
+
+    /// <summary>Filename prefixes that flag the file as a secret (e.g. <c>.env.local</c>, <c>.env.production</c>).</summary>
+    private static readonly string[] SecretFilenamePrefixes =
+    [
+        ".env.",
+    ];
+
+    /// <summary>File extensions that flag the file as a secret.</summary>
+    private static readonly string[] SecretExtensions =
+    [
+        ".key",
+        ".pem",
+        ".pfx",
+        ".p12",
+        ".secret",
+        ".secrets",
+    ];
+
     private static StringComparer PathComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -194,6 +250,18 @@ public sealed class ScopeResolver
             if (string.IsNullOrEmpty(trimmed))
             {
                 excluded.Add(new ExcludedFile(rel, "empty path"));
+                continue;
+            }
+
+            // Secret-file guard: refuse to read paths that match a conservative list of
+            // well-known secret file shapes (.env / .env.* / *.key / *.pem / *.pfx /
+            // *.secret / *.secrets / id_rsa / id_ed25519 / settings.user.json). The check
+            // happens BEFORE the file is opened so a `.env` from progress.md "Files touched"
+            // never reaches the reviewer prompts or the on-disk report. The same check applies
+            // to --scope override paths (callers route through ReadFilesAsync either way).
+            if (LooksLikeSecret(trimmed))
+            {
+                excluded.Add(new ExcludedFile(rel, "matches secret-file pattern (not loaded into reviewer prompts)"));
                 continue;
             }
 

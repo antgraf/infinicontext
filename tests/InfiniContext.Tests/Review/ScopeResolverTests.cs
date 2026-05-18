@@ -204,6 +204,103 @@ public class ScopeResolverTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
+    // ---------- Secret-file exclusion ----------
+
+    [Theory]
+    [InlineData("src/.env")]
+    [InlineData(".env")]
+    [InlineData("config/.env.production")]
+    [InlineData("config/.env.local")]
+    [InlineData("certs/server.key")]
+    [InlineData("ca.pem")]
+    [InlineData("client.pfx")]
+    [InlineData("api.secret")]
+    [InlineData("creds.secrets")]
+    [InlineData("settings.user.json")]
+    [InlineData(".ssh/id_rsa")]
+    [InlineData("config/id_ed25519")]
+    public void LooksLikeSecret_flags_common_secret_paths(string path)
+    {
+        ScopeResolver.LooksLikeSecret(path).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("src/Foo.cs")]
+    [InlineData("key.cs")]              // .cs not in the list
+    [InlineData("env.txt")]             // no leading dot
+    [InlineData("settings.json")]       // user-flavoured variant only
+    [InlineData("README.md")]
+    [InlineData("src/keyboard.cs")]
+    [InlineData("")]                    // empty input
+    public void LooksLikeSecret_does_not_flag_innocuous_paths(string path)
+    {
+        ScopeResolver.LooksLikeSecret(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_excludes_secret_files_from_the_diff_result()
+    {
+        using var fx = new RepoFixture();
+        // The files exist on disk; the resolver should still refuse to read them.
+        fx.WriteFile("src/Foo.cs", "// normal");
+        fx.WriteFile(".env", "API_KEY=hunter2");
+        fx.WriteFile("certs/server.key", "-----BEGIN PRIVATE KEY-----");
+
+        var git = new FakeGitRunner
+        {
+            Head = "h",
+            DiffResult = new[] { "src/Foo.cs", ".env", "certs/server.key" },
+        };
+        var sut = new ScopeResolver(git);
+
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
+            scopeOverridePaths: null, progressMdPath: null);
+
+        scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Foo.cs");
+        scope.ExcludedFiles.Should().HaveCount(2);
+        scope.ExcludedFiles.Should().AllSatisfy(e => e.Reason.Should().Contain("secret-file pattern"));
+    }
+
+    [Fact]
+    public async Task ResolveAsync_excludes_secrets_even_when_passed_via_scope_override()
+    {
+        // A user explicitly typing `--scope .env` should NOT be able to bypass the secret guard.
+        using var fx = new RepoFixture();
+        fx.WriteFile(".env", "API_KEY=hunter2");
+        fx.WriteFile("src/Foo.cs", "// normal");
+
+        var sut = new ScopeResolver(new FakeGitRunner());
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "ignored" + new string('0', 33),
+            scopeOverridePaths: new[] { ".env", "src/Foo.cs" }, progressMdPath: null);
+
+        scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Foo.cs");
+        scope.ExcludedFiles.Should().ContainSingle(e => e.RelativePath == ".env"
+            && e.Reason.Contains("secret-file pattern"));
+    }
+
+    [Fact]
+    public async Task ResolveAsync_secret_file_content_is_never_read_from_disk()
+    {
+        // Even if the file exists on disk and is below the byte cap, the resolver should not
+        // load its content. The check happens before File.ReadAllTextAsync.
+        using var fx = new RepoFixture();
+        fx.WriteFile(".env", "API_KEY=this_should_never_appear_in_the_scope");
+
+        var git = new FakeGitRunner
+        {
+            Head = "h",
+            DiffResult = new[] { ".env" },
+        };
+        var sut = new ScopeResolver(git);
+
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
+            scopeOverridePaths: null, progressMdPath: null);
+
+        scope.Files.Should().BeEmpty();
+        // Sanity: no ReviewFile carries the secret content.
+        scope.Files.Should().NotContain(f => f.Content.Contains("hunter2") || f.Content.Contains("API_KEY"));
+    }
+
     // ---------- ParseFilesTouched ----------
 
     [Fact]

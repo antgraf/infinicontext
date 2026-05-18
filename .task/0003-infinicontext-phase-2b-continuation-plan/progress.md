@@ -1229,3 +1229,72 @@ Tests:
 ### Not committed yet
 
 The 4 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - wire AutoApply settings end-to-end.`
+
+## 2026-05-17 (review-gate impl session - secret-file exclusion in ScopeResolver)
+
+User said "continue". Picked the next follow-up: defense against secret-bearing files leaking into reviewer prompts and the on-disk report. This was Critical-adjacent in the /review pass (issue #4) - the report's `<details>` blocks dump raw reviewer outputs verbatim, so any secret pulled into a reviewer's prompt lands on disk and travels with the artifact.
+
+### What's guarded
+
+`ScopeResolver.LooksLikeSecret(relativePath)` flags paths whose FILENAME (not full path - so `config/prod/.env` is also caught) matches a conservative list:
+
+- **Exact filenames:** `.env`, `settings.user.json`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`.
+- **Filename prefixes:** `.env.` (catches `.env.local`, `.env.production`, etc.).
+- **Extensions:** `.key`, `.pem`, `.pfx`, `.p12`, `.secret`, `.secrets`.
+
+The check happens in `ReadFilesAsync` AFTER the empty-path guard and BEFORE `Path.GetFullPath` / `File.ReadAllTextAsync`. Matching paths go to `ExcludedFiles` with reason `"matches secret-file pattern (not loaded into reviewer prompts)"`. The file's content is never read from disk - even if it exists and is under the byte cap.
+
+### Path coverage
+
+- **Diff-based scope:** `git diff <base>..HEAD` could surface a `.env` if the user accidentally tracked one; resolver excludes.
+- **progress.md "Files touched":** parsed via `ParseFilesTouched`, then unioned with the diff result. Goes through `ReadFilesAsync`, excluded the same way.
+- **`--scope` override:** the CLI flag CAN'T bypass the guard. A user explicitly typing `--scope .env` still hits `ReadFilesAsync` and the secret file is excluded with the reason. Explicit test verifies this.
+
+The exclusion does NOT depend on git's `.gitignore` - we don't shell out to `git check-ignore`. Heuristic-only for v1.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs`:
+  - New public static `LooksLikeSecret(relativePath)` - filename-based heuristic returning true for any path matching the secret-name / secret-prefix / secret-extension lists.
+  - Three private static arrays: `SecretFilenames`, `SecretFilenamePrefixes`, `SecretExtensions`. Conservative defaults.
+  - `ReadFilesAsync`: new early-exit branch right after the empty-path check. When `LooksLikeSecret(trimmed)` is true, the path goes straight to `ExcludedFiles` with the secret-pattern reason and the loop continues without reading.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs`:
+  - 12 theory inlines for `LooksLikeSecret` positives: `.env` in various positions, `.env.production`, `.env.local`, `*.key`, `*.pem`, `*.pfx`, `*.secret`, `*.secrets`, `settings.user.json`, `id_rsa`, `id_ed25519`.
+  - 7 theory inlines for `LooksLikeSecret` negatives: `src/Foo.cs`, `key.cs` (extension only matches when the file's extension is exactly `.key`), `env.txt` (no leading dot), `settings.json` (only user-flavoured variant matches), `README.md`, `src/keyboard.cs`, empty string.
+  - `ResolveAsync_excludes_secret_files_from_the_diff_result`: 3-file diff (one normal, two secrets); only the normal file appears in `Files`; both secrets in `ExcludedFiles` with the right reason.
+  - `ResolveAsync_excludes_secrets_even_when_passed_via_scope_override`: user-supplied `--scope .env` is refused; demonstrates the guard isn't bypassable.
+  - `ResolveAsync_secret_file_content_is_never_read_from_disk`: writes a `.env` with a sentinel value, runs the resolver, asserts the sentinel doesn't appear anywhere in `Files` content (defensive тАФ the file is excluded so the assertion is on `Files` being empty, but the sentinel check guards against any future refactor that might accidentally read the content).
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **916/919 passing** (3 macOS-only skips). 22 new tests in ScopeResolverTests (now 38 in that class); no regressions.
+- `dotnet format` - green on Core and Tests.
+
+### What's not in v1 (deferred follow-ups within secret-exclusion)
+
+- Configurable patterns via `ReviewSettings.ExcludedFilePatterns`. v1 hardcodes a conservative list; users can't add `*.test-credential` or `**/secrets/*.json` yet. Add when the list of false-positives / missed-positives surfaces in dogfood.
+- `.gitignore` integration. The host has no `git check-ignore` plumbing; the secret guard is independent. If a project's `.gitignore` adds new secret shapes, the resolver won't know.
+
+### Remaining v1 follow-ups (top of list)
+
+- Same-day `## YYYY-MM-DD (review)` heading collapse in `progress.md`.
+- Empty-scope short-circuit (don't spawn 6 agents when 0 files in scope).
+- Glob expansion for `--scope`.
+- `CoordinatorModel` channel split (ReviewService refactor; biggest of these).
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs` (LooksLikeSecret + guard in ReadFilesAsync)
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs` (22 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - secret-file exclusion in ScopeResolver.`
