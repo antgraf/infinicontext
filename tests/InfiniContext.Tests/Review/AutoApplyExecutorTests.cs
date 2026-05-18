@@ -181,9 +181,15 @@ public class AutoApplyExecutorTests
         fx.WriteFile("src/Foo.cs", "original");
         var finding = NewReplaceFileFinding("src/Foo.cs", newText: "edited");
 
+        // Baseline build green, post-apply build red. The new baseline check passes; then the
+        // edit applies; then the post-apply build gate trips and reverts.
         var runner = new FakeRunner
         {
-            BuildOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "1 error in StreamJsonParser.cs"),
+            BuildOutcomes = new[]
+            {
+                new BuildTestOutcome(Passed: true, FailureSummary: null),
+                new BuildTestOutcome(Passed: false, FailureSummary: "1 error in StreamJsonParser.cs"),
+            },
         };
         var sut = new AutoApplyExecutor(runner);
 
@@ -195,7 +201,8 @@ public class AutoApplyExecutorTests
         result.BuildTestGatePassed.Should().BeFalse();
         result.GateReversionReason.Should().Contain("StreamJsonParser");
         fx.Read("src/Foo.cs").Should().Be("original"); // reverted
-        runner.TestCalls.Should().Be(0); // build failed тЖТ test never ran
+        // Baseline test ran (1 call); post-apply test did NOT (post-apply build failed first).
+        runner.TestCalls.Should().Be(1); // baseline ran, post-apply did not because build failed тЖТ test never ran
     }
 
     [Fact]
@@ -205,10 +212,15 @@ public class AutoApplyExecutorTests
         fx.WriteFile("src/Foo.cs", "original");
         var finding = NewReplaceFileFinding("src/Foo.cs", newText: "edited");
 
+        // Baseline build + baseline test green, post-apply build green, post-apply test red.
         var runner = new FakeRunner
         {
             BuildOutcome = new BuildTestOutcome(Passed: true, FailureSummary: null),
-            TestOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "2 tests failed in ReviewServiceTests"),
+            TestOutcomes = new[]
+            {
+                new BuildTestOutcome(Passed: true, FailureSummary: null),
+                new BuildTestOutcome(Passed: false, FailureSummary: "2 tests failed in ReviewServiceTests"),
+            },
         };
         var sut = new AutoApplyExecutor(runner);
 
@@ -228,9 +240,15 @@ public class AutoApplyExecutorTests
         using var fx = new RepoFixture();
         var finding = NewReplaceFileFinding("src/Created.cs", newText: "new file content");
 
+        // Baseline build green, post-apply build red. The replace-file creates a new file; the
+        // gate failure reverts by deleting that file.
         var runner = new FakeRunner
         {
-            BuildOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "broken"),
+            BuildOutcomes = new[]
+            {
+                new BuildTestOutcome(Passed: true, FailureSummary: null),
+                new BuildTestOutcome(Passed: false, FailureSummary: "broken"),
+            },
         };
         var sut = new AutoApplyExecutor(runner);
 
@@ -238,6 +256,182 @@ public class AutoApplyExecutorTests
 
         result.Applied.Should().BeEmpty();
         File.Exists(Path.Combine(fx.Root, "src", "Created.cs")).Should().BeFalse();
+    }
+
+    // ---------- Baseline gate (must be green before any apply runs) ----------
+
+    [Fact]
+    public async Task ApplyAsync_refuses_when_baseline_build_is_red()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited");
+
+        // Baseline build is red. The executor must refuse the batch without touching anything.
+        var runner = new FakeRunner
+        {
+            BuildOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "compile error in legacy module"),
+        };
+        var sut = new AutoApplyExecutor(runner);
+
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle();
+        result.Demoted[0].ConsolidatorNote.Should().Contain("baseline build was red");
+        result.Demoted[0].ConsolidatorNote.Should().Contain("compile error in legacy module");
+        result.BuildTestGatePassed.Should().BeFalse();
+        result.GateReversionReason.Should().Contain("baseline build was red");
+        fx.Read("src/Foo.cs").Should().Be("original"); // never touched
+        runner.TestCalls.Should().Be(0); // baseline test never ran because baseline build failed
+    }
+
+    [Fact]
+    public async Task ApplyAsync_refuses_when_baseline_tests_are_red()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "original");
+        var finding = NewEditFinding("src/Foo.cs", "original", "edited");
+
+        // Baseline build green; baseline tests red.
+        var runner = new FakeRunner
+        {
+            BuildOutcome = new BuildTestOutcome(Passed: true, FailureSummary: null),
+            TestOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "5 tests failing on main"),
+        };
+        var sut = new AutoApplyExecutor(runner);
+
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle();
+        result.Demoted[0].ConsolidatorNote.Should().Contain("baseline tests were red");
+        result.Demoted[0].ConsolidatorNote.Should().Contain("5 tests failing on main");
+        result.BuildTestGatePassed.Should().BeFalse();
+        fx.Read("src/Foo.cs").Should().Be("original"); // never touched
+        runner.BuildCalls.Should().Be(1); // baseline build ran, no post-apply build because we never applied
+    }
+
+    [Fact]
+    public async Task ApplyAsync_skips_baseline_check_when_findings_list_is_empty()
+    {
+        // No findings = no apply to gate = no need to pay the baseline cost.
+        using var fx = new RepoFixture();
+        var runner = new FakeRunner
+        {
+            BuildOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "red"),
+        };
+        var sut = new AutoApplyExecutor(runner);
+
+        var result = await sut.ApplyAsync(fx.Root, Array.Empty<ConsolidatedFinding>(), default);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().BeEmpty();
+        result.BuildTestGatePassed.Should().BeTrue();
+        runner.BuildCalls.Should().Be(0);
+        runner.TestCalls.Should().Be(0);
+    }
+
+    // ---------- CRLF/LF line-ending tolerance ----------
+
+    [Fact]
+    public async Task ApplyAsync_applies_edit_when_file_uses_crlf_and_old_text_uses_lf()
+    {
+        // The common case on Windows: file has CRLF line endings, agent emits LF-only OldText.
+        // The executor must normalize and still match. Without this, the user sees applied=0.
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "public int Foo()\r\n{\r\n    return 1;\r\n}\r\n");
+
+        var finding = NewEditFinding(
+            "src/Foo.cs",
+            oldText: "public int Foo()\n{\n    return 1;\n}",
+            newText: "public int Foo()\n{\n    return 2;\n}");
+
+        var sut = new AutoApplyExecutor(new FakeRunner());
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().ContainSingle();
+        result.Demoted.Should().BeEmpty();
+        var written = fx.Read("src/Foo.cs");
+        written.Should().Contain("return 2;");
+        // Line endings preserved: file still uses CRLF.
+        written.Should().Contain("\r\n");
+        written.Should().NotContain("\n\n"); // no double LF (would indicate lost \r)
+    }
+
+    [Fact]
+    public async Task ApplyAsync_applies_edit_when_file_uses_lf_and_old_text_uses_crlf()
+    {
+        // Inverse case (rarer): file is LF, agent emits CRLF. The executor should downgrade.
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "line1\nline2\nline3\n");
+
+        var finding = NewEditFinding(
+            "src/Foo.cs",
+            oldText: "line1\r\nline2\r\nline3",
+            newText: "lineA\r\nlineB\r\nlineC");
+
+        var sut = new AutoApplyExecutor(new FakeRunner());
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().ContainSingle();
+        var written = fx.Read("src/Foo.cs");
+        written.Should().Contain("lineA");
+        written.Should().NotContain("\r"); // CRLF downgraded to LF
+    }
+
+    [Fact]
+    public async Task ApplyAsync_preserves_crlf_when_writing_new_text()
+    {
+        // A multi-line file with CRLF, edited; result must still be CRLF throughout (no mixed
+        // line endings introduced).
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Foo.cs", "alpha\r\nbeta\r\ngamma\r\n");
+
+        var finding = NewEditFinding(
+            "src/Foo.cs",
+            oldText: "beta",
+            newText: "delta\nepsilon"); // multi-line NewText with LF
+
+        var sut = new AutoApplyExecutor(new FakeRunner());
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+
+        result.Applied.Should().ContainSingle();
+        var written = fx.Read("src/Foo.cs");
+        written.Should().Be("alpha\r\ndelta\r\nepsilon\r\ngamma\r\n");
+    }
+
+    [Fact]
+    public void NormalizeLineEndingsToFile_upgrades_lf_to_crlf_when_file_is_crlf()
+    {
+        var (oldText, newText) = AutoApplyExecutor.NormalizeLineEndingsToFile(
+            current: "a\r\nb\r\n",
+            oldText: "x\ny",
+            newText: "x\nyz");
+        oldText.Should().Be("x\r\ny");
+        newText.Should().Be("x\r\nyz");
+    }
+
+    [Fact]
+    public void NormalizeLineEndingsToFile_leaves_lf_alone_when_file_is_lf()
+    {
+        var (oldText, newText) = AutoApplyExecutor.NormalizeLineEndingsToFile(
+            current: "a\nb\n",
+            oldText: "x\ny",
+            newText: "x\nyz");
+        oldText.Should().Be("x\ny");
+        newText.Should().Be("x\nyz");
+    }
+
+    [Fact]
+    public void NormalizeLineEndingsToFile_downgrades_crlf_to_lf_when_file_is_lf()
+    {
+        var (oldText, newText) = AutoApplyExecutor.NormalizeLineEndingsToFile(
+            current: "a\nb\n",
+            oldText: "x\r\ny",
+            newText: "x\r\nyz");
+        oldText.Should().Be("x\ny");
+        newText.Should().Be("x\nyz");
     }
 
     // ---------- Multi-finding interactions ----------
@@ -299,9 +493,14 @@ public class AutoApplyExecutorTests
             NewEditFinding("src/B.cs", "BBB", "bbb"),
         };
 
+        // Baseline test green, post-apply test red. The gate failure reverts every touched file.
         var runner = new FakeRunner
         {
-            TestOutcome = new BuildTestOutcome(Passed: false, FailureSummary: "broken"),
+            TestOutcomes = new[]
+            {
+                new BuildTestOutcome(Passed: true, FailureSummary: null),
+                new BuildTestOutcome(Passed: false, FailureSummary: "broken"),
+            },
         };
         var sut = new AutoApplyExecutor(runner);
 
@@ -391,19 +590,40 @@ public class AutoApplyExecutorTests
     {
         public int BuildCalls { get; private set; }
         public int TestCalls { get; private set; }
+
+        /// <summary>Returned by every <see cref="BuildAsync"/> call when <see cref="BuildOutcomes"/> is null.</summary>
         public BuildTestOutcome BuildOutcome { get; set; } = new(Passed: true, FailureSummary: null);
+
+        /// <summary>Returned by every <see cref="TestAsync"/> call when <see cref="TestOutcomes"/> is null.</summary>
         public BuildTestOutcome TestOutcome { get; set; } = new(Passed: true, FailureSummary: null);
+
+        /// <summary>
+        /// Optional per-call sequence: first <see cref="BuildAsync"/> call returns
+        /// <c>BuildOutcomes[0]</c>, second returns <c>BuildOutcomes[1]</c>, and so on. Calls beyond
+        /// the sequence length return the last entry. Lets tests express "baseline green,
+        /// post-apply red" now that the executor calls Build/Test both before and after.
+        /// </summary>
+        public BuildTestOutcome[]? BuildOutcomes { get; init; }
+
+        /// <summary>Per-call sequence for <see cref="TestAsync"/>; see <see cref="BuildOutcomes"/>.</summary>
+        public BuildTestOutcome[]? TestOutcomes { get; init; }
 
         public Task<BuildTestOutcome> BuildAsync(string repoRoot, CancellationToken ct)
         {
-            BuildCalls++;
-            return Task.FromResult(BuildOutcome);
+            var idx = BuildCalls++;
+            var outcome = BuildOutcomes is { Length: > 0 } seq
+                ? (idx < seq.Length ? seq[idx] : seq[^1])
+                : BuildOutcome;
+            return Task.FromResult(outcome);
         }
 
         public Task<BuildTestOutcome> TestAsync(string repoRoot, CancellationToken ct)
         {
-            TestCalls++;
-            return Task.FromResult(TestOutcome);
+            var idx = TestCalls++;
+            var outcome = TestOutcomes is { Length: > 0 } seq
+                ? (idx < seq.Length ? seq[idx] : seq[^1])
+                : TestOutcome;
+            return Task.FromResult(outcome);
         }
     }
 }

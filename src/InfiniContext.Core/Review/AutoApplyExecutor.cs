@@ -41,6 +41,36 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
 
         var normalizedRoot = Path.GetFullPath(repoRoot);
 
+        // Baseline gate. If the build or test is already red BEFORE we apply anything, the
+        // post-apply gate would either blame our edits for pre-existing failures (and revert
+        // good work) or cover them up. Refuse the batch with a clear message instead. Only pay
+        // the baseline cost when there's actually something to auto-apply.
+        if (findings.Count > 0)
+        {
+            var baselineBuild = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
+            if (!baselineBuild.Passed)
+            {
+                var reason = $"baseline build was red before auto-apply: {baselineBuild.FailureSummary ?? "no detail"}. Fix the baseline build before re-running review with auto-apply.";
+                _logger.Warning("auto-apply: {Reason}", reason);
+                return new AutoApplyResult(
+                    Applied: Array.Empty<ConsolidatedFinding>(),
+                    Demoted: findings.Select(f => WithDemotion(f, reason)).ToList(),
+                    BuildTestGatePassed: false,
+                    GateReversionReason: reason);
+            }
+            var baselineTest = await _gate.TestAsync(normalizedRoot, ct).ConfigureAwait(false);
+            if (!baselineTest.Passed)
+            {
+                var reason = $"baseline tests were red before auto-apply: {baselineTest.FailureSummary ?? "no detail"}. Fix the baseline tests before re-running review with auto-apply.";
+                _logger.Warning("auto-apply: {Reason}", reason);
+                return new AutoApplyResult(
+                    Applied: Array.Empty<ConsolidatedFinding>(),
+                    Demoted: findings.Select(f => WithDemotion(f, reason)).ToList(),
+                    BuildTestGatePassed: false,
+                    GateReversionReason: reason);
+            }
+        }
+
         // Per-file backups so we can revert if the gate fails. Key is the absolute path on disk;
         // value is the original bytes (or null when the file didn't exist before the apply тАФ in
         // which case revert = delete).
@@ -143,15 +173,23 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
                 backups[fullPath] = await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false);
 
             var current = await File.ReadAllTextAsync(fullPath, ct).ConfigureAwait(false);
-            var firstIdx = current.IndexOf(fix.OldText, StringComparison.Ordinal);
+
+            // Line-ending normalization. Windows checkouts with core.autocrlf=true store files as
+            // CRLF on disk; an LLM-emitted suggested_fix almost always uses LF. Without this
+            // adjustment every multi-line Edit on Windows would demote with "source diverged".
+            // Strategy: if the file's predominant convention disagrees with OldText/NewText,
+            // convert OldText + NewText to match the file's convention so writes preserve it.
+            var (oldText, newText) = NormalizeLineEndingsToFile(current, fix.OldText, fix.NewText);
+
+            var firstIdx = current.IndexOf(oldText, StringComparison.Ordinal);
             if (firstIdx < 0) return "source diverged: OldText not found in target file";
 
             // Ambiguity check: if OldText appears more than once, the fix isn't unambiguously
             // applicable. Refuse rather than guess.
-            var secondIdx = current.IndexOf(fix.OldText, firstIdx + 1, StringComparison.Ordinal);
+            var secondIdx = current.IndexOf(oldText, firstIdx + 1, StringComparison.Ordinal);
             if (secondIdx >= 0) return "source diverged: OldText is ambiguous (appears more than once)";
 
-            var next = string.Concat(current.AsSpan(0, firstIdx), fix.NewText, current.AsSpan(firstIdx + fix.OldText.Length));
+            var next = string.Concat(current.AsSpan(0, firstIdx), newText, current.AsSpan(firstIdx + oldText.Length));
             await File.WriteAllTextAsync(fullPath, next, ct).ConfigureAwait(false);
             return null;
         }
@@ -211,5 +249,59 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
             ConsolidatorNote = note,
             RejectionReason = null,
         };
+    }
+
+    /// <summary>
+    /// Adjust <paramref name="oldText"/> and <paramref name="newText"/> so their line endings
+    /// match the predominant convention of <paramref name="current"/>. Without this, an LLM that
+    /// emits LF-only text against a Windows CRLF checkout would never match the source.
+    ///
+    /// <para>
+    /// Heuristic: if any <c>\r\n</c> appears in <paramref name="current"/>, the file is treated
+    /// as CRLF and any lone <c>\n</c> in oldText/newText is upgraded. Otherwise the file is
+    /// treated as LF and any <c>\r\n</c> in oldText/newText is downgraded. Mixed-line-ending
+    /// source files lose: they'll be normalized to whichever convention dominates. Acceptable
+    /// for v1 (mixed line endings in a single .cs file is itself a project-convention
+    /// violation).
+    /// </para>
+    /// </summary>
+    internal static (string OldText, string NewText) NormalizeLineEndingsToFile(string current, string oldText, string newText)
+    {
+        var fileIsCrlf = current.Contains("\r\n", StringComparison.Ordinal);
+
+        if (fileIsCrlf)
+        {
+            // Upgrade lone \n to \r\n. The two-step replace avoids creating \r\r\n out of existing \r\n.
+            if (oldText.Contains('\n') && !LooksAlreadyCrlf(oldText))
+                oldText = oldText.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            if (newText.Contains('\n') && !LooksAlreadyCrlf(newText))
+                newText = newText.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        }
+        else
+        {
+            // Downgrade \r\n to \n.
+            if (oldText.Contains("\r\n", StringComparison.Ordinal))
+                oldText = oldText.Replace("\r\n", "\n");
+            if (newText.Contains("\r\n", StringComparison.Ordinal))
+                newText = newText.Replace("\r\n", "\n");
+        }
+        return (oldText, newText);
+    }
+
+    private static bool LooksAlreadyCrlf(string s)
+    {
+        // True when every \n in `s` is preceded by \r. We compare counts as a cheap proxy: if
+        // every lone-\n is paired, the string is already CRLF and we should leave it alone.
+        var lf = 0;
+        var crlf = 0;
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\n')
+            {
+                lf++;
+                if (i > 0 && s[i - 1] == '\r') crlf++;
+            }
+        }
+        return lf > 0 && lf == crlf;
     }
 }

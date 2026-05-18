@@ -1058,3 +1058,62 @@ V1 follow-ups status:
 ### Not committed yet
 
 The 3 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - lock-contract update of index.md + progress.md.`
+
+## 2026-05-17 (review-gate impl session - unlock auto-apply: CRLF + baseline-green gate)
+
+User asked "why I don't see any auto-applied items?" after running. I diagnosed two practical blockers I'd surfaced in my own /review pass earlier this session:
+
+1. **CRLF/LF mismatch on Windows checkouts.** `TryApplySingleAsync` did `current.IndexOf(fix.OldText, StringComparison.Ordinal)`. Windows files often have CRLF on disk (core.autocrlf=true); LLM-emitted `suggested_fix.old_text` is LF-only. Every multi-line Edit was demoting with "source diverged".
+2. **No baseline-gate check.** Post-apply build/test gate ran unconditionally. If the repo's baseline build or tests were red BEFORE the review (common during in-progress work), the post-apply gate would also be red and revert every edit blaming our changes. Net effect: applied=0 nearly always.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs`:
+  - New baseline-gate check at the top of `ApplyAsync`. When `findings.Count > 0`, runs `BuildAsync` then `TestAsync` BEFORE applying anything. Either failing demotes every finding with a clear `"baseline build was red"` / `"baseline tests were red"` reason (including the failure summary from the runner) and returns immediately with `BuildTestGatePassed: false`. Pays the cost of two extra gate runs but only when there's something to auto-apply.
+  - New `NormalizeLineEndingsToFile(current, oldText, newText)` internal static. Heuristic: if the file contains any `\r\n`, treat it as CRLF and upgrade lone `\n` in `OldText`/`NewText`; otherwise downgrade any `\r\n` to `\n`. Two-step replace avoids `\r\r\n` artefacts. Mixed-line-ending files in a single .cs file lose; documented as acceptable v1 trade-off.
+  - `TryApplySingleAsync` Edit branch now calls `NormalizeLineEndingsToFile` and uses the adjusted texts for both the match and the write. Behavior is byte-identical when file and texts already agree (the common case).
+  - Also added: `LooksAlreadyCrlf(string)` helper that counts paired `\n`/`\r\n` so we don't double-convert.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs`:
+  - **FakeRunner refactor**: added `BuildOutcomes` and `TestOutcomes` init-only arrays. When set, each call dequeues by index (first call gets index 0, etc.); calls beyond the sequence return the last entry. When null, the existing single-outcome semantics apply. This lets tests express "baseline green, post-apply red" semantics that the new baseline check requires.
+  - **Updated existing tests** to use the sequence pattern: `ApplyAsync_reverts_when_build_gate_fails` and `ApplyAsync_reverts_when_test_gate_fails` both now declare `[green, red]` so the baseline check passes and the post-apply check fails (preserving original test intent). Same for `ApplyAsync_reverts_a_replace_file_that_created_a_new_file_by_deleting_it` and `ApplyAsync_reverts_every_touched_file_when_gate_fails_after_multiple_applies`.
+  - **New tests for the baseline check** (3): refuses when baseline build red (with the failure summary in the demotion note); refuses when baseline tests red; skips baseline check entirely when findings list is empty (no spurious cost when there's nothing to apply).
+  - **New tests for CRLF normalization** (6): edit applies when file has CRLF and OldText has LF (the Windows common case); edit applies when file has LF and OldText has CRLF (inverse); multi-line NewText with LF preserves the file's CRLF after write; three pure unit tests on `NormalizeLineEndingsToFile` covering all three branches.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **883/886 passing** (3 macOS-only skips). 9 new tests in AutoApplyExecutorTests; no regressions.
+- `dotnet format` - green on Core and Tests.
+
+### Practical effect
+
+These two fixes are what unlocks auto-applied items in actual review runs:
+
+- Reviewers that emit LF-only `suggested_fix.old_text` (i.e. all of them) will now match against CRLF source files on Windows.
+- The user gets a clear refusal up front when their working tree's baseline is red, rather than a misleading "tests broke after auto-apply" demotion that blamed our edits for pre-existing failures.
+
+Remaining v1 follow-ups (not addressed this session):
+
+- Cancellation-safe revert (issue #2 from the /review pass): RevertAsync should use `CancellationToken.None` once committed to reverting.
+- Schema-advertised settings that silently no-op (issue #3): `coordinatorModel`, `confidenceFloor`, `autoApplyMax*`, `skipBuildTestGate`.
+- Report scope-resolver secret-file exclusion (issue #4).
+- Same-day `## YYYY-MM-DD (review)` heading collapse in progress.md.
+- Empty-scope short-circuit (issue #7).
+- Glob expansion for `--scope`.
+- `CoordinatorModel` channel split.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` (baseline gate + CRLF normalization)
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` (FakeRunner sequence + 9 new tests + 4 updated tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - unblock auto-apply (CRLF + baseline gate).`
