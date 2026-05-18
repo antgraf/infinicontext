@@ -42,6 +42,7 @@ internal sealed class MultiSessionHost : IReplActions
     private readonly TaskCommandHandler? _taskHandler;
     private readonly IssueCommandHandler? _issueHandler;
     private readonly Func<int, CancellationToken, Task<TaskSwitchPlan?>>? _prepareTaskSwitch;
+    private readonly Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? _tryEnterTask;
     private readonly Action<string> _onFragment;
     private readonly Action<StateTransition> _onTransition;
 
@@ -67,6 +68,7 @@ internal sealed class MultiSessionHost : IReplActions
         TaskCommandHandler? taskHandler = null,
         IssueCommandHandler? issueHandler = null,
         Func<int, CancellationToken, Task<TaskSwitchPlan?>>? prepareTaskSwitch = null,
+        Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? tryEnterTask = null,
         SessionManager? sessionManager = null)
     {
         _focused = ctx ?? throw new ArgumentNullException(nameof(ctx));
@@ -81,6 +83,7 @@ internal sealed class MultiSessionHost : IReplActions
         _taskHandler = taskHandler;
         _issueHandler = issueHandler;
         _prepareTaskSwitch = prepareTaskSwitch;
+        _tryEnterTask = tryEnterTask;
         _manager = sessionManager;
 
         _registry = new SlashCommandRegistry(new ISlashCommand[]
@@ -299,6 +302,7 @@ internal sealed class MultiSessionHost : IReplActions
             FocusedHostSessionId = _focused.Id,
             ActiveTaskId = _focused.ActiveTaskId,
             IssueHandler = _issueHandler,
+            TryEnterTask = _tryEnterTask,
         };
 
     public void RequestExit()

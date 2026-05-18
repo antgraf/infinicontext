@@ -276,6 +276,29 @@ public class TaskCommandTests
     }
 
     [Fact]
+    public void Spawn_parses_id()
+    {
+        TaskCommand.TryParse("/task spawn 0042", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Spawn(42));
+    }
+
+    [Fact]
+    public void Spawn_accepts_unpadded_id()
+    {
+        TaskCommand.TryParse("/task spawn 7", out var cmd, out _).Should().BeTrue();
+        cmd.Should().Be(new TaskCommand.Spawn(7));
+    }
+
+    [Theory]
+    [InlineData("/task spawn")]
+    [InlineData("/task spawn abc")]
+    public void Spawn_rejects_missing_or_non_numeric_id(string input)
+    {
+        TaskCommand.TryParse(input, out _, out var error).Should().BeFalse();
+        error.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
     public void Unknown_subcommand_returns_error()
     {
         TaskCommand.TryParse("/task wat", out _, out var error).Should().BeFalse();

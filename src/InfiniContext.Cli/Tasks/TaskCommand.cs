@@ -16,6 +16,7 @@ internal abstract record TaskCommand
     public sealed record Fork(int Id, string? OverrideTitle) : TaskCommand;
     public sealed record Merge(IReadOnlyList<int> Ids) : TaskCommand;
     public sealed record Switch(int Id) : TaskCommand;
+    public sealed record Spawn(int Id) : TaskCommand;
     public sealed record Delete(int Id, bool RemoveFolder) : TaskCommand;
     public sealed record Review(int? Id, string? Scope, bool SkipConfirm) : TaskCommand;
     public sealed record Help : TaskCommand;
@@ -78,6 +79,9 @@ internal abstract record TaskCommand
 
             case "switch":
                 return ParseSingleId(tokens, i, sub, id => new Switch(id), out command, out error);
+
+            case "spawn":
+                return ParseSingleId(tokens, i, sub, id => new Spawn(id), out command, out error);
 
             case "delete":
             case "rm":

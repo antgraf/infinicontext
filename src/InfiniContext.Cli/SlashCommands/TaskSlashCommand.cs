@@ -1,5 +1,6 @@
 using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.Tasks;
+using InfiniContext.Core.Sessions;
 using InfiniContext.Core.Tasks;
 
 namespace InfiniContext.Cli.SlashCommands;
@@ -77,6 +78,16 @@ internal sealed class TaskSlashCommand : ISlashCommand
             return;
         }
 
+        // /task spawn: same task-binding plan as /task switch, but creates a NEW SessionContext
+        // alongside the current one (a parallel pane) rather than replacing it. Useful when the
+        // user wants to /flush the current session and start fresh on the same task without
+        // losing the existing pane, or to fan out work across multiple tasks in parallel.
+        if (cmd is TaskCommand.Spawn spawnCmd)
+        {
+            await TrySpawnTaskSessionAsync(ctx, spawnCmd.Id, ct).ConfigureAwait(false);
+            return;
+        }
+
         await ctx.TaskHandler.HandleAsync(cmd, ct).ConfigureAwait(false);
     }
 
@@ -115,6 +126,102 @@ internal sealed class TaskSlashCommand : ISlashCommand
             ctx.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
 
         ctx.Actions.RequestSwitch(plan);
+    }
+
+    private static async Task TrySpawnTaskSessionAsync(SlashCommandContext ctx, int id, CancellationToken ct)
+    {
+        if (ctx.SessionManager is null)
+        {
+            ctx.Write("[task] spawn is unavailable in this context (no session manager).\n");
+            return;
+        }
+        if (ctx.PrepareTaskSwitch is null)
+        {
+            ctx.Write("[task] spawn is unavailable in this context (no task subsystem).\n");
+            return;
+        }
+
+        // One-session-per-task (D9) up front: refuse if another live pane already binds this
+        // task. The host-level TaskActivityCoordinator would refuse anyway after CreateAsync,
+        // but we'd rather print a clean message than spin up and then tear down a session.
+        foreach (var s in ctx.SessionManager.Active)
+        {
+            if (s.ActiveTaskId == id)
+            {
+                ctx.Write($"[task] {id:D4} is already active in session {s.Id:D}. Use /focus {s.Id:D} to switch to it.\n");
+                return;
+            }
+        }
+
+        TaskSwitchPlan? plan;
+        try
+        {
+            plan = await ctx.PrepareTaskSwitch(id, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ctx.Write($"[task] spawn failed: {ex.Message}\n");
+            return;
+        }
+        if (plan is null)
+        {
+            ctx.Write($"[task] {id:D4} not found.\n");
+            return;
+        }
+
+        var request = new SpawnRequest
+        {
+            Cwd = plan.Task.HomeCwd,
+            FirstUserMessage = plan.FirstUserMessage,
+            ActiveTaskId = plan.Task.Id,
+            Model = ctx.Settings.Session.Model,
+            IncludePartialMessages = ctx.Settings.Session.IncludePartialMessages,
+            ExtraArgs = ctx.Settings.Session.ExtraArgs,
+        };
+
+        SessionContext newSession;
+        try
+        {
+            newSession = await ctx.SessionManager.CreateAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ctx.Write($"[task] spawn failed: {ex.Message}\n");
+            return;
+        }
+
+        // Register the task claim with the coordinator so the row flips to InProgress and a
+        // future spawn on the same task is refused at the host level. If the coordinator hook
+        // isn't wired (no task subsystem), the local-Active check above is our only guard.
+        if (ctx.TryEnterTask is not null)
+        {
+            EnterTaskResult enter;
+            try
+            {
+                enter = await ctx.TryEnterTask(newSession.Id, plan.Task.Id, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ctx.Write($"[task] spawn: coordinator enter failed: {ex.Message}\n");
+                await ctx.SessionManager.CloseAsync(newSession.Id).ConfigureAwait(false);
+                return;
+            }
+
+            if (enter is EnterTaskResult.RefusedResult refused)
+            {
+                ctx.Write($"[task] {refused.TaskId:D4} is already claimed by session {refused.HolderSessionId:D}; rolling back the spawn.\n");
+                await ctx.SessionManager.CloseAsync(newSession.Id).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        ctx.Write($"[task] spawned session {newSession.Id:D} bound to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+        if (!PathsAreEquivalent(plan.Task.HomeCwd, Environment.CurrentDirectory))
+            ctx.Write($"       cwd: {plan.Task.HomeCwd}\n");
+        if (plan.Drift.Count > 0)
+            ctx.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
+
+        ctx.Actions.RequestFocus(newSession.Id);
     }
 
     private static bool PathsAreEquivalent(string a, string b)

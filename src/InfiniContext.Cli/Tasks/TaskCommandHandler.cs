@@ -92,6 +92,12 @@ internal sealed class TaskCommandHandler
                     Write("[task] /task switch must be invoked from the REPL.\n");
                     break;
 
+                case TaskCommand.Spawn:
+                    // Same situation as /task switch: intercepted by the REPL because it needs
+                    // SessionManager + TaskActivityCoordinator hooks the bare handler doesn't.
+                    Write("[task] /task spawn must be invoked from the REPL.\n");
+                    break;
+
                 case TaskCommand.Delete(var deleteId, var removeFolder):
                     await HandleDeleteAsync(deleteId, removeFolder, ct).ConfigureAwait(false);
                     break;
@@ -530,6 +536,10 @@ internal sealed class TaskCommandHandler
           /task fork <id> ["<title>"]           fork a task; lineage recorded
           /task merge <id1> <id2> [...]         deterministic concat into a new task
           /task switch <id>                     start a fresh session bound to <id>
+                                                (replaces the current session)
+          /task spawn <id>                      spawn a NEW pane bound to <id>, alongside the
+                                                current session (refuses if another live pane
+                                                already binds <id>)
           /task delete <id> [--remove-folder]   drop the registry row (folder kept unless
                                                 --remove-folder is passed); refuses if InProgress
           /task review [<id>] [--scope <glob>] [--yes]

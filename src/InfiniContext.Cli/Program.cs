@@ -349,6 +349,9 @@ while (true)
         prepareTaskSwitch: taskService is null
             ? null
             : (id, ct) => taskService.PrepareSwitchAsync(id, ct),
+        tryEnterTask: taskActivity is null
+            ? null
+            : (sid, id, ct) => taskActivity.EnterAsync(sid, id, ct),
         sessionManager: sessionManager);
     HostResult result;
     try

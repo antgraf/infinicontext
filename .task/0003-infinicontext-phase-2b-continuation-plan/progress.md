@@ -1656,3 +1656,66 @@ The 3 source/test files plus progress.md are uncommitted. **Recommended commit s
 
 The only remaining item is the user-driven dogfood pass. The /task review surface is feature-complete from a code perspective; the next iteration is behavioral (run it, observe, tighten `ReviewerPrompts.cs` strings if false-positives surface). No code work is queued.
 
+## 2026-05-17 (new feature: /task spawn)
+
+User asked: "is there a command to spawn a new session in scope of a task ... if no - implement." Existing surface had two adjacent commands but no exact fit: `/n <cwd>` opens a new pane without binding to a task, and `/task switch <id>` binds to a task but REPLACES the current session via the outer-loop re-spawn path. The use case (e.g. after `/flush`, start fresh on the same task without losing the existing pane; or fan work out across multiple tasks in parallel) needed a third command.
+
+### Design
+
+`/task spawn <id>` - slots into the existing `/task` sub-grammar (discoverable from `/task help`). Reuses the TaskSwitchPlan machinery `/task switch` already builds (FirstUserMessage pointer, HomeCwd, drift report) but routes it through `SessionManager.CreateAsync` to create a NEW SessionContext alongside the current one, rather than through `RequestSwitch` which tears the current session down.
+
+D9 (one-session-per-task) is honored at two levels:
+
+1. **Local pre-check.** Before calling CreateAsync, the helper iterates `SessionManager.Active` and refuses with a clear message if any active pane already has `ActiveTaskId == id`. Cheaper than spinning up a session and tearing it down on coordinator refusal.
+2. **Host-level register.** After CreateAsync succeeds, the helper calls `TaskActivityCoordinator.EnterAsync(newSession.Id, id)`. If that returns `RefusedResult` (race: another session claimed it between the pre-check and now), the new session is rolled back via `SessionManager.CloseAsync` and the user sees a clear message.
+
+The coordinator hook is plumbed through new infrastructure (new optional `tryEnterTask` ctor param on `MultiSessionHost`, new optional `TryEnterTask` init property on `SlashCommandContext`). Same pattern as the existing `PrepareTaskSwitch` callback.
+
+### What's not in v1 (deferred)
+
+- **LeaveAsync on session disposal.** When a spawned session is closed (user-invoked or host shutdown), the coordinator's claim is NOT released. The task row stays at InProgress until the host restarts. This gap pre-exists for every non-focused multi-session path; my v1 doesn't make it worse but doesn't fix it either. Add a disposal hook on SessionContext (or wire LeaveAsync into SessionManager.CloseAsync) as a follow-up.
+- **End-to-end test against real SessionManager.** Parser tests cover the user-facing API; the spawn-then-claim flow is integration-only. Test cost vs value didn't justify it for v1 - the helper logic is straightforward and the failure modes are well-typed (`EnterTaskResult.RefusedResult`).
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommand.cs` - new `Spawn(int Id) : TaskCommand` record + "spawn" parser branch (reuses the `ParseSingleId` helper, same shape as `switch`).
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` - new `case TaskCommand.Spawn` in `HandleAsync` that prints a clear "must be invoked from the REPL" message (the bare handler doesn't have the SessionManager / coordinator hooks; same situation as `/task switch`). Updated `HelpText` to list `/task spawn <id>` next to `/task switch <id>` with a contrast note ("spawn = new pane alongside; switch = replace current").
+- `src/InfiniContext.Cli/SlashCommands/ISlashCommand.cs` - new `Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? TryEnterTask` init property on `SlashCommandContext`. Doc-comment explains: only `/task spawn` uses it today; null when the task subsystem isn't wired up.
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs` - `using InfiniContext.Core.Sessions;` added. New interception of `TaskCommand.Spawn` (mirrors the existing `Switch` and `Review` interceptions). New private helper `TrySpawnTaskSessionAsync` does the full flow: SessionManager/PrepareTaskSwitch null-checks; local pre-check against `SessionManager.Active`; PrepareTaskSwitch -> SpawnRequest -> CreateAsync; TryEnterTask with rollback-on-refusal; focus the new session via `ctx.Actions.RequestFocus`.
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` - new optional `tryEnterTask` ctor param (positioned between `prepareTaskSwitch` and `sessionManager`); new `_tryEnterTask` field; threaded into `SlashCommandContext.TryEnterTask` in `BuildContext`.
+- `src/InfiniContext.Cli/Program.cs` - passes `taskActivity is null ? null : (sid, id, ct) => taskActivity.EnterAsync(sid, id, ct)` into the MultiSessionHost ctor.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandTests.cs` - 4 new parser tests: `Spawn_parses_id` (`/task spawn 0042` -> `Spawn(42)`); `Spawn_accepts_unpadded_id` (`/task spawn 7` -> `Spawn(7)`); two-row theory rejecting missing id / non-numeric id.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **950/953 passing** (3 macOS-only skips). +4 new tests in `TaskCommandTests`; no regressions on the 946-test baseline from the CoordinatorModel split.
+- `dotnet format InfiniContext.slnx --verify-no-changes` - green.
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommand.cs` (new record + parser branch)
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (HandleAsync branch + HelpText)
+- `src/InfiniContext.Cli/SlashCommands/ISlashCommand.cs` (TryEnterTask property)
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs` (interception + helper)
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` (ctor param + field + context wiring)
+- `src/InfiniContext.Cli/Program.cs` (callback wired to TaskActivityCoordinator.EnterAsync)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandTests.cs` (4 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 7 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Add /task spawn <id>: spawn a new session bound to a task, alongside the current one.`
+
+### Follow-ups filed
+
+- Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync` (or a SessionContext disposal hook) so coordinator state stays consistent when a spawned session is closed mid-host-lifecycle. Pre-existing gap that this feature surfaces but doesn't fix.
+- End-to-end test that drives `/task spawn` through a real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. The slash-command helper logic is the more interesting part to test but requires more scaffolding than the parser tests it currently has.
+

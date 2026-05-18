@@ -92,4 +92,11 @@ internal sealed record SlashCommandContext(
     /// callers (tests, future host modes) that don't care about the issue surface don't have to
     /// thread <c>null</c> through.</summary>
     public IssueCommandHandler? IssueHandler { get; init; }
+
+    /// <summary>Register a task claim with the host's <see cref="TaskActivityCoordinator"/> when
+    /// a slash command spawns a new task-bound session (currently only <c>/task spawn</c>).
+    /// Returns the coordinator's response: <see cref="EnterTaskResult.GrantedResult"/> or
+    /// <see cref="EnterTaskResult.RefusedResult"/>. Null when the task subsystem isn't wired up;
+    /// commands that need it must handle the null case with a clear refusal.</summary>
+    public Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? TryEnterTask { get; init; }
 }
