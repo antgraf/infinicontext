@@ -249,37 +249,9 @@ internal sealed class TaskCommandHandler
             return;
         }
 
-        // Cost guard. --yes skips. Without --yes, prompt if we have an input reader; otherwise
-        // refuse with a clear message (so the handler stays usable in non-interactive contexts).
-        if (!cmd.SkipConfirm)
-        {
-            var prompt =
-                $"[task review] will spawn 6 sub-Claude agents (5 reviewers + 1 coordinator) for task {record.Id:D4}.\n" +
-                "              This is a real cost. Continue? [y/N]: ";
-            Write(prompt);
-            if (_input is null)
-            {
-                Write("\n[task review] no input reader available for confirmation; pass --yes to skip the prompt.\n");
-                return;
-            }
-            var line = await _input.ReadLineAsync(ct).ConfigureAwait(false);
-            var answer = (line ?? "").Trim();
-            if (!answer.Equals("y", StringComparison.OrdinalIgnoreCase)
-                && !answer.Equals("yes", StringComparison.OrdinalIgnoreCase))
-            {
-                Write("[task review] cancelled.\n");
-                return;
-            }
-        }
-
-        // Gather inputs. Each file is best-effort: missing files become empty strings (the prompts
-        // can handle "<no content>" gracefully).
+        // Resolve scope BEFORE the cost prompt. If scope is empty there's nothing to review;
+        // we don't want to make the user confirm a 6-agent spawn just to discover that.
         var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
-        var descriptionMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "description.md"), ct).ConfigureAwait(false);
-        var progressMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "progress.md"), ct).ConfigureAwait(false);
-        var indexMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "index.md"), ct).ConfigureAwait(false);
-        var claudeMd = await ReadIfExistsAsync(Path.Combine(record.HomeCwd, "CLAUDE.md"), ct).ConfigureAwait(false);
-        var decisionsMd = await ReadDecisionsAsync(record.HomeCwd, ct).ConfigureAwait(false);
 
         // --scope: v1 treats the value as a single relative path under HomeCwd; glob expansion is
         // a v1 follow-up (see review-feature-design.md). Splitting on ';' lets users pass a small
@@ -300,6 +272,62 @@ internal sealed class TaskCommandHandler
             ct).ConfigureAwait(false);
 
         Write($"[task review] scope: {scope.Description} ({scope.Files.Count} files, {scope.ExcludedFiles.Count} excluded)\n");
+        if (scope.FallbackNote is not null)
+            Write($"              note: {scope.FallbackNote}\n");
+
+        // Empty-scope short-circuit: nothing to review = no agents spawned.
+        if (scope.Files.Count == 0)
+        {
+            Write("[task review] nothing to review (0 files in scope).\n");
+            if (scope.ExcludedFiles.Count > 0)
+            {
+                Write($"              {scope.ExcludedFiles.Count} file(s) were excluded:\n");
+                foreach (var ex in scope.ExcludedFiles)
+                    Write($"                - {ex.RelativePath}: {ex.Reason}\n");
+            }
+            if (string.IsNullOrWhiteSpace(cmd.Scope))
+            {
+                Write("              (Pass --scope <path[;path]> to override, or check that the task's base_commit_sha is correct.)\n");
+            }
+            else
+            {
+                Write("              (Every --scope path was excluded or unreadable.)\n");
+            }
+            return;
+        }
+
+        // Cost guard. --yes skips. Without --yes, prompt if we have an input reader; otherwise
+        // refuse with a clear message (so the handler stays usable in non-interactive contexts).
+        // Runs after scope resolution so we don't prompt for a review that has nothing to do.
+        if (!cmd.SkipConfirm)
+        {
+            var prompt =
+                $"[task review] will spawn 6 sub-Claude agents (5 reviewers + 1 coordinator) for task {record.Id:D4}.\n" +
+                $"              Scope: {scope.Files.Count} files. This is a real cost. Continue? [y/N]: ";
+            Write(prompt);
+            if (_input is null)
+            {
+                Write("\n[task review] no input reader available for confirmation; pass --yes to skip the prompt.\n");
+                return;
+            }
+            var line = await _input.ReadLineAsync(ct).ConfigureAwait(false);
+            var answer = (line ?? "").Trim();
+            if (!answer.Equals("y", StringComparison.OrdinalIgnoreCase)
+                && !answer.Equals("yes", StringComparison.OrdinalIgnoreCase))
+            {
+                Write("[task review] cancelled.\n");
+                return;
+            }
+        }
+
+        // Gather the rest of the inputs. Each file is best-effort: missing files become empty
+        // strings (the prompts can handle "<no content>" gracefully).
+        var descriptionMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "description.md"), ct).ConfigureAwait(false);
+        var progressMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "progress.md"), ct).ConfigureAwait(false);
+        var indexMd = await ReadIfExistsAsync(Path.Combine(folder.Path, "index.md"), ct).ConfigureAwait(false);
+        var claudeMd = await ReadIfExistsAsync(Path.Combine(record.HomeCwd, "CLAUDE.md"), ct).ConfigureAwait(false);
+        var decisionsMd = await ReadDecisionsAsync(record.HomeCwd, ct).ConfigureAwait(false);
+
         Write("[task review] running 5 reviewers + coordinator...\n");
 
         var request = new ReviewRequest(

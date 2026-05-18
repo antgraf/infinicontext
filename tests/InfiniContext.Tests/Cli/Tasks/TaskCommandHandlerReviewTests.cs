@@ -213,6 +213,55 @@ public class TaskCommandHandlerReviewTests
         indexAfter.Should().Contain("| review-");
     }
 
+    // ---------- Empty-scope short-circuit ----------
+
+    [Fact]
+    public async Task Refuses_with_clear_message_when_scope_has_zero_files()
+    {
+        // emptyDiff: the FakeGitRunner returns an empty diff list, so scope.Files.Count == 0.
+        await using var fx = await Fixture.OpenAsync(withReview: true, emptyDiff: true);
+        var task = await fx.CreateTaskAsync("Test task");
+
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
+
+        fx.Captured.Should().Contain("nothing to review (0 files in scope)");
+        // Helpful hint included when the user didn't pass --scope.
+        fx.Captured.Should().Contain("Pass --scope");
+        // No agents spawned.
+        fx.Reviewer.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Empty_scope_short_circuit_runs_before_the_cost_prompt()
+    {
+        // Even without --yes, an empty scope must NOT trigger the [y/N] prompt. The user
+        // shouldn't be asked to confirm a 6-agent spawn that will never happen.
+        await using var fx = await Fixture.OpenAsync(withReview: true, emptyDiff: true, input: new StringReader("y\n"));
+        var task = await fx.CreateTaskAsync("Test task");
+
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: false), activeTaskId: null, CancellationToken.None);
+
+        fx.Captured.Should().NotContain("Continue? [y/N]");
+        fx.Captured.Should().Contain("nothing to review");
+        fx.Reviewer.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Empty_scope_with_user_supplied_scope_shows_a_scope_specific_message()
+    {
+        // When the user explicitly passed --scope and all paths got excluded / didn't resolve,
+        // the message hint reflects that (not "pass --scope" - they already did).
+        await using var fx = await Fixture.OpenAsync(withReview: true, emptyDiff: true);
+        var task = await fx.CreateTaskAsync("Test task");
+
+        // Scope override points at a non-existent path so it gets excluded.
+        await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: "ghost.cs", SkipConfirm: true), activeTaskId: null, CancellationToken.None);
+
+        fx.Captured.Should().Contain("nothing to review");
+        fx.Captured.Should().Contain("Every --scope path was excluded or unreadable.");
+        fx.Reviewer.Calls.Should().BeEmpty();
+    }
+
     // ---------- AppendIndexRow / AppendProgressEntry static helpers ----------
 
     [Fact]
@@ -449,7 +498,11 @@ public class TaskCommandHandlerReviewTests
 
         public string Captured => Writer.ToString();
 
-        public static async Task<Fixture> OpenAsync(bool withReview, TextReader? input = null, bool withLockRegistry = false)
+        public static async Task<Fixture> OpenAsync(
+            bool withReview,
+            TextReader? input = null,
+            bool withLockRegistry = false,
+            bool emptyDiff = false)
         {
             var temp = Path.Combine(Path.GetTempPath(), $"cp-taskreview-{Guid.NewGuid():N}");
             var home = Path.Combine(temp, "repo");
@@ -466,11 +519,24 @@ public class TaskCommandHandlerReviewTests
             var reviewer = new FakeReviewer();
             var lockRegistry = withLockRegistry ? new LockRegistry() : null;
 
+            // By default, seed one file in the home cwd and have FakeGitRunner report it in
+            // the diff, so scope.Files.Count > 0 and the new empty-scope short-circuit doesn't
+            // skip the rest of the flow. Tests that exercise the short-circuit pass
+            // emptyDiff: true.
+            var fakeGit = new FakeGitRunner();
+            if (!emptyDiff)
+            {
+                var srcDir = Path.Combine(home, "src");
+                Directory.CreateDirectory(srcDir);
+                await File.WriteAllTextAsync(Path.Combine(srcDir, "Foo.cs"), "// dummy");
+                fakeGit.DiffResult = new[] { "src/Foo.cs" };
+            }
+
             TaskCommandHandler handler;
             if (withReview)
             {
                 var reviewService = new ReviewService(reviewer);
-                var scopeResolver = new ScopeResolver(new FakeGitRunner());
+                var scopeResolver = new ScopeResolver(fakeGit);
                 handler = new TaskCommandHandler(
                     service, writer, writeLock: null,
                     reviewService: reviewService,
@@ -565,8 +631,10 @@ public class TaskCommandHandlerReviewTests
 
     private sealed class FakeGitRunner : IGitRunner
     {
+        public IReadOnlyList<string> DiffResult { get; set; } = Array.Empty<string>();
+
         public Task<string?> ResolveHeadAsync(string repoRoot, CancellationToken ct) => Task.FromResult<string?>("h1234567" + new string('0', 32));
         public Task<string?> ResolveMergeBaseAsync(string repoRoot, string ref1, string ref2, CancellationToken ct) => Task.FromResult<string?>("m1234567" + new string('0', 32));
-        public Task<IReadOnlyList<string>> DiffNameOnlyAsync(string repoRoot, string baseRef, string headRef, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        public Task<IReadOnlyList<string>> DiffNameOnlyAsync(string repoRoot, string baseRef, string headRef, CancellationToken ct) => Task.FromResult(DiffResult);
     }
 }

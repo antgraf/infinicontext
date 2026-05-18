@@ -1352,3 +1352,66 @@ Tests:
 ### Not committed yet
 
 The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - same-day progress.md heading collapse.`
+
+## 2026-05-17 (review-gate impl session - empty-scope short-circuit)
+
+User pushed and said "continue". Next follow-up: when scope resolution yields 0 files, refuse the review with a clear message - don't spawn 6 agents to review nothing.
+
+### Behavior change
+
+In `TaskCommandHandler.HandleReviewAsync`, the ordering is now:
+
+1. Load task record, validate home_cwd.
+2. **Resolve scope.** (Moved up from after the cost prompt.)
+3. If `scope.Files.Count == 0`: print a clear message + the list of excluded files + a hint, return. No cost prompt, no agents.
+4. Cost prompt (unless `--yes`).
+5. Gather inputs (description.md, progress.md, CLAUDE.md, etc.).
+6. Spawn 5 reviewers + 1 coordinator.
+
+The cost prompt now also includes the resolved file count (`Scope: N files.`) so the user has the right context to decide.
+
+### Hint wording
+
+- Without `--scope`: "Pass --scope <path[;path]> to override, or check that the task's base_commit_sha is correct." (Helps users who hit zero-files because base_commit_sha equals HEAD or merge-base wasn't usable.)
+- With `--scope`: "Every --scope path was excluded or unreadable." (User already supplied paths; pointing them to --scope wouldn't help.)
+- The scope's `FallbackNote` (when base_commit_sha was null and merge-base was used) is also surfaced regardless of zero/non-zero.
+
+### Code changes (uncommitted at flush time)
+
+CLI:
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs`:
+  - `HandleReviewAsync` reordered. Scope resolution moves up before the cost prompt. New `if (scope.Files.Count == 0)` block emits the message-and-return path. Scope's FallbackNote is now surfaced as a `note:` line regardless of zero/non-zero.
+  - Cost prompt message updated to include `Scope: N files.`
+
+Tests:
+
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs`:
+  - **Fixture refactor.** `Fixture.OpenAsync(emptyDiff: false)` now defaults to seeding `src/Foo.cs` on disk AND configuring the FakeGitRunner to report it in `DiffResult`. This means the 11 existing tests that depend on reviewers spawning continue to work without any per-test changes. New tests opt into empty-scope behavior with `emptyDiff: true`.
+  - `FakeGitRunner` gained a settable `DiffResult` property.
+  - 3 new tests:
+    - `Refuses_with_clear_message_when_scope_has_zero_files`: empty diff тЖТ "nothing to review (0 files in scope)" + the "Pass --scope" hint + no agents spawned.
+    - `Empty_scope_short_circuit_runs_before_the_cost_prompt`: even without `--yes`, the empty-scope path doesn't trigger the `[y/N]` prompt - users shouldn't confirm a spawn that will never happen.
+    - `Empty_scope_with_user_supplied_scope_shows_a_scope_specific_message`: when the user explicitly passed `--scope ghost.cs`, the hint reflects "Every --scope path was excluded or unreadable" rather than pointing at the `--scope` flag they already used.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Cli -t:Compile` - green.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test --no-build` (full suite) - **924/927 passing** (3 macOS-only skips). 3 new tests; no regressions.
+- `dotnet format` - green on Cli and Tests.
+
+### Remaining v1 follow-ups
+
+- Glob expansion for `--scope` (currently splits on `;` and treats each as a literal path).
+- `CoordinatorModel` channel split (ReviewService refactor; the biggest remaining piece).
+
+### Files touched this session
+
+- `src/InfiniContext.Cli/Tasks/TaskCommandHandler.cs` (reordered scope resolution before cost prompt; new empty-scope short-circuit block)
+- `tests/InfiniContext.Tests/Cli/Tasks/TaskCommandHandlerReviewTests.cs` (Fixture defaults seed a non-empty scope; FakeGitRunner DiffResult settable; 3 new tests)
+- `.task/0003-infinicontext-phase-2b-continuation-plan/progress.md` (this entry)
+
+### Not committed yet
+
+The 2 source/test files plus progress.md are uncommitted. **Recommended commit shape: single commit** titled e.g. `Stage 2B follow-up: /task review - empty-scope short-circuit.`
