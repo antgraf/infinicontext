@@ -127,6 +127,20 @@ public class FindingModelTests
         parsed!.Reviewer.Should().Be("security");
     }
 
+    [Fact]
+    public void Options_MaxDepth_is_bounded_against_pathological_nesting()
+    {
+        // sec-008: an LLM that emits deeply-nested arrays/objects should hit the parser's
+        // MaxDepth cap rather than running unbounded. Build a payload with depth well beyond
+        // MaxParseDepth and verify the deserializer refuses it.
+        FindingJson.Options.MaxDepth.Should().Be(FindingJson.MaxParseDepth);
+
+        var depth = FindingJson.MaxParseDepth + 16;
+        var nested = new string('[', depth) + new string(']', depth);
+        var act = () => JsonSerializer.Deserialize<System.Text.Json.JsonElement>(nested, FindingJson.Options);
+        act.Should().Throw<JsonException>();
+    }
+
     // ---------- Validator ----------
 
     [Fact]

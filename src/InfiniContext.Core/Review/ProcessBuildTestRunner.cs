@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using InfiniContext.Core.Supervision;
 
 namespace InfiniContext.Core.Review;
 
@@ -19,10 +20,12 @@ namespace InfiniContext.Core.Review;
 public sealed class ProcessBuildTestRunner : IBuildTestRunner
 {
     private readonly ProcessBuildTestRunnerOptions _options;
+    private readonly IProcessSupervisor? _supervisor;
 
-    public ProcessBuildTestRunner(ProcessBuildTestRunnerOptions? options = null)
+    public ProcessBuildTestRunner(ProcessBuildTestRunnerOptions? options = null, IProcessSupervisor? supervisor = null)
     {
         _options = options ?? new ProcessBuildTestRunnerOptions();
+        _supervisor = supervisor;
     }
 
     public Task<BuildTestOutcome> BuildAsync(string repoRoot, CancellationToken ct)
@@ -39,7 +42,7 @@ public sealed class ProcessBuildTestRunner : IBuildTestRunner
         return RunAsync(repoRoot, args, _options.TestTimeoutSeconds, ct);
     }
 
-    private static async Task<BuildTestOutcome> RunAsync(
+    private async Task<BuildTestOutcome> RunAsync(
         string repoRoot,
         IReadOnlyList<string> argv,
         int timeoutSeconds,
@@ -61,6 +64,17 @@ public sealed class ProcessBuildTestRunner : IBuildTestRunner
         using var proc = Process.Start(psi);
         if (proc is null)
             return new BuildTestOutcome(Passed: false, FailureSummary: "Process.Start returned null for `dotnet`");
+
+        // arch-003/004: attach to the host's IProcessSupervisor so dotnet build/test (and its
+        // msbuild / vstest descendants) die with the host on Windows (Job Object KILL_ON_JOB_CLOSE)
+        // and POSIX (SIGTERM cascade). Without this, killing the host mid-review leaks descendants.
+        // Attach failures are tolerated: a missing supervisor is a no-op in tests and a degraded
+        // (but still correct-for-this-run) state in production.
+        if (_supervisor is not null)
+        {
+            try { _supervisor.Attach(proc); }
+            catch { /* best-effort; the host's own supervision still applies on process exit */ }
+        }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));

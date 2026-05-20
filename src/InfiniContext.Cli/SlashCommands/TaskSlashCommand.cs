@@ -93,37 +93,14 @@ internal sealed class TaskSlashCommand : ISlashCommand
 
     private static async Task TryStartTaskSwitchAsync(SlashCommandContext ctx, int id, CancellationToken ct)
     {
-        if (ctx.PrepareTaskSwitch is null)
-        {
-            ctx.Write("[task] switch is unavailable in this context.\n");
-            return;
-        }
-
-        TaskSwitchPlan? plan;
-        try
-        {
-            plan = await ctx.PrepareTaskSwitch(id, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            ctx.Write($"[task] switch failed: {ex.Message}\n");
-            return;
-        }
-
-        if (plan is null)
-        {
-            ctx.Write($"[task] {id:D4} not found.\n");
-            return;
-        }
+        var plan = await LoadTaskSwitchPlanAsync(ctx, id, "switch", ct).ConfigureAwait(false);
+        if (plan is null) return;
 
         // The host's outer loop spawns the next session with cwd = plan.Task.HomeCwd, so the
         // relative `.task/<id>-<slug>/` pointer in FirstUserMessage resolves correctly regardless
         // of where InfiniContext itself was launched from. Tasks own their home; sessions follow.
         ctx.Write($"[task] switching to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
-        if (!PathsAreEquivalent(plan.Task.HomeCwd, Environment.CurrentDirectory))
-            ctx.Write($"       cwd: {plan.Task.HomeCwd}\n");
-        if (plan.Drift.Count > 0)
-            ctx.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
+        WriteCwdAndDrift(ctx, plan);
 
         ctx.Actions.RequestSwitch(plan);
     }
@@ -133,11 +110,6 @@ internal sealed class TaskSlashCommand : ISlashCommand
         if (ctx.SessionManager is null)
         {
             ctx.Write("[task] spawn is unavailable in this context (no session manager).\n");
-            return;
-        }
-        if (ctx.PrepareTaskSwitch is null)
-        {
-            ctx.Write("[task] spawn is unavailable in this context (no task subsystem).\n");
             return;
         }
 
@@ -153,21 +125,8 @@ internal sealed class TaskSlashCommand : ISlashCommand
             }
         }
 
-        TaskSwitchPlan? plan;
-        try
-        {
-            plan = await ctx.PrepareTaskSwitch(id, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            ctx.Write($"[task] spawn failed: {ex.Message}\n");
-            return;
-        }
-        if (plan is null)
-        {
-            ctx.Write($"[task] {id:D4} not found.\n");
-            return;
-        }
+        var plan = await LoadTaskSwitchPlanAsync(ctx, id, "spawn", ct).ConfigureAwait(false);
+        if (plan is null) return;
 
         var request = new SpawnRequest
         {
@@ -216,12 +175,57 @@ internal sealed class TaskSlashCommand : ISlashCommand
         }
 
         ctx.Write($"[task] spawned session {newSession.Id:D} bound to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+        WriteCwdAndDrift(ctx, plan);
+
+        ctx.Actions.RequestFocus(newSession.Id);
+    }
+
+    /// <summary>
+    /// Shared plan-loading + error-printing path for <c>/task switch</c> and <c>/task spawn</c>
+    /// (arch-012). Returns <c>null</c> when the task subsystem is unavailable, when the task
+    /// doesn't resolve, or when <see cref="SlashCommandContext.PrepareTaskSwitch"/> threw ╤В╨Р╨д
+    /// the user-facing message is already printed in each of those cases. <paramref name="verb"/>
+    /// is the user-visible operation name ("switch" / "spawn") used in error strings.
+    /// </summary>
+    private static async Task<TaskSwitchPlan?> LoadTaskSwitchPlanAsync(SlashCommandContext ctx, int id, string verb, CancellationToken ct)
+    {
+        if (ctx.PrepareTaskSwitch is null)
+        {
+            ctx.Write($"[task] {verb} is unavailable in this context.\n");
+            return null;
+        }
+
+        TaskSwitchPlan? plan;
+        try
+        {
+            plan = await ctx.PrepareTaskSwitch(id, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ctx.Write($"[task] {verb} failed: {ex.Message}\n");
+            return null;
+        }
+
+        if (plan is null)
+        {
+            ctx.Write($"[task] {id:D4} not found.\n");
+            return null;
+        }
+
+        return plan;
+    }
+
+    /// <summary>
+    /// Shared post-plan output between <c>/task switch</c> and <c>/task spawn</c>: prints the
+    /// task's <c>HomeCwd</c> when it differs from the current directory and any drift the plan
+    /// captured. Both lines are indented to align under the per-verb status line printed above.
+    /// </summary>
+    private static void WriteCwdAndDrift(SlashCommandContext ctx, TaskSwitchPlan plan)
+    {
         if (!PathsAreEquivalent(plan.Task.HomeCwd, Environment.CurrentDirectory))
             ctx.Write($"       cwd: {plan.Task.HomeCwd}\n");
         if (plan.Drift.Count > 0)
             ctx.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
-
-        ctx.Actions.RequestFocus(newSession.Id);
     }
 
     private static bool PathsAreEquivalent(string a, string b)

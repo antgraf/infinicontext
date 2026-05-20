@@ -297,7 +297,7 @@ Settings:
 
 - `settings.json` - add `review` section with defaults shown above.
 - `settings.schema.json` - schema entries.
-- `src/InfiniContext.Core/Settings/InfiniContextSettings.cs` - `ReviewSettings` record + binding.
+- `src/InfiniContext.Core/Configuration/InfiniContextSettings.cs` - `ReviewSettings` record + binding.
 
 Tests (`tests/InfiniContext.Tests/Review/`):
 

@@ -1792,3 +1792,187 @@ Host reported context at 259% of 1M-token capacity (Opus 4.7 1M-context). This e
 **Validation state.** Build green; 950 / 953 tests passing (3 macOS-only skips); format gate green on touched files. Safe to commit as-is.
 
 **Behavioral validation deferred.** The v4 SKILL.md is the body loaded in this conversation, so the autonomy-default change cannot self-validate here. The first task-bound session spun up after the next host launch is the natural validation point; `SkillInstaller` rewrites the on-disk SKILL.md to v5 on host startup once the in-code version exceeds the marker.
+
+## 2026-05-18 (review-backlog walk: 6 cheap/local findings)
+
+Picked up the handoff from the prior session: walk the 19 awaiting items in `review-2026-05-18T041337.md`. The skill v5 + sec-001 commit (`1ecab59`) already landed in main, so the open commit-shape question resolved itself. Of the 19 awaiting, 3 are meta-findings (completeness/codelogic/tests reviewers failed to produce a usable report) and 16 are real findings clustered into "cheap/local" and "needs-decision" piles. This session shipped the cheap/local six; the rest are surfaced to the user as a single decision batch (see handoff).
+
+### Findings closed this session
+
+- **arch-001** (doc drift). `.task/0003-.../review-feature-design.md:300` referenced `src/InfiniContext.Core/Settings/InfiniContextSettings.cs` but `ReviewSettings` lives in `Configuration/`. One-character path swap under the lock contract.
+- **sec-006** (`ScopeResolver.ParseFilesTouched` origin validation). Strengthened `LooksLikePath` to reject `Path.IsPathRooted(s)` and any segment equal to `..` (splitting on both `/` and `\`). Defense-in-depth on top of sec-001's `ReadFilesAsync` containment check: malformed `Files touched` tokens never reach the loader. Two new parse-layer tests: a portable Unix-rooted case and a Windows-rooted/UNC case gated by `[WindowsOnlyFact]` (per the CLAUDE.md hazard note about `Path.IsPathRooted` being OS-dependent).
+- **sec-004** (case-insensitive containment in `AutoApplyExecutor`). Swapped the `StartsWith(normalizedRoot + sep, Ordinal)` containment check for `Path.GetRelativePath` + leading-`..`/`IsPathRooted` test. The new idiom honors the OS's case sensitivity, so a user-supplied repoRoot whose casing differs from what `Path.GetFullPath` normalizes to no longer over-rejects. The existing escape-the-repo test still passes (GetRelativePath returns `..\escape.cs` for the sibling case). ScopeResolver retains its sec-001 StartsWith pattern for now тАФ see handoff note on whether to unify.
+- **sec-008** (explicit `MaxDepth` on `FindingJson.Options`). Added `MaxParseDepth = 32` (down from the default 64) and applied it to both `Options` and `PrettyOptions`. The expected envelope shape tops out at ~5 levels; 32 leaves headroom for nested `suggested_fix` text fields. Test exercises a `[`*N`]`*N nesting beyond the cap and asserts `JsonException`.
+- **arch-003 / arch-004** (`ProcessBuildTestRunner` supervisor attach). Added optional `IProcessSupervisor? supervisor` ctor param; after `Process.Start(psi)`, calls `supervisor?.Attach(proc)`. Attach failures are tolerated (best-effort log point in production тАФ same disposition as the existing `try { supervisor.Attach } catch { }` in `CliLightModelInvocation.cs:179-188`, but no tree-kill in the catch per D12). `Program.cs:185` now passes the host supervisor through. Test uses a `RecordingSupervisor` to assert exactly one Attach call against a dummy `dotnet build _does_not_exist.slnx` invocation in an empty temp directory. Does NOT cover the D12 tension noted in arch-003 (descendant orphan when timeout-kill fires) тАФ that's a deeper design question deferred to the decision batch.
+- **sec-007** (`AutoApplyExecutor.RevertAsync` per-file failure logging). Changed `RevertAsync` from `static async Task` to instance `async Task<int>` returning a failure count; each per-file IO failure is now logged with the path + exception type (was a bare `catch { }`). Both gate-failure branches in `ApplyAsync` propagate the count into `GateReversionReason` via a new `internal static AppendRevertFailures` helper (e.g. `"build broke after auto-apply: foo; revert had 3 per-file failure(s) - check log"`). Two new tests on the helper cover the zero-failure passthrough and the count-appended path. The actual "engineer a real revert failure" integration test was skipped тАФ the helper round-trip is enough for v1.
+
+### Findings deferred to user decision (next session)
+
+13 of the 19 awaiting findings тАФ 3 sec-* needing policy decisions, 7 arch-* needing scope decisions, 3 meta findings about reviewer-prompt failures. Captured in the handoff at the end of this entry as a batch the user can pick from. None are blocked on me; all are blocked on a product/policy call.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs` тАФ `LooksLikePath` tightened (sec-006).
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` тАФ `Path.GetRelativePath` containment (sec-004); `RevertAsync` returns failure count + logs each (sec-007); new `AppendRevertFailures` helper.
+- `src/InfiniContext.Core/Review/FindingModel.cs` тАФ `MaxParseDepth = 32` constant + `MaxDepth` on both options (sec-008).
+- `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs` тАФ optional `IProcessSupervisor? supervisor` ctor param; `RunAsync` made non-static so it can read the field; `_supervisor?.Attach(proc)` after `Process.Start` (arch-003 / arch-004).
+
+CLI:
+
+- `src/InfiniContext.Cli/Program.cs:185` тАФ passes `supervisor: supervisor` into `ProcessBuildTestRunner` ctor.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs` тАФ 2 new ParseFilesTouched tests (`rejects_parent_segments`, `rejects_unix_rooted_paths` portable + `rejects_windows_rooted_paths` Windows-only); new `using InfiniContext.Tests.Supervision;` for `WindowsOnlyFact`.
+- `tests/InfiniContext.Tests/Review/FindingModelTests.cs` тАФ 1 new test `Options_MaxDepth_is_bounded_against_pathological_nesting`.
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` тАФ 2 new tests on the new `AppendRevertFailures` helper.
+- `tests/InfiniContext.Tests/Review/ProcessBuildTestRunnerTests.cs` тАФ 1 new test `BuildAsync_attaches_spawned_dotnet_to_the_supervisor` plus a `RecordingSupervisor` test double; new `using System.Diagnostics;` + `using InfiniContext.Core.Supervision;`.
+
+Task artifacts (under the lock contract):
+
+- `.task/0003-.../review-feature-design.md` тАФ `Core/Settings/` тЖТ `Core/Configuration/` (arch-001).
+- `.task/0003-.../progress.md` тАФ this entry.
+- `.task/0003-.../index.md` тАФ last-updated dates bumped for review-feature-design.md + progress.md.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core -c Debug` тАФ green (Cli is locked by two running `InfiniContext.Cli` processes + VS Insiders, same gotcha noted in prior handoffs тАФ `--no-dependencies` on the test project is the workaround).
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` тАФ green.
+- `dotnet test tests/InfiniContext.Tests --no-build` (full suite) тАФ **957 passing + 3 macOS-only skipped (960 total)**. +7 new tests vs the 950 baseline (1 ScopeResolver count = 41 was 39 + 2; 1 FindingModel = 23 was 22 + 1; 1 ProcessBuildTestRunner = 5 was 4 + 1; 1 AutoApplyExecutor = 41 was 39 + 2; rounds to +7). No regressions.
+- `dotnet format src/InfiniContext.Core --verify-no-changes` тАФ green.
+- `dotnet format tests/InfiniContext.Tests --verify-no-changes` тАФ green.
+
+### Not committed yet
+
+10 files (5 source, 4 test, 1 design.md doc) + progress.md + index.md are uncommitted. Recommended commit shape: **single commit** with the title `Stage 2B follow-up: /task review - walk 6 cheap/local awaiting findings (arch-001, sec-004, sec-006, sec-007, sec-008, arch-003+004).` The fixes are independent in code but conceptually one batch ("the review-backlog cheap-pile pass"), so splitting wouldn't help the log.
+
+### Handoff to next session
+
+The cheap/local awaiting items are closed. **13 findings remain awaiting a user decision**, plus 3 meta findings on reviewer-prompt parser failures. Surface as a single batch with my read on each:
+
+**Security (need policy decisions):**
+
+- **sec-002 + arch-011** тАФ Expand the secret-file list and/or add a ctor seam for `ReviewSettings.ExcludedFilePatterns`. The exact list to add (`appsettings.Development.json`, `*.crt`, kubeconfig, `.aws/credentials`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `*.jks`, `*.keystore`, `*.asc`, `*.gpg`, `*.tfvars`, this project's own `settings.json` for `ANTHROPIC_API_KEY`) is a product call тАФ false-positive risk on `appsettings.Development.json` and `*.crt` in particular. Pair with arch-011's "add a ctor seam now to avoid a bigger refactor later" тАФ the seam itself is mechanical; what stops me is needing to know the v1 list.
+- **sec-003** тАФ Scrub raw reviewer output (the `<details>` blocks of `review-*.md`) for secrets before persisting. Needs a regex set decision (Anthropic key, AWS, generic JWT/base64) and a scope decision (raw blocks only, or also rendered findings).
+- **sec-005** тАФ Resolve `git` from `PATH` once (or set the per-process env to disable cwd-search on Windows) instead of relying on `Process.Start { FileName = "git", WorkingDirectory = repoRoot }`. Trust-model question тАФ coordinator note says modern Windows defaults to `NoDefaultCurrentDirectoryInExePath` and the silent-failure path is the harder bug to fix.
+
+**Architecture (need scope decisions):**
+
+- **arch-002** тАФ `CliReviewerAgentService` reuses `CliLightModelChild.Spawn`. Stated principle is "agents must not be light models"; reviewer flagged the layering. Two paths: (a) accept the coupling (it's just spawn machinery, model id is the meaningful difference), or (b) extract a third shared helper that both call, with neither importing the other.
+- **arch-005** тАФ `AutoApplyExecutor` writes via raw `File.WriteAllTextAsync`. Design says `.task/` edits should go through the lock contract. Three options: (a) enforce lock for `.task/` writes (executor takes an `ILockClient` dep); (b) reject coordinator-suggested `.task/` edits outright at the parse layer; (c) update the design to say executor is exempt.
+- **arch-006 + arch-007** тАФ `TaskCommandHandler` has 8 ctor deps; `SlashCommandContext` is split positional/init ad-hoc. Cross-cutting refactor to options-records тАФ touches every call site of both. Worth doing now (the PR introduced the pattern divergence) or accept the convention is "init-properties are how new collaborators land".
+- **arch-008** тАФ Unparseable-reviewer synthesis is duplicated in `ReviewService.SynthesizeReviewerFailureFinding` (host-side) and the coordinator's system prompt. Resolve by removing the host fallback (trust the coordinator) or removing it from the prompt (host owns it). Today both paths exist intentionally (the comment says the duplication is deterministic-fallback), but the two strings can drift.
+- **arch-009** тАФ `TaskCommandHandler.HandleReviewAsync` reads `CLAUDE.md` / `docs/stage2/decisions.md` directly from CLI. Layering says discovery convention belongs in Core (would also serve a future Stage 3 GUI). Pure refactor; no behavior change.
+- **arch-012** тАФ `/task spawn` and `/task switch` share ~80% of `TaskSlashCommand` setup. Extract a shared helper. Mechanical; low risk.
+
+**Meta (reviewer prompts didn't parse):**
+
+- 3 awaiting items are synthesized "Completeness/CodeLogic/Tests reviewer did not produce a usable report" markers тАФ those reviewers crashed or returned empty before emitting JSON. The 1-of-21 auto-apply ratio is partly because only 2 of 5 reviewers parsed; tightening `ReviewerPrompts.cs` and re-running `/task review` is the next dogfood pass.
+
+Once the user picks which subset of the 13 to take, they're code work (most are local; arch-006/007 and arch-005 are the largest). Until then no more code changes are queued for this session.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs`
+- `src/InfiniContext.Core/Review/AutoApplyExecutor.cs`
+- `src/InfiniContext.Core/Review/FindingModel.cs`
+- `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs`
+- `src/InfiniContext.Cli/Program.cs`
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs`
+- `tests/InfiniContext.Tests/Review/FindingModelTests.cs`
+- `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs`
+- `tests/InfiniContext.Tests/Review/ProcessBuildTestRunnerTests.cs`
+- `.task/0003-.../review-feature-design.md`
+- `.task/0003-.../progress.md` (this entry)
+- `.task/0003-.../index.md` (date bumps)
+
+### Session ended on host context-pressure threshold (hard)
+
+Host reported context at 1125% of 1M-token capacity (Opus 4.7 1M-context). This marker is the final flush; no new code work started, no clarifying questions asked.
+
+**Working tree snapshot at flush time** (re-verify with `git status --short` on resume):
+
+- M `src/InfiniContext.Core/Review/ScopeResolver.cs` (sec-006)
+- M `src/InfiniContext.Core/Review/AutoApplyExecutor.cs` (sec-004 + sec-007)
+- M `src/InfiniContext.Core/Review/FindingModel.cs` (sec-008)
+- M `src/InfiniContext.Core/Review/ProcessBuildTestRunner.cs` (arch-003+004)
+- M `src/InfiniContext.Cli/Program.cs` (supervisor wire-up for ProcessBuildTestRunner)
+- M `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs` (+2 tests; +using Supervision)
+- M `tests/InfiniContext.Tests/Review/AutoApplyExecutorTests.cs` (+2 AppendRevertFailures tests)
+- M `tests/InfiniContext.Tests/Review/FindingModelTests.cs` (+1 MaxDepth test)
+- M `tests/InfiniContext.Tests/Review/ProcessBuildTestRunnerTests.cs` (+1 attach test + RecordingSupervisor)
+- M `.task/0003-.../review-feature-design.md` (arch-001)
+- M `.task/0003-.../progress.md` (this entry)
+- M `.task/0003-.../index.md` (date bumps)
+
+**Validation state.** Build green (Core via `dotnet build`; tests via `--no-dependencies` because Cli is locked by two running InfiniContext.Cli processes + VS Insiders); 957 / 960 tests passing (3 macOS-only skips); `dotnet format --verify-no-changes` green on both projects. Safe to commit as-is.
+
+**Open operator question at session end.** Whether to commit the 6-fix batch now (recommended title in the previous "Not committed yet" subsection) or wait while the 13 decision-needing findings are triaged. No answer arrived before the flush тАФ the working tree carries everything; next session can read this entry and continue without context loss.
+
+## 2026-05-20 (review-backlog walk: two more clear-wins from the awaiting pile)
+
+User asked to walk the awaiting findings in `review-2026-05-18T041337.md` again and apply "everything that makes sense". The prior session (2026-05-18) already closed the 6 cheap/local ones; this session takes two more clear-wins from the 13 deferred and leaves the rest as still-needing a product/policy decision.
+
+### Findings closed this session
+
+- **sec-002 (partial)** - Expanded the `ScopeResolver` secret-file heuristic to the unambiguous additions only: filenames `credentials`, `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `kubeconfig`, `.htpasswd`; extensions `.jks`, `.keystore`, `.asc`, `.gpg`, `.tfvars`. Deliberately NOT taken: `settings.json` (the project's committed file uses an `ANTHROPIC_API_KEY` placeholder - matching it would exclude the file from every review by default, which the user almost certainly doesn't want); `appsettings.Development.json` and `*.crt` (coordinator note flagged false-positive risk). `.kube/config` is also out - `LooksLikeSecret` matches on the filename portion only, so the path's bare `config` filename is too generic; the `kubeconfig` filename is covered for users who name the file that way. The borderline patterns wait on the arch-011 configurable seam paired with a v1 list product decision. `LooksLikeSecret_flags_common_secret_paths` got 14 new `[InlineData]` rows covering the added patterns.
+- **arch-012** - Extracted the shared plan-loading + cwd/drift-printing path between `TryStartTaskSwitchAsync` and `TrySpawnTaskSessionAsync` into two helpers: `LoadTaskSwitchPlanAsync(ctx, id, verb, ct)` (handles `PrepareTaskSwitch is null` / try-catch / null-plan, all printing user-visible refusal strings parameterized by verb) and `WriteCwdAndDrift(ctx, plan)` (the two-line cwd / drift output). Behavior is unchanged for the happy paths; the one user-visible diff is the "no task subsystem" parenthetical on `/task spawn` is now folded into the simpler "[task] spawn is unavailable in this context." string - no tests pinned the old wording (grep'd `tests/` for the literal). Net diff in `TaskSlashCommand.cs`: ~30 fewer lines, the two methods now read top-down instead of repeating the same prologue twice.
+
+### Findings deferred to user decision (unchanged from 2026-05-18 handoff)
+
+- **sec-002 remainder + arch-011** - The borderline patterns (`settings.json`, `appsettings.Development.json`, `*.crt`) and the configurable-seam refactor still wait on a product call. The handoff in the prior entry has the full list.
+- **sec-003** (raw-output scrubbing), **sec-005** (git PATH trust model), **arch-002** (CliReviewerAgentService coupling), **arch-005** (`.task/` lock-contract enforcement at executor), **arch-006+007** (cross-cutting options-record refactor), **arch-008** (intentional duplication), **arch-009** (Core layering for decisions.md discovery) - all unchanged.
+- 3 meta findings on completeness/codelogic/tests reviewer prompt failures - separately tracked, waits on the next `/task review` dogfood pass.
+
+### Code changes (uncommitted at flush time)
+
+Core:
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs` - added 8 SecretFilenames + 5 SecretExtensions; docstring comments call out sec-002 partial + the deferred borderline cases.
+
+CLI:
+
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs` - extracted `LoadTaskSwitchPlanAsync` + `WriteCwdAndDrift` shared helpers; `TryStartTaskSwitchAsync` and `TrySpawnTaskSessionAsync` both call through them.
+
+Tests:
+
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs` - 14 new `[InlineData]` rows on `LooksLikeSecret_flags_common_secret_paths`.
+
+Task artifacts (under the lock contract):
+
+- `.task/0003-.../progress.md` - this entry.
+- `.task/0003-.../index.md` - last-updated date bump.
+
+### Build/test snapshot
+
+- `dotnet build src/InfiniContext.Core` - green.
+- `dotnet build src/InfiniContext.Cli` - same DLL-locked gotcha as prior sessions (running `InfiniContext.Cli` processes + VS Insiders hold `InfiniContext.Core.dll`); compile succeeds, copy step fails. Worked around with `--no-dependencies` on the test build.
+- `dotnet build tests/InfiniContext.Tests --no-dependencies` - green.
+- `dotnet test tests/InfiniContext.Tests --no-build` (full suite) - **971 passing + 3 macOS-only skipped (974 total)**. +14 vs the 957 baseline (the new sec-002 InlineData rows). No regressions.
+- `dotnet format --verify-no-changes` - green on Core, Cli, and Tests.
+
+### Not committed yet
+
+3 files (1 source in Core, 1 source in Cli, 1 test) + progress.md + index.md are uncommitted on top of the 10-file 2026-05-18 batch that was also never committed. Recommended commit shape: **two commits**, in order:
+
+1. The prior session's 6 fixes (already documented in the 2026-05-18 entry).
+2. This session's two clear-wins (sec-002 partial + arch-012).
+
+Splitting matters here because the two batches are conceptually separate ("the review-backlog cheap-pile" vs "two more clear-wins from the deferred-but-actually-doable subset") and would land more cleanly in the log that way. A single combined commit is also defensible if the user prefers.
+
+### Handoff to next session
+
+The "obvious wins" from the 21-finding review report are now all closed (1 auto-applied by the host on 2026-05-18; 6 in the prior session; 2 here). What remains in the awaiting pile is genuinely user-decision-blocked - scope/policy/design questions, not implementation work. The 2026-05-18 handoff lists them with my read on each; nothing has changed there.
+
+The next productive move on the review surface is either (a) re-running `/task review` after tightening `ReviewerPrompts.cs` so completeness/codelogic/tests reviewers actually produce output (the 1-of-21 auto-apply ratio was partly a parser-failure artifact), or (b) the user picking which of the deferred 11 + 3-meta to take next. Both are the user's call.
+
+### Files touched this session
+
+- `src/InfiniContext.Core/Review/ScopeResolver.cs`
+- `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs`
+- `tests/InfiniContext.Tests/Review/ScopeResolverTests.cs`
+- `.task/0003-.../progress.md` (this entry)
+- `.task/0003-.../index.md` (date bump)
+

@@ -1,5 +1,6 @@
 using FluentAssertions;
 using InfiniContext.Core.Review;
+using InfiniContext.Tests.Supervision;
 
 namespace InfiniContext.Tests.Review;
 
@@ -219,6 +220,25 @@ public class ScopeResolverTests
     [InlineData("settings.user.json")]
     [InlineData(".ssh/id_rsa")]
     [InlineData("config/id_ed25519")]
+    // sec-002: unambiguous additions (clear-wins; borderline patterns like
+    // appsettings.Development.json / *.crt deliberately not in the list).
+    [InlineData(".aws/credentials")]
+    [InlineData("credentials")]
+    [InlineData(".netrc")]
+    [InlineData("_netrc")]
+    [InlineData(".npmrc")]
+    [InlineData(".pypirc")]
+    [InlineData(".git-credentials")]
+    // `.kube/config` is intentionally NOT in the list: LooksLikeSecret matches on the filename
+    // portion only, so this path's filename `config` is too generic. Users who name the file
+    // `kubeconfig` (also common) are covered; .kube/config waits on the arch-011 seam.
+    [InlineData("kubeconfig")]
+    [InlineData(".htpasswd")]
+    [InlineData("certs/server.jks")]
+    [InlineData("identity.keystore")]
+    [InlineData("key.asc")]
+    [InlineData("backup.gpg")]
+    [InlineData("terraform/prod.tfvars")]
     public void LooksLikeSecret_flags_common_secret_paths(string path)
     {
         ScopeResolver.LooksLikeSecret(path).Should().BeTrue();
@@ -376,6 +396,54 @@ public class ScopeResolverTests
     public void ParseFilesTouched_returns_empty_for_empty_input()
     {
         ScopeResolver.ParseFilesTouched("").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ParseFilesTouched_rejects_parent_segments()
+    {
+        // sec-006: defense-in-depth - reject `..` traversal at the parse layer so a poisoned
+        // progress.md "Files touched" entry can't reach ReadFilesAsync at all.
+        var md = """
+            ### Files touched
+
+            - `../escape.cs` - parent segment
+            - `src/../../etc/passwd` - smuggled parent segment
+            - `src\..\escape.cs` - backslash variant
+            - `src/Ok.cs` - benign sibling
+            """;
+
+        ScopeResolver.ParseFilesTouched(md).Should().BeEquivalentTo(new[] { "src/Ok.cs" });
+    }
+
+    [Fact]
+    public void ParseFilesTouched_rejects_unix_rooted_paths()
+    {
+        // sec-006: absolute paths shouldn't appear in "Files touched"; reject at parse layer.
+        // `Path.IsPathRooted("/foo")` is true on every OS, so this case is platform-portable.
+        var md = """
+            ### Files touched
+
+            - `/etc/passwd` - rooted Unix
+            - `src/Ok.cs` - benign relative
+            """;
+
+        ScopeResolver.ParseFilesTouched(md).Should().BeEquivalentTo(new[] { "src/Ok.cs" });
+    }
+
+    [WindowsOnlyFact]
+    public void ParseFilesTouched_rejects_windows_rooted_paths()
+    {
+        // sec-006: `Path.IsPathRooted` only recognises C:\ and \\unc on Windows (per CLAUDE.md's
+        // cross-platform path note); this case is Windows-only.
+        var md = """
+            ### Files touched
+
+            - `C:\Windows\System32\config\SAM` - rooted Windows
+            - `\\server\share\secret.txt` - UNC
+            - `src/Ok.cs` - benign relative
+            """;
+
+        ScopeResolver.ParseFilesTouched(md).Should().BeEquivalentTo(new[] { "src/Ok.cs" });
     }
 
     // ---------- Helpers ----------

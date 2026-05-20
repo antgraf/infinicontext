@@ -166,7 +166,18 @@ public sealed class ScopeResolver
     {
         if (string.IsNullOrWhiteSpace(s)) return false;
         if (s.Contains(' ')) return false;
-        return s.Contains('/') || s.Contains('\\');
+        if (!s.Contains('/') && !s.Contains('\\')) return false;
+        // Defense-in-depth (sec-006): progress.md is agent-written and can be steered by
+        // indirect-injection sources. Reject parse-time anything that's absolute or escapes
+        // the repo root, so a malformed "Files touched" entry never reaches ReadFilesAsync.
+        // ReadFilesAsync's StartsWith(repoRoot) check is the load-bearing guard; this trims
+        // obviously-malicious tokens at parse and gives ParseFilesTouched a tighter contract.
+        if (Path.IsPathRooted(s)) return false;
+        foreach (var segment in s.Split('/', '\\'))
+        {
+            if (segment == "..") return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -197,7 +208,13 @@ public sealed class ScopeResolver
         return false;
     }
 
-    /// <summary>Filenames that are always secrets, regardless of extension.</summary>
+    /// <summary>
+    /// Filenames that are always secrets, regardless of extension. sec-002 expanded the list to
+    /// the unambiguous wins (AWS / netrc / npm / pypi / git-credentials / kubeconfig / htpasswd)
+    /// and left the false-positive-prone ones out (e.g. <c>appsettings.Development.json</c>,
+    /// <c>*.crt</c>, the project's own <c>settings.json</c>) ╤В╨Р╨д those need a product call paired
+    /// with the configurable seam (arch-011) and aren't taken in v1.
+    /// </summary>
     private static readonly string[] SecretFilenames =
     [
         ".env",
@@ -206,6 +223,14 @@ public sealed class ScopeResolver
         "id_dsa",
         "id_ecdsa",
         "id_ed25519",
+        "credentials",
+        ".netrc",
+        "_netrc",
+        ".npmrc",
+        ".pypirc",
+        ".git-credentials",
+        "kubeconfig",
+        ".htpasswd",
     ];
 
     /// <summary>Filename prefixes that flag the file as a secret (e.g. <c>.env.local</c>, <c>.env.production</c>).</summary>
@@ -214,7 +239,11 @@ public sealed class ScopeResolver
         ".env.",
     ];
 
-    /// <summary>File extensions that flag the file as a secret.</summary>
+    /// <summary>
+    /// File extensions that flag the file as a secret. sec-002 expanded with Java keystore
+    /// (<c>.jks</c>/<c>.keystore</c>), PGP/GPG (<c>.asc</c>/<c>.gpg</c>), and Terraform variable
+    /// files (<c>.tfvars</c>, frequently hold credentials).
+    /// </summary>
     private static readonly string[] SecretExtensions =
     [
         ".key",
@@ -223,6 +252,11 @@ public sealed class ScopeResolver
         ".p12",
         ".secret",
         ".secrets",
+        ".jks",
+        ".keystore",
+        ".asc",
+        ".gpg",
+        ".tfvars",
     ];
 
     private static StringComparer PathComparer =>

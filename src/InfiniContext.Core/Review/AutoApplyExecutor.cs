@@ -117,9 +117,11 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         var buildOutcome = await _gate.BuildAsync(normalizedRoot, ct).ConfigureAwait(false);
         if (!buildOutcome.Passed)
         {
-            await RevertAsync(backups).ConfigureAwait(false);
-            var reason = $"build broke after auto-apply: {buildOutcome.FailureSummary ?? "no detail"}";
-            _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
+            var revertFailed = await RevertAsync(backups).ConfigureAwait(false);
+            var reason = AppendRevertFailures(
+                $"build broke after auto-apply: {buildOutcome.FailureSummary ?? "no detail"}",
+                revertFailed);
+            _logger.Warning("auto-apply: {Reason}; reverted {Count} files ({Failed} failed)", reason, backups.Count, revertFailed);
             return new AutoApplyResult(
                 Applied: Array.Empty<ConsolidatedFinding>(),
                 Demoted: applied.Select(f => WithDemotion(f, reason)).Concat(demoted).ToList(),
@@ -131,9 +133,11 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         var testOutcome = await _gate.TestAsync(normalizedRoot, ct).ConfigureAwait(false);
         if (!testOutcome.Passed)
         {
-            await RevertAsync(backups).ConfigureAwait(false);
-            var reason = $"tests broke after auto-apply: {testOutcome.FailureSummary ?? "no detail"}";
-            _logger.Warning("auto-apply: {Reason}; reverted {Count} files", reason, backups.Count);
+            var revertFailed = await RevertAsync(backups).ConfigureAwait(false);
+            var reason = AppendRevertFailures(
+                $"tests broke after auto-apply: {testOutcome.FailureSummary ?? "no detail"}",
+                revertFailed);
+            _logger.Warning("auto-apply: {Reason}; reverted {Count} files ({Failed} failed)", reason, backups.Count, revertFailed);
             return new AutoApplyResult(
                 Applied: Array.Empty<ConsolidatedFinding>(),
                 Demoted: applied.Select(f => WithDemotion(f, reason)).Concat(demoted).ToList(),
@@ -177,13 +181,20 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         if (lineCount > _options.MaxLinesPerFinding)
             return $"fix touches {lineCount} lines, exceeds MaxLinesPerFinding {_options.MaxLinesPerFinding}";
 
-        // Path safety.
+        // Path safety. sec-004: use Path.GetRelativePath rather than a StartsWith(root) check so
+        // case-insensitive filesystems (Windows NTFS) don't reject a valid path whose casing
+        // disagrees with the user-supplied root. GetRelativePath uses the platform's path-equality
+        // semantics; we then refuse anything that escapes via `..` or remains rooted (different
+        // drive on Windows).
         string fullPath;
         try { fullPath = Path.GetFullPath(Path.Combine(normalizedRoot, finding.File)); }
         catch (ArgumentException) { return "target file path is malformed"; }
 
-        if (!fullPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !string.Equals(fullPath, normalizedRoot, StringComparison.Ordinal))
+        var relative = Path.GetRelativePath(normalizedRoot, fullPath);
+        if (Path.IsPathRooted(relative)
+            || relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith("../", StringComparison.Ordinal))
         {
             return "target file outside repo root";
         }
@@ -243,7 +254,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         return $"fix not auto-applicable: unknown FixKind {fix.Kind}";
     }
 
-    private static async Task RevertAsync(IDictionary<string, byte[]?> backups)
+    private async Task<int> RevertAsync(IDictionary<string, byte[]?> backups)
     {
         // Once we've committed to reverting, do NOT honor caller cancellation. A partial revert
         // (some files restored, others left edited) leaves the working tree in a mixed state
@@ -251,7 +262,10 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         // alternative is silent corruption. Each File.WriteAllBytesAsync gets
         // CancellationToken.None so a canceled outer token doesn't fail-fast every write.
         // Per-file IO errors are still tolerated (try/catch) because one wedged file shouldn't
-        // abort the rest of the rollback.
+        // abort the rest of the rollback. sec-007: each per-file failure is logged with the
+        // path + exception type so a partial-revert state is visible (not silently swallowed),
+        // and the count is returned so callers can surface it in GateReversionReason.
+        var failed = 0;
         foreach (var (path, original) in backups)
         {
             try
@@ -265,12 +279,24 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
                     await File.WriteAllBytesAsync(path, original, CancellationToken.None).ConfigureAwait(false);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort: one file's IO failure shouldn't abort the rest of the revert.
+                failed++;
+                _logger.Warning(ex, "auto-apply revert: failed to restore {Path}", path);
             }
         }
+        return failed;
     }
+
+    /// <summary>
+    /// Append a "; revert had N failures - check log" tail to a gate-failure reason when the
+    /// revert wasn't clean (sec-007). Surfaces partial-revert state to the user via
+    /// <see cref="AutoApplyResult.GateReversionReason"/> instead of silently swallowing it.
+    /// </summary>
+    internal static string AppendRevertFailures(string baseReason, int revertFailed) =>
+        revertFailed > 0
+            ? $"{baseReason}; revert had {revertFailed} per-file failure(s) - check log"
+            : baseReason;
 
     private static ConsolidatedFinding WithDemotion(ConsolidatedFinding f, string reason)
     {

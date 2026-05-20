@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using FluentAssertions;
 using InfiniContext.Core.Review;
+using InfiniContext.Core.Supervision;
 
 namespace InfiniContext.Tests.Review;
 
@@ -49,5 +51,42 @@ public class ProcessBuildTestRunnerTests
         var sut = new ProcessBuildTestRunner();
         var act = () => sut.TestAsync("", CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task BuildAsync_attaches_spawned_dotnet_to_the_supervisor()
+    {
+        // arch-003/004: verify the supervisor receives an Attach(proc) call for the dotnet
+        // build child so msbuild/vstest descendants die with the host. The supervisor is the
+        // observable contract; whether the OS-level Job Object / SIGTERM cascade then triggers
+        // is covered by the supervisor's own tests, not here.
+        var supervisor = new RecordingSupervisor();
+        // Point at a temp directory that's empty so `dotnet build` exits quickly with a clear
+        // "no project" failure тАФ we don't care about the outcome, only that Attach happened.
+        var temp = Path.Combine(Path.GetTempPath(), $"pbtr-attach-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var sut = new ProcessBuildTestRunner(
+                new ProcessBuildTestRunnerOptions { Solution = "_does_not_exist.slnx", BuildTimeoutSeconds = 30 },
+                supervisor: supervisor);
+            await sut.BuildAsync(temp, CancellationToken.None);
+        }
+        finally
+        {
+            try { Directory.Delete(temp, recursive: true); } catch { }
+        }
+
+        // The runner disposes the Process before returning, so don't introspect Attached[0] тАФ
+        // the count alone proves Attach was called on the dotnet child.
+        supervisor.Attached.Should().HaveCount(1);
+    }
+
+    private sealed class RecordingSupervisor : IProcessSupervisor
+    {
+        public List<Process> Attached { get; } = new();
+        public void Attach(Process process) => Attached.Add(process);
+        public void DetachAll() { }
+        public void Dispose() { }
     }
 }

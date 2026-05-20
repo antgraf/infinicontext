@@ -134,6 +134,9 @@ public static class FindingJson
     /// <summary>
     /// Shared JSON options: case-insensitive property matching, tolerant enum-as-string
     /// reader (camelCase or PascalCase both accepted), null values skipped on serialize.
+    /// <see cref="JsonSerializerOptions.MaxDepth"/> is capped at <see cref="MaxParseDepth"/>
+    /// (sec-008) so a pathological LLM response (deeply-nested arrays/objects) can't trigger
+    /// stack-pressure during parse.
     /// </summary>
     public static readonly JsonSerializerOptions Options = new()
     {
@@ -144,13 +147,22 @@ public static class FindingJson
             new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false),
         },
         WriteIndented = false,
+        MaxDepth = MaxParseDepth,
     };
+
+    /// <summary>
+    /// Hard cap on JSON nesting depth for reviewer / coordinator response parsing. The expected
+    /// shape (FindingsEnvelope -> findings[] -> Finding -> suggested_fix) tops out at ~5 levels;
+    /// 32 leaves comfortable headroom for nested arrays inside suggested_fix text fields while
+    /// still bounding pathological payloads. Default JsonSerializerOptions.MaxDepth is 64.
+    /// </summary>
+    public const int MaxParseDepth = 32;
 
     /// <summary>
     /// Same as <see cref="Options"/> but with <c>WriteIndented = true</c> for human-readable
     /// payloads (the raw-reviewer-output blocks in the final markdown report).
     /// </summary>
-    public static readonly JsonSerializerOptions PrettyOptions = new(Options) { WriteIndented = true };
+    public static readonly JsonSerializerOptions PrettyOptions = new(Options) { WriteIndented = true, MaxDepth = MaxParseDepth };
 
     /// <summary>
     /// Pull a JSON document out of an agent's free-form text response. Strategy:

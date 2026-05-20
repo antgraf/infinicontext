@@ -100,6 +100,24 @@ public class AutoApplyExecutorTests
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("does not exist"));
     }
 
+    // ---------- Revert-failure reporting (sec-007) ----------
+
+    [Fact]
+    public void AppendRevertFailures_returns_base_reason_when_no_failures()
+    {
+        AutoApplyExecutor.AppendRevertFailures("build broke after auto-apply: foo", 0)
+            .Should().Be("build broke after auto-apply: foo");
+    }
+
+    [Fact]
+    public void AppendRevertFailures_appends_count_when_revert_had_failures()
+    {
+        var result = AutoApplyExecutor.AppendRevertFailures("build broke after auto-apply: foo", 3);
+        result.Should().StartWith("build broke after auto-apply: foo;");
+        result.Should().Contain("3 per-file failure");
+        result.Should().Contain("check log");
+    }
+
     // ---------- Path safety ----------
 
     [Fact]

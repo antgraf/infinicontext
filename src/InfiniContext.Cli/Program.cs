@@ -182,7 +182,7 @@ if (taskStore is not null)
                 supervisor: supervisor,
                 logger: logging.Logger);
         var autoApplyExecutor = new InfiniContext.Core.Review.AutoApplyExecutor(
-            new InfiniContext.Core.Review.ProcessBuildTestRunner(),
+            new InfiniContext.Core.Review.ProcessBuildTestRunner(supervisor: supervisor),
             new InfiniContext.Core.Review.AutoApplyOptions
             {
                 ConfidenceFloor = reviewSettings.ConfidenceFloor,
