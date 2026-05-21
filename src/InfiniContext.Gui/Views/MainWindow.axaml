@@ -1,0 +1,44 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:InfiniContext.Gui.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        x:Class="InfiniContext.Gui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="InfiniContext"
+        MinWidth="720" MinHeight="480"
+        Width="1100" Height="700">
+  <Design.DataContext>
+    <vm:MainWindowViewModel />
+  </Design.DataContext>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Background="{DynamicResource SystemAccentColorBrush}" Padding="12,8">
+      <TextBlock Text="InfiniContext" FontWeight="SemiBold" Foreground="White" />
+    </Border>
+
+    <Grid ColumnDefinitions="220,*,260" Margin="0">
+      <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0" Padding="8">
+        <StackPanel Spacing="4">
+          <TextBlock Text="Sessions" FontWeight="SemiBold" Margin="0,0,0,4" />
+          <TextBlock Text="(empty тАФ no sessions wired in 3B scaffold)" Opacity="0.6" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Column="1" Padding="16">
+        <StackPanel Spacing="12">
+          <TextBlock Text="{Binding Greeting}" TextWrapping="Wrap" />
+          <TextBlock Text="Next: wire SessionManager + TranscriptModel into Sessions view." Opacity="0.7" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Column="2" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="8">
+        <StackPanel Spacing="4">
+          <TextBlock Text="Inspector" FontWeight="SemiBold" Margin="0,0,0,4" />
+          <TextBlock Text="(empty тАФ no selection)" Opacity="0.6" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

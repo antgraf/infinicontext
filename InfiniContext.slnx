@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/InfiniContext.Cli/InfiniContext.Cli.csproj" />
     <Project Path="src/InfiniContext.Core/InfiniContext.Core.csproj" />
+    <Project Path="src/InfiniContext.Gui/InfiniContext.Gui.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/InfiniContext.Tests/InfiniContext.Tests.csproj" />

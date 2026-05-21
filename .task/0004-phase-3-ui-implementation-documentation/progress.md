@@ -21,3 +21,21 @@
 - Host hit hard context-pressure threshold (~85%) immediately after the Phase 3A draft landed. No additional work in flight; all artifacts are written and locks released. Next session can pick up directly from `design.md` review.
 - State at flush: TaskCreate items #1-#4 all `completed`; design.md / index.md / progress.md all reflect the post-write state. Nothing partial on disk.
 - Phase 3A draft committed as `1c9fb33` ("Phase 3A: GUI vision + high-level design proposal.") and pushed to `origin/main`. Working tree clean.
+
+### Phase 3B - foundation slice landed (scaffold only)
+
+User requested to continue implementation post-Phase-3A flush. Per design.md s10 recommendations:
+
+- Created `src/InfiniContext.Gui/` Avalonia 11.2.1 project. Files: `InfiniContext.Gui.csproj` (+ManifestFile), `Program.cs`, `App.axaml(.cs)`, `Views/MainWindow.axaml(.cs)`, `ViewModels/MainWindowViewModel.cs`, `app.manifest`. Targets `net10.0`, `WinExe`, compiled bindings enabled, `Debug`-only `Avalonia.Diagnostics`.
+- Picked **CommunityToolkit.Mvvm 8.4.0** for MVVM (resolves design.md s10 #1 in line with the rec.).
+- Wired the project into `InfiniContext.slnx` under `/src/`.
+- Scaffold renders a placeholder three-column layout (Sessions list / focused / Inspector) and a top accent bar - matches the IA from design.md s5.2 visually but is wired to nothing. No session, transcript, approval, or task code yet.
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj` green in Debug and Release. `dotnet format --verify-no-changes` clean.
+- Note: solution-wide `dotnet build InfiniContext.slnx` fails on this developer machine because 4 orphan `InfiniContext.Cli` processes (PIDs 19844, 31664, 15804, 1256) hold `InfiniContext.Cli/bin/Debug/net10.0/InfiniContext.Core.dll`. Not caused by my changes - they were running before Phase 3B work began. Once those are killed manually, the full solution build succeeds.
+
+### Known follow-ups from Phase 3B scaffold
+
+- **NU1903 transitive `Tmds.DBus.Protocol` 0.20.0** high-severity advisory comes via `Avalonia.Desktop`'s Linux DBus path. Unused on Win/Mac at runtime but pulled in by NuGet. Watch for an Avalonia 11.3.x bump that re-vendors a newer Tmds.DBus.
+- **Promote `.task/0004/design.md` to `docs/stage3/design.md`** once the user signs off on the open decisions in s10. Per the 3A handoff this should not happen until explicit sign-off; current "continue with implementation" instruction is implicit go-ahead for code but not for promoting docs to canonical location.
+- **`docs/stage3/plan.md`** (Phase 3B work breakdown) and `docs/stage3/decisions.md` still need to be authored; not started.
+- **Next coding slice** (suggest a new task `/task new "Phase 3B - SessionsViewModel + transcript binding"`): wire `SessionManager` and `TranscriptModel` into the Sessions view. Specifically: `SessionRowViewModel` per `SessionContext`; `TranscriptViewModel` subscribing to `TranscriptModel.FragmentAppended` via `Dispatcher.UIThread.Post`; `INewSessionCommand` triggered from a "+ New session" button using a `FolderPickerOpenOptions` Avalonia dialog.
