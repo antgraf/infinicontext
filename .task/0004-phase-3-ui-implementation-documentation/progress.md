@@ -80,3 +80,31 @@ Post-bump scan: zero vulnerable packages across all six projects (Avalonia 12.0.
 
 - Re-add `Avalonia.Diagnostics` when its 12.x release ships. Watch https://www.nuget.org/packages/Avalonia.Diagnostics.
 - The held FluentAssertions + Test.Sdk evaluation pair stays open as a future test-infra hardening task. If `AwesomeAssertions` (community fork of FA 7) gets traction, it's a drop-in replacement worth considering. Not on the immediate path.
+
+### Phase 3B slice 2 - SessionHost + VMs + first live transcript (2026-05-20)
+
+User requested to continue implementation. Landed the first slice that takes the scaffold from "placeholder window" to "spawn a real session, see its transcript fragments live."
+
+**Files added:**
+- `src/InfiniContext.Gui/Services/SessionHost.cs` - minimum-viable wrapper that owns `InfiniContextSettings`, the Serilog `LoggingHandle`, the platform `IProcessSupervisor`, a `LockRegistry`, and a `SessionManager` opened via `SessionManager.OpenAsync`. Exposes `CreateSessionAsync(cwd)` + `CloseSessionAsync(id)` plus `SessionCreated`/`SessionClosed` events. Phase 3B uses a `DenyAllApprovalSink` (inner class) for the approval-sink factory - every tool call auto-denies. Wiring auto-mode (light-model safety review) is a later slice.
+- `src/InfiniContext.Gui/ViewModels/TranscriptViewModel.cs` - subscribes to `TranscriptModel.FragmentAppended` and marshals each fragment to the UI thread via `Dispatcher.UIThread.Post`. `Snapshot()` pre-loads anything already buffered.
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - row in the session list. Exposes `ShortId`, `Cwd`, `State`, `Drift`, `CostDisplay`, and the owned `TranscriptViewModel`.
+
+**Files updated:**
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs` - now owns `SessionHost`, an `ObservableCollection<SessionRowViewModel>`, `FocusedSession`, `StatusText`, `LogFilePath`, and `NewSessionCommand` (async, opens folder picker + `host.CreateSessionAsync`). View injects `FolderPicker` and `ShowError` callbacks so the VM stays free of `Window` references (testable).
+- `src/InfiniContext.Gui/Views/MainWindow.axaml` - real bindings now: `ListBox` over `Sessions` with `SelectedItem` two-way bound to `FocusedSession`, transcript `ScrollViewer + ItemsControl` over `FocusedSession.Transcript.Fragments`, status strip top + log-path footer, "+ New session" button on `NewSessionCommand`, placeholder for prompt box (next slice).
+- `src/InfiniContext.Gui/Views/MainWindow.axaml.cs` - wires `Avalonia.Platform.Storage.IStorageProvider.OpenFolderPickerAsync` to the VM's `FolderPicker` callback on `DataContextChanged`.
+- `src/InfiniContext.Gui/App.axaml.cs` - deferred async bring-up: window shows immediately with a placeholder VM, real VM swaps in once `SessionHost.StartAsync` returns; `ShutdownRequested` flushes Serilog + disposes `SessionManager` (which cascades to every child via the supervisor).
+
+**Behavioural shape today:**
+- Launch -> window paints with placeholder VM -> status shows log path within ~1 s -> click "+ New session" -> folder picker -> session spawns -> `claude` child runs against the chosen cwd -> transcript fragments stream into the focused pane via the existing `SessionTranscriptReader.FragmentAppended` pipeline (D28, D3). Multi-session: spawn another, both run; clicking a row in the list switches focus and replays the buffered transcript.
+- No prompt box wiring yet, so the user can't send anything from the GUI. Sessions can still process whatever first-user-message is sent during spawn (currently none); they sit at "Sending" -> "Idle" with empty transcripts. Confirming the SessionManager + reader plumbing is alive is the goal of this slice; the *useful* UX lands in the next slice (prompt + Esc-to-interrupt).
+
+**Build status:** `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Debug` green, 0 warnings, 0 errors. Vulnerable scan still zero across the solution.
+
+**Next slice candidates (handoff):**
+1. Prompt box wired to `IClaudeSession.SendUserMessageAsync` + `Esc` -> `InterruptAsync`. Smallest unit; turns the GUI from "passive observer" to "first useful UX."
+2. State-machine and pressure-monitor change notifications wired into `SessionRowViewModel` so `State`/`Drift`/`Cost` update live without `INotifyPropertyChanged` shims. Currently they re-read on demand but the UI doesn't get told when to re-read.
+3. Approval banner / inspector card per `design.md` section 6.3. Requires porting `ApprovalSinkFactory` to support GUI-routed prompts; today everything denies.
+4. Resume from `~/.infinicontext/index.json` via a "Recent" expander under the session list.
+5. Promote `.task/0004/design.md` to `docs/stage3/design.md` once the open decisions are signed off.

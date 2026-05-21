@@ -3,7 +3,7 @@
         xmlns:vm="using:InfiniContext.Gui.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
         x:Class="InfiniContext.Gui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="InfiniContext"
@@ -14,29 +14,69 @@
   </Design.DataContext>
 
   <DockPanel>
-    <Border DockPanel.Dock="Top" Background="{DynamicResource SystemAccentColorBrush}" Padding="12,8">
-      <TextBlock Text="InfiniContext" FontWeight="SemiBold" Foreground="White" />
+    <!-- Status strip -->
+    <Border DockPanel.Dock="Top" Background="{DynamicResource SystemAccentColorBrush}" Padding="12,6">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="InfiniContext" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
+      </Grid>
     </Border>
 
-    <Grid ColumnDefinitions="220,*,260" Margin="0">
-      <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0" Padding="8">
-        <StackPanel Spacing="4">
-          <TextBlock Text="Sessions" FontWeight="SemiBold" Margin="0,0,0,4" />
-          <TextBlock Text="(empty тАФ no sessions wired in 3B scaffold)" Opacity="0.6" TextWrapping="Wrap" />
-        </StackPanel>
+    <!-- Footer / log path -->
+    <Border DockPanel.Dock="Bottom" Padding="12,4" Background="{DynamicResource SystemBaseLowColor}">
+      <TextBlock Text="{Binding LogFilePath}" FontSize="11" Opacity="0.7" />
+    </Border>
+
+    <Grid ColumnDefinitions="260,*,280">
+      <!-- Session list -->
+      <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="8">
+            <Button Content="+ New session" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
+          </Border>
+          <ListBox ItemsSource="{Binding Sessions}"
+                   SelectedItem="{Binding FocusedSession, Mode=TwoWay}"
+                   BorderThickness="0">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:SessionRowViewModel">
+                <StackPanel Spacing="2" Margin="4,6">
+                  <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.8" TextTrimming="CharacterEllipsis" />
+                  <TextBlock FontSize="11" Opacity="0.7">
+                    <Run Text="state: " /><Run Text="{Binding State, Mode=OneWay}" />
+                    <Run Text="  drift: " /><Run Text="{Binding Drift, Mode=OneWay}" />
+                    <Run Text="  cost: " /><Run Text="{Binding CostDisplay, Mode=OneWay}" />
+                  </TextBlock>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
       </Border>
 
-      <Border Grid.Column="1" Padding="16">
-        <StackPanel Spacing="12">
-          <TextBlock Text="{Binding Greeting}" TextWrapping="Wrap" />
-          <TextBlock Text="Next: wire SessionManager + TranscriptModel into Sessions view." Opacity="0.7" TextWrapping="Wrap" />
-        </StackPanel>
-      </Border>
+      <!-- Focused session transcript -->
+      <Grid Grid.Column="1" RowDefinitions="*,Auto">
+        <ScrollViewer Grid.Row="0" Padding="12">
+          <ItemsControl ItemsSource="{Binding FocusedSession.Transcript.Fragments}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap" FontFamily="Consolas, Menlo, monospace" FontSize="13" Margin="0,2" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+        <Border Grid.Row="1" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0" Padding="8">
+          <TextBlock Text="(Prompt box wiring lands in the next slice - SendUserMessageAsync + Esc-to-interrupt.)" Opacity="0.6" />
+        </Border>
+      </Grid>
 
-      <Border Grid.Column="2" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="8">
-        <StackPanel Spacing="4">
-          <TextBlock Text="Inspector" FontWeight="SemiBold" Margin="0,0,0,4" />
-          <TextBlock Text="(empty тАФ no selection)" Opacity="0.6" TextWrapping="Wrap" />
+      <!-- Inspector -->
+      <Border Grid.Column="2" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="12">
+        <StackPanel Spacing="6">
+          <TextBlock Text="Inspector" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding FocusedSession.Cwd, FallbackValue='(no session focused)'}" TextWrapping="Wrap" Opacity="0.85" />
+          <TextBlock FontSize="11" Opacity="0.7" TextWrapping="Wrap"
+                     Text="Phase 3B scaffold. Tool calls auto-deny while the GUI's auto-mode wiring is pending." />
         </StackPanel>
       </Border>
     </Grid>
