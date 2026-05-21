@@ -39,3 +39,29 @@ User requested to continue implementation post-Phase-3A flush. Per design.md s10
 - **Promote `.task/0004/design.md` to `docs/stage3/design.md`** once the user signs off on the open decisions in s10. Per the 3A handoff this should not happen until explicit sign-off; current "continue with implementation" instruction is implicit go-ahead for code but not for promoting docs to canonical location.
 - **`docs/stage3/plan.md`** (Phase 3B work breakdown) and `docs/stage3/decisions.md` still need to be authored; not started.
 - **Next coding slice** (suggest a new task `/task new "Phase 3B - SessionsViewModel + transcript binding"`): wire `SessionManager` and `TranscriptModel` into the Sessions view. Specifically: `SessionRowViewModel` per `SessionContext`; `TranscriptViewModel` subscribing to `TranscriptModel.FragmentAppended` via `Dispatcher.UIThread.Post`; `INewSessionCommand` triggered from a "+ New session" button using a `FolderPickerOpenOptions` Avalonia dialog.
+
+### NuGet package refresh (2026-05-20, post-Phase-3B-scaffold)
+
+User flagged outdated + vulnerable packages. `dotnet list package --outdated` and `--vulnerable` ran across all projects. Landed all "safe" bumps; surfaced three majors for explicit user decision.
+
+**Landed:**
+- Avalonia 11.2.1 -> 11.3.16 (latest 11.x) across `Avalonia`, `Avalonia.Desktop`, `Avalonia.Themes.Fluent`, `Avalonia.Fonts.Inter`, `Avalonia.Diagnostics`. **Clears NU1903 / GHSA-xrw6-gwf8-vvr9** (`Tmds.DBus.Protocol` 0.20.0 high-severity advisory) - 11.3.x re-vendors a patched transitive.
+- `CommunityToolkit.Mvvm` 8.4.0 -> 8.4.2 (patch).
+- `Anthropic` 12.20.0 -> 12.22.0 (minor).
+- `Microsoft.Extensions.Configuration*` + `Microsoft.Extensions.Configuration.Binder` + `Microsoft.Extensions.Configuration.EnvironmentVariables` + `Microsoft.Extensions.Configuration.Json` 9.0.0 -> 10.0.8 (aligns with `net10.0` target).
+- `Microsoft.Data.Sqlite` 9.0.0 -> 10.0.8 (same).
+- `Microsoft.Extensions.FileSystemGlobbing` 9.0.0 -> 10.0.8 (Cli + Tests; same).
+- `coverlet.collector` 6.0.4 -> 10.0.1 (test-coverage tool, safe major).
+- `xunit.runner.visualstudio` 3.1.4 -> 3.1.5 (patch).
+
+Post-bump scan: Core + Gui build green (0 warnings, 0 errors). `dotnet list package --vulnerable --include-transitive` reports **zero vulnerable packages** across the whole solution. Cli + Tests builds blocked locally by 4 pre-existing orphan `InfiniContext.Cli` processes (PIDs 15804, 19548, 19844, 31664 - started ~5h before this session) holding their `bin/Debug/.../InfiniContext.Core.dll`. Build will pass after orphans are reaped manually; no code path changed.
+
+**Held for user decision (recorded for follow-up task):**
+- **Avalonia 11.3.16 -> 12.0.3** (major). Avalonia 12 just released; XAML / theme / source-generator changes likely. Re-evaluate once we have non-scaffold GUI code.
+- **FluentAssertions 7.2.0 -> 8.10.0** (major + license). v8 moved to Xceed XPL: commercial use after 2025-02-15 needs a paid key; v7 is MIT. Hold until the project's commercial-use posture is decided.
+- **Microsoft.NET.Test.Sdk 17.14.1 -> 18.5.1** (major). Test discovery internals changed; bundle with FluentAssertions evaluation in a single test-infra hardening task.
+
+**Untouched (already current or pinned):**
+- `Serilog` 4.3.1, `Serilog.Sinks.File` 7.0.0 - latest stable.
+- `Spectre.Console` 0.55.2 + `Spectre.Console.Testing` 0.55.2 - pinned per Stage 2B D17 (Dependabot/manual upgrades as separate PRs).
+- `xunit` 2.9.3 - latest 2.x stable.
