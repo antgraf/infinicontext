@@ -50,7 +50,8 @@
 ## 0010 - Make sure that when /task new command is executed the session is immediately switched to it and it doesn t require /task switch right after it.
 - **Logged:** 2026-05-21T00:54:58Z by host-cli
 - **Kind:** followup
-- **Status:** open
+- **Status:** resolved
+- **Resolution:** `TaskSlashCommand.ExecuteAsync` now intercepts `TaskCommand.New` in the REPL path, calls `TaskCommandHandler.HandleNewAsync` (widened to `internal` and returning the persisted `TaskRecord`), then chains into the existing `TryStartTaskSwitchAsync` flow. The bare `TaskCommandHandler.HandleAsync` dispatch path is unchanged, so non-REPL invocations and the unit-test fixture still see the create-only behaviour.
 
 ## 0011 - Suggection / discussible. Get rid of .task folder locking mechanism and MCP - limit one executor for one task; tasks have separate folders, so no cross-editing is possble.
 - **Logged:** 2026-05-21T00:55:05Z by host-cli

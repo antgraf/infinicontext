@@ -66,7 +66,7 @@ internal sealed class TaskCommandHandler
             switch (command)
             {
                 case TaskCommand.New n:
-                    await HandleNewAsync(n.Description, n.Home, ct).ConfigureAwait(false);
+                    _ = await HandleNewAsync(n.Description, n.Home, ct).ConfigureAwait(false);
                     break;
 
                 case TaskCommand.List(var limit, var status):
@@ -124,7 +124,13 @@ internal sealed class TaskCommandHandler
         }
     }
 
-    private async Task HandleNewAsync(string description, string? home, CancellationToken ct)
+    /// <summary>
+    /// Create a new task record + on-disk folder and write the human-readable "[task] created"
+    /// banner. Returns the persisted <see cref="TaskRecord"/> so callers that want to chain into
+    /// another action (notably <c>TaskSlashCommand</c>'s auto-switch on <c>/task new</c> тАФ issue
+    /// 0010 in task 0005) can do so without re-querying.
+    /// </summary>
+    internal async Task<TaskRecord> HandleNewAsync(string description, string? home, CancellationToken ct)
     {
         var homeCwd = ResolveHome(home);
         Directory.CreateDirectory(homeCwd);
@@ -132,6 +138,7 @@ internal sealed class TaskCommandHandler
         var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
         Write($"[task] created {record.Id:D4} \"{record.Title}\"\n");
         Write($"       folder: {folder.Path}\n");
+        return record;
     }
 
     private async Task HandleListAsync(int? limit, TaskItemStatus? status, CancellationToken ct)

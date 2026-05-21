@@ -69,6 +69,26 @@ internal sealed class TaskSlashCommand : ISlashCommand
             return;
         }
 
+        // /task new (REPL) chains create-then-switch: after the task is persisted, immediately
+        // re-spawn the current session bound to it (task 0005 issue 0010). The bare CLI path
+        // (TaskCommandHandler.HandleAsync) keeps the create-only behaviour so non-REPL invocations
+        // and unit tests don't pick up the side effect.
+        if (cmd is TaskCommand.New newCmd)
+        {
+            TaskRecord record;
+            try
+            {
+                record = await ctx.TaskHandler.HandleNewAsync(newCmd.Description, newCmd.Home, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ctx.Write($"[task] new failed: {ex.Message}\n");
+                return;
+            }
+            await TryStartTaskSwitchAsync(ctx, record.Id, ct).ConfigureAwait(false);
+            return;
+        }
+
         // /task review needs the focused session's active task id when the user didn't pass one.
         // Route directly to HandleReviewAsync with ctx.ActiveTaskId; falls back gracefully when
         // both are null (handler prints a refusal).
