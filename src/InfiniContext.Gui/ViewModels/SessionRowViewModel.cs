@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using InfiniContext.Core.Events;
+using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.State;
 
@@ -36,8 +38,41 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _statusGlyph = ViewModels.StatusGlyph.Idle;
 
+    /// <summary>Current pending approval (slot snapshot), or null when the slot is empty. Drives
+    /// the focused-pane approval banner in the central column.</summary>
+    [ObservableProperty]
+    private PendingApproval? _pendingApproval;
+
+    public bool IsAwaitingApproval => PendingApproval is not null;
+    public string PendingToolName => PendingApproval?.Request.ToolName ?? "";
+    public string PendingInputSummary
+    {
+        get
+        {
+            var json = PendingApproval?.Request.Input.ToJsonString();
+            if (string.IsNullOrEmpty(json)) return "";
+            return json.Length <= 400 ? json : json[..400] + Ellipsis;
+        }
+    }
+    /// <summary>Seconds remaining at the moment the banner was opened. Static text (not a live
+    /// countdown) so we don't burn a per-second timer on every row; the slot's timeout still
+    /// fires server-side. Live countdown is a polish follow-up.</summary>
+    public string PendingDeadlineText
+    {
+        get
+        {
+            if (PendingApproval is not { } p) return "";
+            var seconds = (int)Math.Max(0, (p.DeadlineUtc - DateTimeOffset.UtcNow).TotalSeconds);
+            return seconds > 0 ? $"auto-denies in ~{seconds}s" : "deadline reached";
+        }
+    }
+
+    public IRelayCommand ApproveCommand { get; }
+    public IRelayCommand DenyCommand { get; }
+
     private readonly Action<StateTransition> _onTransition;
     private readonly Action<ClaudeEvent> _onEvent;
+    private readonly Action<PendingApproval?> _onApprovalChanged;
     private TurnNodeViewModel? _pendingTurn;
     private bool _disposed;
 
@@ -47,9 +82,43 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         Transcript = new TranscriptViewModel(context.Transcript);
         _onTransition = OnStateTransition;
         _onEvent = OnEvent;
+        _onApprovalChanged = OnApprovalChanged;
+        ApproveCommand = new RelayCommand(Approve, () => IsAwaitingApproval);
+        DenyCommand = new RelayCommand(Deny, () => IsAwaitingApproval);
         context.Session.State.Transitioned += _onTransition;
         context.EventObserved += _onEvent;
-        StatusGlyph = ViewModels.StatusGlyph.ForSession(context.Session.State.State, context.ApprovalSlot.Current is not null);
+        context.ApprovalSlot.Changed += _onApprovalChanged;
+        PendingApproval = context.ApprovalSlot.Current;
+        StatusGlyph = ViewModels.StatusGlyph.ForSession(context.Session.State.State, IsAwaitingApproval);
+    }
+
+    private void OnApprovalChanged(PendingApproval? pending)
+    {
+        if (Dispatcher.UIThread.CheckAccess()) PendingApproval = pending;
+        else Dispatcher.UIThread.Post(() => PendingApproval = pending);
+    }
+
+    partial void OnPendingApprovalChanged(PendingApproval? value)
+    {
+        OnPropertyChanged(nameof(IsAwaitingApproval));
+        OnPropertyChanged(nameof(PendingToolName));
+        OnPropertyChanged(nameof(PendingInputSummary));
+        OnPropertyChanged(nameof(PendingDeadlineText));
+        ApproveCommand.NotifyCanExecuteChanged();
+        DenyCommand.NotifyCanExecuteChanged();
+        StatusGlyph = ViewModels.StatusGlyph.ForSession(Context.Session.State.State, value is not null);
+    }
+
+    private void Approve()
+    {
+        if (PendingApproval is null) return;
+        Context.ApprovalSlot.Resolve(ApprovalBehavior.Allow);
+    }
+
+    private void Deny()
+    {
+        if (PendingApproval is null) return;
+        Context.ApprovalSlot.Resolve(ApprovalBehavior.Deny, message: "user denied via GUI banner");
     }
 
     public void BeginUserTurn(string promptText)
@@ -251,6 +320,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         _disposed = true;
         try { Context.Session.State.Transitioned -= _onTransition; } catch { /* best-effort */ }
         try { Context.EventObserved -= _onEvent; } catch { /* best-effort */ }
+        try { Context.ApprovalSlot.Changed -= _onApprovalChanged; } catch { /* best-effort */ }
         Transcript.Dispose();
     }
 }

@@ -422,3 +422,35 @@ Operator confirmed Patch B in chat; that plus a request to make the auto-mode sa
 **Follow-ups added:**
 - Extend `SessionApprovalSinkFactory` to carry per-session cwd so the GUI can wire auto mode symmetrically with the CLI.
 - Banner-routed approval sink (design.md s6.3) - still the canonical replacement for the current allow-all stop-gap.
+
+### Phase 3B slice 4i - banner-routed approval sink in GUI (2026-05-21)
+
+Closes the largest gap left by slice 4h: the GUI no longer auto-allows every tool call silently. Each pending approval now surfaces as a banner in the focused session's pane with Approve / Deny buttons; the same slot mechanism the CLI uses for `ask` mode is reused.
+
+**Core change - SlotApprovalSink promoted to Core:**
+- Moved `src/InfiniContext.Cli/SlotApprovalSink.cs` -> `src/InfiniContext.Core/Mcp/SlotApprovalSink.cs`. Visibility flipped from `internal` to `public`. CLI consumers (`ApprovalSinkFactory.BuildAsk`) recompile clean because the `using InfiniContext.Core.Mcp;` was already in place.
+- Added `bool writeTranscriptBanner = true` ctor flag. CLI keeps the default (writes `[approval] tool=...` lines into `TranscriptModel` - that IS how the CLI surfaces the prompt to the user). GUI passes `false` so the transcript stays free of CLI-style markers - the new banner UI carries the same information visually.
+- Test `tests/InfiniContext.Tests/Cli/SlotApprovalSinkTests.cs` no longer needs the `<Compile Include>` link line in the test csproj; the using `InfiniContext.Cli` was removed (Core.Mcp was already imported). All 5 tests still pass against the Core type.
+- Honors the user memory "no CLI code duplication - promote it to Core if basic/abstract" - this sink is the textbook fit.
+
+**GUI changes:**
+- `Services/SessionHost.cs`: `SessionApprovalSinkFactory` now builds `new SlotApprovalSink(slot, transcript, timeout, writeTranscriptBanner: false)` instead of `StaticApprovalSink(Allow)`. Timeout comes from `settings.Approval.TimeoutSeconds` (settings layering picks up the same value the CLI uses).
+- `ViewModels/SessionRowViewModel.cs`:
+  - New `[ObservableProperty] PendingApproval? _pendingApproval` + derived computeds `IsAwaitingApproval` / `PendingToolName` / `PendingInputSummary` / `PendingDeadlineText`. The summary is the tool's input JSON truncated to 400 chars with a real U+2026 ellipsis (had to bypass the typing layer's Cyrillic mojibake by writing the bytes via a python one-liner - same hazard slice 4c+4h flagged).
+  - New `ApproveCommand` / `DenyCommand` (`RelayCommand`s) that call `Context.ApprovalSlot.Resolve(Allow|Deny)`. CanExecute tracks `IsAwaitingApproval` so the buttons disable as soon as the slot clears (timeout, race, etc.).
+  - Subscribes to `Context.ApprovalSlot.Changed` in the ctor; marshals the change to the UI thread via `Dispatcher.UIThread.Post`. Unsubscribes in `Dispose`.
+  - `OnPendingApprovalChanged` partial method re-raises notifications for the four computeds + updates `StatusGlyph` (so the row icon flips when the banner opens/closes).
+- `Views/MainWindow.axaml`:
+  - New banner `Border` docked to `Top` inside the central column's `DockPanel`. `IsVisible="{Binding FocusedSession.IsAwaitingApproval, FallbackValue=False}"`. Background `#FFFFF3CD` (warning-yellow), bottom border `#FFD9B441`. Header row shows "Approval requested: <tool>" + deadline. Middle row is a `SelectableTextBlock` with the input JSON (wraps, MaxHeight=160). Bottom row has Deny + Approve buttons.
+  - Inspector text updated: "Tool calls auto-deny while the GUI's auto-mode wiring is pending..." -> "Tool calls park in the focused session's approval banner above the transcript; auto-mode (light-model safety review) wiring lands in a later slice."
+
+**Scope notes:**
+- Auto-mode (light-model safety review) is still NOT wired in the GUI. The current sink is `ask`-equivalent: every tool call prompts. Wiring auto-mode requires the `SessionApprovalSinkFactory` signature extension (carry per-session cwd) tracked as a slice-4h follow-up - that's the next slice.
+- The deadline text is static (computed once when the banner opens), not a live per-second countdown. The slot's timeout still fires server-side and auto-denies at the deadline; the operator just won't see the seconds tick. Live countdown is a polish follow-up.
+- Slice still uses `RelayCommand` (sync) for Approve/Deny - `ApprovalSlot.Resolve` is synchronous so async is overkill.
+
+**Build status:** Core + Cli + Gui all green in Release (0 warnings, 0 errors). Full test suite: 981 passed / 3 skipped (POSIX-only) / 0 failed. Format gate clean. I did NOT run a live GUI smoke test because the operator has two `InfiniContext.Gui.exe` instances running (PIDs 9680, 24872) that hold the Debug-output binaries; spawning a third risked process contention. The operator is the canonical visual verification surface for this slice.
+
+**Follow-ups added:**
+- Live per-second countdown in the approval banner (cheap `DispatcherTimer`; minor polish).
+- Per-row approval indicator: today only the focused pane shows the banner; off-screen sessions waiting on approval are only flagged by the tree-row `StatusGlyph`. A small "Pending approval (N)" badge in the status strip would surface multi-session backlog.

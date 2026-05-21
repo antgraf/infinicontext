@@ -164,6 +164,35 @@
            the Grid layout was lagging one pass behind when the multi-line TextBox grew, which
            prevented the operator from scrolling all the way to the most recent turn. -->
       <DockPanel Grid.Column="2">
+        <!-- Approval banner (slice 4i). Docked to Top so it sits below the status strip and above
+             the transcript. Visible only while the focused session has a pending tool-call
+             approval; the slot's Changed event flips IsAwaitingApproval on the session VM. The
+             session's SlotApprovalSink (Core, writeTranscriptBanner=false in the GUI) is what
+             parks each request in the slot. -->
+        <Border DockPanel.Dock="Top"
+                IsVisible="{Binding FocusedSession.IsAwaitingApproval, FallbackValue=False}"
+                Background="#FFFFF3CD"
+                BorderBrush="#FFD9B441" BorderThickness="0,0,0,2"
+                Padding="12,8">
+          <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" FontWeight="SemiBold" Foreground="#FF6B4E00">
+              <Run Text="Approval requested: " />
+              <Run Text="{Binding FocusedSession.PendingToolName, Mode=OneWay}" FontFamily="Consolas, Menlo, monospace" />
+            </TextBlock>
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FocusedSession.PendingDeadlineText, Mode=OneWay}"
+                       FontSize="11" Opacity="0.7" Foreground="#FF6B4E00" VerticalAlignment="Center" />
+            <SelectableTextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                 Text="{Binding FocusedSession.PendingInputSummary, Mode=OneWay}"
+                                 FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                 TextWrapping="Wrap" Margin="0,4,0,6"
+                                 MaxHeight="160" />
+            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                        Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
+              <Button Content="Deny" Command="{Binding FocusedSession.DenyCommand}" />
+              <Button Content="Approve" Command="{Binding FocusedSession.ApproveCommand}" Classes="accent" />
+            </StackPanel>
+          </Grid>
+        </Border>
         <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0" Padding="8">
           <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
             <TextBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
@@ -268,7 +297,7 @@
           <TextBlock Text="Focused session" FontSize="11" Opacity="0.6" />
           <TextBlock Text="{Binding FocusedSession.Cwd, FallbackValue='(no session focused)'}" TextWrapping="Wrap" Opacity="0.85" />
           <TextBlock FontSize="11" Opacity="0.7" TextWrapping="Wrap"
-                     Text="Phase 3B scaffold. Tool calls auto-deny while the GUI's auto-mode wiring is pending. + New task / + New session under selected task / approval banner land in later slices." />
+                     Text="Phase 3B. Tool calls park in the focused session's approval banner above the transcript; auto-mode (light-model safety review) wiring lands in a later slice." />
         </StackPanel>
       </Border>
     </Grid>

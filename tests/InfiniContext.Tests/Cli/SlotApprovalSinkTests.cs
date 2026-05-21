@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using InfiniContext.Cli;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;

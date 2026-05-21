@@ -66,14 +66,15 @@ public sealed class SessionHost : IAsyncDisposable
         var supervisor = ProcessSupervisor.CreateForCurrentPlatform(logging.Logger);
         var lockRegistry = new LockRegistry(logger: logging.Logger);
 
-        // Stop-gap (operator-approved 2026-05-21): GUI sessions use the static-allow sink so
-        // tool calls pass through without prompting while the proper banner-routed sink
-        // (design.md s6.3) is still pending. Safe enough in single-user dev usage because the
-        // operator is the one running the GUI; revisit once the banner lands. The earlier deny
-        // default made the GUI unable to do any real work because every Edit/Write was blocked.
-        logging.Logger.Warning("gui approval scaffold: static-allow stop-gap until banner lands");
-        SessionApprovalSinkFactory approvalFactory = (_, _) =>
-            new StaticApprovalSink(ApprovalBehavior.Allow);
+        // Banner-routed approval sink (design.md s6.3): every tool call parks in the session's
+        // PendingApprovalSlot and the GUI surfaces it as a per-session banner with Approve/Deny
+        // buttons. Replaces the slice-4h static-allow stop-gap; brings the GUI to parity with the
+        // CLI's "ask" mode (the legacy default that the operator interacts with via y/N).
+        // writeTranscriptBanner=false keeps CLI-style [approval] tool=вЂ¦ text out of the GUI
+        // transcript вЂ” the banner UI carries the same information visually.
+        var approvalTimeout = TimeSpan.FromSeconds(settings.Approval.TimeoutSeconds);
+        SessionApprovalSinkFactory approvalFactory = (slot, transcript) =>
+            new SlotApprovalSink(slot, transcript, timeout: approvalTimeout, writeTranscriptBanner: false);
 
         var manager = await SessionManager.OpenAsync(
             settings,

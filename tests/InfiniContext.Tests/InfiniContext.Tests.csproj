@@ -43,7 +43,6 @@
   <ItemGroup>
     <Compile Include="..\..\src\InfiniContext.Cli\RunArgs.cs" Link="Cli\RunArgs.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\CliFlagCatalog.cs" Link="Cli\CliFlagCatalog.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlotApprovalSink.cs" Link="Cli\SlotApprovalSink.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\AutoApprovalSink.cs" Link="Cli\AutoApprovalSink.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\ConsoleEchoingApprovalSink.cs" Link="Cli\ConsoleEchoingApprovalSink.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
