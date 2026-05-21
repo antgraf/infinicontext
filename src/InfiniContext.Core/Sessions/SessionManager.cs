@@ -245,6 +245,7 @@ public sealed class SessionManager : IAsyncDisposable
                 ctx.LastCostUsd = r.TotalCostUsd;
                 ctx.LastNumTurns = r.NumTurns;
             }
+            ctx.RaiseEventObserved(ev);
         };
         reader.Start();
 

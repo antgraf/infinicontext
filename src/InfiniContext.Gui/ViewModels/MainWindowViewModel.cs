@@ -141,8 +141,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var text = PromptText;
         if (target is null || string.IsNullOrWhiteSpace(text)) return;
 
-        // Echo the user's prompt into the transcript so they see what they sent. Claude's own
-        // event stream doesn't echo user messages back (per design-doc s4.2).
+        // Append a pending TurnNodeViewModel before sending so the central tree shows
+        // "thinking..." immediately. The raw flat transcript still gets the echo for the
+        // fallback view / debugging.
+        target.BeginUserTurn(text);
         target.Context.Transcript.Append($"\n> {text}\n");
         PromptText = "";
 

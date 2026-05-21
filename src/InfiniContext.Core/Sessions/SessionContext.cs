@@ -1,3 +1,4 @@
+using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Tasks;
 
@@ -59,6 +60,17 @@ public sealed class SessionContext : IAsyncDisposable
 
     /// <summary>Turn count reported by the most recent <c>ResultEvent</c>.</summary>
     public int? LastNumTurns { get; internal set; }
+
+    /// <summary>
+    /// Fired for every <see cref="ClaudeEvent"/> the <see cref="SessionTranscriptReader"/> pulls
+    /// off the session's events channel. UI consumers (e.g. Stage 3 GUI's structured turn tree)
+    /// subscribe here for raw event access without reaching into <see cref="SessionManager"/>'s
+    /// private reader registry. Handlers run on the reader's loop thread and must not block;
+    /// marshal to the UI thread inside the handler if needed.
+    /// </summary>
+    public event Action<ClaudeEvent>? EventObserved;
+
+    internal void RaiseEventObserved(ClaudeEvent ev) => EventObserved?.Invoke(ev);
 
     private int _rotationReason; // 0=None, 1=Soft, 2=Hard; see RotationReason.
 

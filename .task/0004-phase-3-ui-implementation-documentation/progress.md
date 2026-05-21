@@ -202,3 +202,37 @@ Plan for the next commit:
 - New `TurnNodeViewModel` per assistant turn. Headline = final assistant text (always visible). Children = thinking blocks, tool-use blocks, tool-result blocks, system events - all collapsed by default.
 - Spinner shown while the turn has no final text yet (state machine != Idle/Exited).
 - The existing flat fragment ItemsControl stays as a fallback until the new tree is proven.
+
+### Phase 3B slice 4b - structured turn tree in central column (2026-05-20)
+
+**Core change (small but load-bearing):**
+- `SessionContext` now exposes `public event Action<ClaudeEvent>? EventObserved` with an internal `RaiseEventObserved` method. `SessionManager.CreateAsync` calls it from the reader's existing `EventObserved` hook. Cleanest place for GUI VMs to subscribe to the raw event stream without reaching into `_readers` private state.
+
+**New VMs:**
+- `ViewModels/TurnContentItemViewModel.cs` - one collapsible child row inside a turn. Kinds: Thinking / ToolUse / ToolResult / System / UserPrompt / UnknownEvent / UnknownBlock. Each has a glyph (ЁЯТн ЁЯФз тЖй тУШ ЁЯСд тЪа), short summary line shown collapsed, full detail expanded.
+- `ViewModels/TurnNodeViewModel.cs` - one logical "user-prompt + claude-response" cycle. Properties: `UserPrompt` (header), `Headline` (final assistant text - always visible), `Children` (collapsible items), `IsInProgress` (true while the spinner shows), `FooterSummary` (cost/turns/duration after the result event lands).
+
+**Files updated:**
+- `src/InfiniContext.Core/Sessions/SessionContext.cs` - added `EventObserved`.
+- `src/InfiniContext.Core/Sessions/SessionManager.cs` - reader hook now calls `ctx.RaiseEventObserved(ev)` after the cost/turns update.
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - subscribes to `Context.EventObserved` in the ctor; builds the `Turns` collection by grouping events around `result` boundaries. `BeginUserTurn(prompt)` is called by the host VM when the user sends a prompt so the placeholder appears immediately. The flat `Transcript.Fragments` view is kept as a fallback.
+  - `SystemInitEvent` -> system child + close turn (init has no response shape)
+  - `AssistantEvent` text -> headline (older text demoted to a child if multi-step); thinking/tool_use/unknown blocks -> children
+  - `UserEvent` tool_result blocks -> attached after the matching tool_use child via tool_use_id correlation
+  - `ResultEvent` -> close pending turn, populate footer summary
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs` - `SendPromptAsync` calls `target.BeginUserTurn(text)` before `SendUserMessageAsync` so the central tree shows "thinking..." immediately.
+- `src/InfiniContext.Gui/Views/MainWindow.axaml` - central column's flat ItemsControl swapped for a per-turn card list. Each card: ЁЯСд prompt header, тП│ + headline (always visible), footer summary (cost/turns/duration), and an Expander labelled "Details" containing the children. Children render as nested Expanders with the kind-glyph + summary line collapsed; expand reveals the full detail in monospace.
+
+**Build status:** Core + Gui green, 0 warnings, 0 errors.
+
+**Manual-testing checklist for 4b:**
+1. Spawn a session - central column should show one card with "(session start)" prompt + a system child containing the init payload.
+2. Type a prompt + Ctrl+Enter - a new card appears immediately with the prompt + a spinner (тП│) + "thinking..." headline.
+3. As claude responds, the headline updates to the final assistant text. The spinner disappears once the result event arrives.
+4. If claude uses tools, the Details expander gets children: ЁЯФз tool-use rows with input preview; тЖй tool-result rows attached right after the matching tool-use. Each child expands to the full payload.
+5. Footer line shows `N turn(s) ┬╖ $0.0XXX ┬╖ NNNms` once the turn is complete.
+
+**Known caveats:**
+- Tool calls all auto-deny (DenyAllApprovalSink). The tool-result child will say "denied by host" or similar. The structure renders correctly; the agent just can't actually do anything.
+- Multi-step assistant turns: if claude emits text -> tool use -> tool result -> more text -> final text, the headline gets the LAST text block and intermediate text is demoted to a "(earlier assistant text)" child so nothing is lost.
+- The flat `Transcript.Fragments` ObservableCollection is still maintained for the existing TranscriptViewModel - it's not displayed in the GUI today but kept as a fallback we can toggle in if the turn tree has a regression.
