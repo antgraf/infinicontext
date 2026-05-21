@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -19,9 +20,19 @@ namespace InfiniContext.Gui.ViewModels;
 public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly SessionHost? _host;
+    private readonly GuiSettings _guiSettings;
     private readonly TaskNodeViewModel _unattached = new(null);
 
     public ObservableCollection<TaskNodeViewModel> TaskNodes { get; } = new();
+
+    /// <summary>Left-column width as a Grid-bindable <see cref="GridLength"/>. Two-way bound to
+    /// <c>ColumnDefinition.Width</c> so dragging the splitter updates this directly. The
+    /// double form is persisted via <see cref="GuiSettings"/> on <c>SaveLayoutAsync</c>.</summary>
+    [ObservableProperty]
+    private GridLength _leftColumnWidth = new(GuiSettings.Defaults.LeftColumnWidth);
+
+    public double LeftColumnMinWidth => GuiSettings.Defaults.LeftColumnMin;
+    public double LeftColumnMaxWidth => GuiSettings.Defaults.LeftColumnMax;
 
     /// <summary>Whichever tree item the operator clicked - <see cref="TaskNodeViewModel"/> or
     /// <see cref="SessionRowViewModel"/>. Two-way bound from <c>TreeView.SelectedItem</c>.</summary>
@@ -54,8 +65,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public IAsyncRelayCommand SendPromptCommand { get; }
     public IAsyncRelayCommand InterruptCommand { get; }
 
-    public MainWindowViewModel()
+    public MainWindowViewModel() : this(new GuiSettings())
     {
+    }
+
+    private MainWindowViewModel(GuiSettings guiSettings)
+    {
+        _guiSettings = guiSettings;
+        _leftColumnWidth = new GridLength(guiSettings.LeftColumnWidth);
         NewSessionCommand = new AsyncRelayCommand(NewSessionAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
@@ -63,7 +80,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         // keeps the tree clean for users who only work via task-bound sessions.
     }
 
-    private MainWindowViewModel(SessionHost host) : this()
+    private MainWindowViewModel(SessionHost host, GuiSettings guiSettings) : this(guiSettings)
     {
         _host = host;
         LogFilePath = host.LogFilePath;
@@ -73,9 +90,26 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public static async Task<MainWindowViewModel> CreateAsync()
     {
         var host = await SessionHost.StartAsync().ConfigureAwait(false);
-        var vm = new MainWindowViewModel(host);
+        var guiSettings = await GuiSettings.LoadAsync(logger: host.Logger).ConfigureAwait(false);
+        var vm = new MainWindowViewModel(host, guiSettings);
         await vm.LoadTasksAsync().ConfigureAwait(false);
         return vm;
+    }
+
+    /// <summary>Persist the current layout (column widths, etc.) to <c>~/.infinicontext/gui-settings.json</c>.
+    /// Best-effort; failures are logged but don't propagate - losing a width tweak is not worth
+    /// crashing the GUI on close.</summary>
+    public async Task SaveLayoutAsync()
+    {
+        _guiSettings.LeftColumnWidth = LeftColumnWidth.IsAbsolute ? LeftColumnWidth.Value : GuiSettings.Defaults.LeftColumnWidth;
+        try
+        {
+            await _guiSettings.SaveAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _host?.Logger.Warning(ex, "gui-settings: SaveAsync failed");
+        }
     }
 
     private async Task LoadTasksAsync()
@@ -257,6 +291,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     public async ValueTask DisposeAsync()
     {
+        // Save layout before the host disposes (the logger lives on the host).
+        await SaveLayoutAsync().ConfigureAwait(false);
         foreach (var node in TaskNodes)
             foreach (var s in node.Sessions) s.Dispose();
         TaskNodes.Clear();

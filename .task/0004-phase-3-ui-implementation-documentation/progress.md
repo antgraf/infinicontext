@@ -266,3 +266,40 @@ User reported three follow-ups on the slice 4 redesign:
 - **CLI mojibake report from user:** the user also noticed strange symbols in the CLI. The CLI's renderer uses string literals like `"[state: From -> To]"` and `"[tool: Read({...})]"` which are pure ASCII. The non-ASCII chars in CLI source (e.g. `infinicontext-task` skill markdown which has em-dashes / arrows) may have rotted through the same tool round-trip. Worth a separate audit pass. Not blocking the GUI work but should be filed as a follow-up.
 
 **Build status:** Core + Gui green, 0 warnings, 0 errors. Pure ASCII source verified.
+
+## 2026-05-21
+
+### Phase 3B slice 4d - resizable left column, compact details, markdown rendering
+
+User-driven UX punch list (four follow-ups on the slice 4c GUI):
+1. Make left column width adjustable via a splitter, persisted in a GUI-only JSON.
+2. Increase the default left column width (260 was cramped).
+3. Decrease the "Details" expander padding - the Fluent default bloated every turn card vertically.
+4. Render assistant message bodies as Markdown instead of plain text.
+
+**Settings store (new):**
+- New `src/InfiniContext.Gui/Services/GuiSettings.cs`. Kept in the Gui project, NOT in Core - layout state has no consumer outside the GUI (CLI/sidecar/tests have no column widths to care about), so promoting to Core would force a fake dependency in unrelated assemblies. Schema is `{ version, leftColumnWidth }`; loader clamps out-of-range values; atomic temp+rename save matches `SessionIndex.SaveAsync`.
+- Path: `~/.infinicontext/gui-settings.json` (same parent dir as `index.json` and the SQLite store).
+- Loaded once at `MainWindowViewModel.CreateAsync()`. Saved once on `DisposeAsync` (window close) - the GridSplitter's TwoWay binding handles the live width; we only need to persist the final value, not every drag-delta tick.
+
+**MVVM wiring:**
+- `MainWindowViewModel.LeftColumnWidth : GridLength` exposed via `[ObservableProperty]`, initialised from the loaded `GuiSettings`. Min/Max exposed as plain getters from `GuiSettings.Defaults` so the XAML doesn't hard-code numbers.
+- New `SaveLayoutAsync()` method on the VM does the read-back of `LeftColumnWidth.Value` into the settings POCO and calls `SaveAsync`. Failures are logged via the host's `ILogger` but don't propagate - a lost width tweak doesn't justify crashing.
+
+**XAML changes:**
+- `<Grid>` column definitions now declared longhand: `<LeftColumnWidth bound>, 6px, *, 280`. The splitter is a real fourth `ColumnDefinition` so `ResizeBehavior="PreviousAndNext"` works correctly.
+- Center transcript moved from `Grid.Column="1"` to `"2"`; Inspector moved from `"2"` to `"3"`.
+- New `Window.Styles` block flattens Expander toggle padding. Two selectors used (`Expander` + `Expander /template/ ToggleButton`) so both the outer chrome and the inner toggle button get sized down. `MinHeight=0`, toggle `Padding=8,2`.
+- Added `xmlns:md="https://github.com/whistyun/Markdown.Avalonia"` and replaced the headline `SelectableTextBlock` with `<md:MarkdownScrollViewer Markdown="{Binding Headline}">` with the attached scrollbar-visibility props set to `Disabled` so it renders as a content host inside the outer transcript ScrollViewer.
+
+**Default value:** 340 DIP (was 260). Mid-range between "fits the longest task title most of the time" and "doesn't crowd the transcript on a 1100-DIP-wide default window."
+
+**Markdown package:** `Markdown.Avalonia 12.0.0-a2` - the only build that targets Avalonia 12 as of today. Pre-release pin documented inline in the csproj; bump when whistyun ships stable 12.x.
+
+**Encoding hazard re-hit:** wrote two source files with embedded em-dashes; the Edit pipeline transcoded them into Cyrillic three-byte sequences (UTF-8 of an em-dash misread under CP1251) byte sequences (the same hazard slice 4c documented). Fixed in-place via a Python `bytes.replace` pass and verified with a UTF-8 ASCII-only scan over all four touched files. Reinforces the slice 4c rule: GUI source stays ASCII-only.
+
+**Build status:** Gui project builds clean; format gate passes. Full-solution build is blocked locally by running `InfiniContext.Cli` processes (20988, 14188) holding DLL locks - left them alone since they're the user's interactive sessions. Visual verification of the splitter / markdown / padding deferred to the user's next GUI launch.
+
+**Follow-ups noted (out of scope):**
+- Right-edge inspector column is still fixed at 280 DIP. The user only asked for the left splitter; can add an inspector splitter symmetrically if they want one later.
+- Markdown.Avalonia 12.0.0-a2 alpha may have rough edges on long code fences or unusual nesting. Worth a real-world session to confirm before declaring done.

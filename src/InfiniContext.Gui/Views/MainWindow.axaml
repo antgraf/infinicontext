@@ -2,6 +2,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:InfiniContext.Gui.ViewModels"
+        xmlns:md="https://github.com/whistyun/Markdown.Avalonia"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
@@ -13,6 +14,20 @@
   <Design.DataContext>
     <vm:MainWindowViewModel />
   </Design.DataContext>
+
+  <Window.Styles>
+    <!-- Compact Expander: the Fluent default leaves ~24 DIP of vertical padding around the toggle
+         row, which doubles the height of an otherwise-one-line "Details" pill in every turn. We
+         flatten the toggle area to match the surrounding metadata typography. -->
+    <Style Selector="Expander">
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton">
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="8,2" />
+    </Style>
+  </Window.Styles>
 
   <DockPanel>
     <!-- Status strip -->
@@ -28,7 +43,16 @@
       <TextBlock Text="{Binding LogFilePath}" FontSize="11" Opacity="0.7" />
     </Border>
 
-    <Grid ColumnDefinitions="260,*,280">
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="{Binding LeftColumnWidth, Mode=TwoWay}"
+                          MinWidth="{Binding LeftColumnMinWidth}"
+                          MaxWidth="{Binding LeftColumnMaxWidth}" />
+        <ColumnDefinition Width="6" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="280" />
+      </Grid.ColumnDefinitions>
+
       <!-- Tasks &amp; Sessions tree -->
       <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0">
         <DockPanel>
@@ -75,8 +99,16 @@
         </DockPanel>
       </Border>
 
+      <!-- Vertical splitter between the Tasks tree and the transcript. The left column's
+           ColumnDefinition.Width is two-way bound to the VM's LeftColumnWidth, so dragging here
+           updates the VM directly and the splitter doesn't need an event hook. -->
+      <GridSplitter Grid.Column="1" Width="6"
+                    HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    ResizeBehavior="PreviousAndNext"
+                    Background="{DynamicResource SystemBaseLowColor}" />
+
       <!-- Focused session transcript -->
-      <Grid Grid.Column="1" RowDefinitions="*,Auto">
+      <Grid Grid.Column="2" RowDefinitions="*,Auto">
         <ScrollViewer Grid.Row="0" Padding="12">
           <ItemsControl ItemsSource="{Binding FocusedSession.Turns}">
             <ItemsControl.ItemTemplate>
@@ -90,10 +122,16 @@
                       <Run Text="&#x1F464; " /><Run Text="{Binding UserPrompt, Mode=OneWay}" />
                     </TextBlock>
 
-                    <!-- Headline / final answer (or thinking placeholder) -->
+                    <!-- Headline / final answer (or thinking placeholder). Rendered as Markdown so
+                         assistant replies with fenced code, headings, bullets, and inline code keep
+                         their structure instead of degrading to a wall of text. Scrollbars disabled
+                         so the inner control acts as a content renderer inside the transcript's
+                         outer ScrollViewer. -->
                     <StackPanel Orientation="Horizontal" Spacing="8">
                       <TextBlock Text="&#x23F3;" IsVisible="{Binding IsInProgress}" FontSize="14" VerticalAlignment="Top" />
-                      <SelectableTextBlock Text="{Binding Headline, Mode=OneWay}" TextWrapping="Wrap" FontSize="13" />
+                      <md:MarkdownScrollViewer Markdown="{Binding Headline, Mode=OneWay}"
+                                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                               ScrollViewer.VerticalScrollBarVisibility="Disabled" />
                     </StackPanel>
 
                     <!-- Footer: cost / turns / duration once the result event lands -->
@@ -153,7 +191,7 @@
       </Grid>
 
       <!-- Inspector -->
-      <Border Grid.Column="2" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="12">
+      <Border Grid.Column="3" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="12">
         <StackPanel Spacing="6">
           <TextBlock Text="Inspector" FontWeight="SemiBold" />
           <TextBlock Text="{Binding SelectedTaskNode.Title, FallbackValue='(no task selected)'}" FontWeight="SemiBold" TextWrapping="Wrap" />

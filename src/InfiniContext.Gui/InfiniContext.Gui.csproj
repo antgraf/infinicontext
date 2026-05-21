@@ -30,6 +30,12 @@
       internals. Re-add this reference when AvaloniaUI/Avalonia.Diagnostics 12.x is published.
     -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!--
+      Markdown rendering inside the transcript's per-turn cards. 12.0.0-a2 is the only build
+      that targets Avalonia 12 as of 2026-05-21 (the stable 11.x line is pinned to Avalonia 11).
+      Pre-release pin is intentional and will be lifted when whistyun ships a stable 12.x.
+    -->
+    <PackageReference Include="Markdown.Avalonia" Version="12.0.0-a2" />
   </ItemGroup>
 
 </Project>
