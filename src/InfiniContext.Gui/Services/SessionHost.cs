@@ -121,18 +121,24 @@ public sealed class SessionHost : IAsyncDisposable
         ILogger logger)
     {
         var slotSink = new SlotApprovalSink(slot, transcript, timeout: askTimeout, writeTranscriptBanner: false);
+        IApprovalSink inner;
         switch (settings.Approval.Mode)
         {
             case ApprovalMode.Ask:
+                // Ask returns bare: the banner UI in the focused pane carries closure visually,
+                // so a trailing transcript echo would be redundant clutter. Slice 4i intentionally
+                // set writeTranscriptBanner=false on the slot sink for the same reason.
                 return slotSink;
 
             case ApprovalMode.Deny:
                 logger.Information("gui-approval: mode=deny; all tool calls auto-denied for session cwd={Cwd}", cwd);
-                return new StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)");
+                inner = new StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)");
+                break;
 
             case ApprovalMode.Allow:
                 logger.Warning("gui-approval: mode=ALLOW; every tool call will be auto-approved without review (cwd={Cwd})", cwd);
-                return new StaticApprovalSink(ApprovalBehavior.Allow);
+                inner = new StaticApprovalSink(ApprovalBehavior.Allow);
+                break;
 
             case ApprovalMode.Auto:
                 var effort = settings.Approval.Auto.Effort;
@@ -149,11 +155,18 @@ public sealed class SessionHost : IAsyncDisposable
                 logger.Information(
                     "gui-approval: mode=auto effort={Effort} on-low-confidence={OnLowConfidence} timeout={Timeout}s cwd={Cwd}",
                     effort, settings.Approval.Auto.OnLowConfidence, settings.Approval.Auto.TimeoutSeconds, cwd);
-                return new AutoApprovalSink(light, slotSink, settings.Approval.Auto, cwd, logger);
+                inner = new AutoApprovalSink(light, slotSink, settings.Approval.Auto, cwd, logger);
+                break;
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(settings), settings.Approval.Mode, "unknown approval mode");
         }
+
+        // Wrap non-ask sinks so every decision is echoed into the originating session's transcript.
+        // For Deny/Allow this gives operators a record that the tool call happened and what was
+        // decided; for Auto this is the only place the light-model verdict surfaces in the UI
+        // (Serilog still logs centrally). Format matches the CLI: "[approval] Tool -> ALLOW (Nms)".
+        return new ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "\n"));
     }
 
     public async Task<SessionContext> CreateSessionAsync(string cwd, int? activeTaskId = null, CancellationToken ct = default)

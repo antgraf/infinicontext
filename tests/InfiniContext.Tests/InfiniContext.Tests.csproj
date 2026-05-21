@@ -43,7 +43,6 @@
   <ItemGroup>
     <Compile Include="..\..\src\InfiniContext.Cli\RunArgs.cs" Link="Cli\RunArgs.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\CliFlagCatalog.cs" Link="Cli\CliFlagCatalog.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\ConsoleEchoingApprovalSink.cs" Link="Cli\ConsoleEchoingApprovalSink.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommand.cs" Link="Cli\Tasks\TaskCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommandHandler.cs" Link="Cli\Tasks\TaskCommandHandler.cs" />

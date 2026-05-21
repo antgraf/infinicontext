@@ -1,11 +1,10 @@
 using System.Diagnostics;
-using InfiniContext.Core.Mcp;
 
-namespace InfiniContext.Cli;
+namespace InfiniContext.Core.Mcp;
 
 /// <summary>
 /// Decorator that emits a one-line summary of every approval decision after the inner sink
-/// resolves. Logs are produced centrally by <see cref="Core.Mcp.ApprovalChannel"/>; this decorator
+/// resolves. Logs are produced centrally by <see cref="ApprovalChannel"/>; this decorator
 /// covers the user-visible side so <c>deny</c>/<c>allow</c>/<c>auto</c> modes (which don't render
 /// their own banner) still print what was decided.
 ///
@@ -18,11 +17,11 @@ namespace InfiniContext.Cli;
 ///
 /// <para>Format:</para>
 /// <list type="bullet">
-///   <item>Allow: <c>[approval] &lt;Tool&gt; → ALLOW (Nms)</c></item>
-///   <item>Deny:  <c>[approval] &lt;Tool&gt; → DENY (Nms): &lt;reason&gt;</c></item>
+///   <item>Allow: <c>[approval] &lt;Tool&gt; в†’ ALLOW (Nms)</c></item>
+///   <item>Deny:  <c>[approval] &lt;Tool&gt; в†’ DENY (Nms): &lt;reason&gt;</c></item>
 /// </list>
 /// </summary>
-internal sealed class ConsoleEchoingApprovalSink : IApprovalSink
+public sealed class ConsoleEchoingApprovalSink : IApprovalSink
 {
     private readonly IApprovalSink _inner;
     private readonly Action<string> _emit;
@@ -46,8 +45,8 @@ internal sealed class ConsoleEchoingApprovalSink : IApprovalSink
         finally { sw.Stop(); }
 
         var line = response.Behavior == ApprovalBehavior.Allow
-            ? $"[approval] {request.ToolName} → ALLOW ({sw.ElapsedMilliseconds}ms)"
-            : $"[approval] {request.ToolName} → DENY ({sw.ElapsedMilliseconds}ms): {response.Message ?? "(no reason)"}";
+            ? $"[approval] {request.ToolName} в†’ ALLOW ({sw.ElapsedMilliseconds}ms)"
+            : $"[approval] {request.ToolName} в†’ DENY ({sw.ElapsedMilliseconds}ms): {response.Message ?? "(no reason)"}";
         _emit(line);
         return response;
     }

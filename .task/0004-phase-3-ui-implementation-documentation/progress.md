@@ -571,4 +571,32 @@ Operator flagged that with a dark theme + white default foreground, the approval
 **Build status:** `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` green (0 warnings, 0 errors). Format gate clean. No new tests - this is a XAML-only contrast fix with no testable logic.
 
 **Theme-portability follow-up:** the banner uses three hardcoded amber-on-yellow colors (`#FFFFF3CD`, `#FFD9B441`, `#FF6B4E00`). They are *theme-agnostic* now (the banner ignores the OS theme entirely and always renders amber-on-yellow), which is acceptable for a warning surface but is the only place in the GUI that doesn't honour Fluent's dynamic resources. A future polish slice could replace these with `DynamicResource` brushes that flip the banner's whole palette in dark theme (e.g. dark-amber background + light-amber foreground). Not load-bearing.
+### Phase 3B slice 4l - auto-mode decision visibility in the GUI (2026-05-21)
+
+Closes follow-up #1 from the 4k flush note. With `auto` being the new committed default, every silent-allow left only a Serilog line in `logs/gui-*.log` - the operator had no UI signal that a tool call had been auto-approved (or auto-denied). Slice 4l surfaces the decision in the originating session's transcript so each verdict is visible inline.
+
+**ConsoleEchoingApprovalSink promoted CLI -> Core (same playbook as AutoApprovalSink in 4k):**
+- `src/InfiniContext.Cli/ConsoleEchoingApprovalSink.cs` -> `src/InfiniContext.Core/Mcp/ConsoleEchoingApprovalSink.cs`. Namespace flipped `InfiniContext.Cli` -> `InfiniContext.Core.Mcp`; visibility `internal sealed` -> `public sealed`. Body unchanged - depends only on `IApprovalSink`, `ApprovalRequest`, `ApprovalResponse`, all already in Core.
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`: dropped the `<Compile Include="..\..\src\InfiniContext.Cli\ConsoleEchoingApprovalSink.cs">` link line.
+- `tests/InfiniContext.Tests/Cli/ConsoleEchoingApprovalSinkTests.cs`: dropped `using InfiniContext.Cli;` (the file already imports `InfiniContext.Core.Mcp;`). All tests still pass against the Core type.
+- `src/InfiniContext.Cli/ApprovalSinkFactory.cs` and `tests/InfiniContext.Tests/Cli/ApprovalSinkFactoryTests.cs`: no change. Both already import `InfiniContext.Core.Mcp;` so the symbol resolves at the new location.
+
+**GUI consumer (slice's load-bearing change):**
+- `src/InfiniContext.Gui/Services/SessionHost.cs::BuildApprovalSink` restructured so the switch builds an `inner` sink and the method wraps non-ask modes in `ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "
+"))`. `Ask` returns bare because the banner UI already carries closure - a trailing transcript echo would be redundant.
+  - `Deny` -> `[approval] Tool -> DENY (Nms): auto-deny (approval mode=deny)` lines.
+  - `Allow` -> `[approval] Tool -> ALLOW (Nms)` lines.
+  - `Auto` -> the light model's verdict surfaces inline as `... -> ALLOW (Nms)` or `... -> DENY (Nms): auto-deny [Axis]: Reason`.
+- The decorator emits *after* the inner sink resolves, so the timing is true wall-clock (allow latency for auto-mode reflects the light-model round trip).
+- Newline appended explicitly (`line + "
+"`) because `TranscriptModel.Append` doesn't terminate lines on its own; matches the CLI's wrap site in `ApprovalSinkFactory.Build`.
+
+**Build status:** `dotnet build InfiniContext.slnx -c Release` green (0 warnings, 0 errors). Full test suite **981 passed / 3 POSIX-skipped / 0 failed** (parity with 4k). `dotnet format --verify-no-changes` clean. Live GUI smoke test of the four modes was not performed - the operator owns that verification.
+
+**Follow-ups remaining (from the 4k flush, minus #1):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- Live per-second countdown in the approval banner (`DispatcherTimer`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- `<Compile Include>` link housekeeping: after 4k+4l, only `ApprovalSinkFactory.cs` remains link-compiled. Promotion candidate when a second consumer (likely the GUI's eventual mode-toggle handler) needs the same mode->sink mapping.
+- Theme-portable approval banner: the amber-on-yellow palette is hardcoded; replacing the three colors with `DynamicResource` brushes that flip in dark theme is the canonical polish slice. Not load-bearing.
 
