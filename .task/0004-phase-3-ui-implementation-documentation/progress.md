@@ -682,3 +682,217 @@ Resolves the bug investigation above. Operator chose: both parts, ready signal a
 - `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
 - Theme-portable approval banner: hardcoded amber-on-yellow palette; replace with `DynamicResource` brushes for dark-theme flip.
 
+## 2026-05-21
+
+### Phase 3B fix - readiness-gate race protection (buttons stuck disabled forever)
+
+Follow-up to the 2026-05-21 readiness-gate landing. Operator reported: "session buttons remain disabled forever. after creation of a session it goes into warm up state and buttons are disabled. they never enabled back."
+
+**Root cause.** The readiness gate keys off `_initSeen` (set in `SessionRowViewModel.ApplyEvent` when `SystemInitEvent` is observed) and only flips `IsReady` on the *next* `ResultEvent`. But `SessionManager.CreateAsync` calls `reader.Start()` at `SessionManager.cs:251` *before* the GUI gets a chance to construct the `SessionRowViewModel` and subscribe to `Context.EventObserved`. The reader is on a `Task.Run` so it can begin draining the events channel - and invoking `ctx.RaiseEventObserved` - before the row VM's constructor at `MainWindowViewModel.cs:273` ever runs. If `SystemInitEvent` is dispatched in that window, the row VM never observes it; `_initSeen` stays false forever; subsequent `ResultEvent`s see the `_initSeen && !IsReady` guard fail; `IsReady` is pinned false; the Continue / What's next / Send buttons (all bound to `IsReady`) are pinned disabled. This was explicitly flagged as an open edge case in the 2026-05-21 landing notes ("if `SendFirstUserMessageAsync` fails ... `IsReady` stays false indefinitely") but not the only one - the race exists independently of whether the pointer send succeeds.
+
+For free sessions the failure mode is worse: claude is idle after `system/init`, so even the catch-up-on-next-event hack wouldn't fire - they'd stay disabled until the operator forces another event somehow (which they can't, since buttons are disabled).
+
+**Fix.** Two defensive snapshots in `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`:
+
+1. **Catch-up in `ApplyEvent`** (top of method, before the switch): if `_initSeen` is false and the observed event is anything *other than* `SystemInitEvent`, treat it as proof init has already happened (claude always emits init first; the events channel preserves FIFO) and set `_initSeen = true`. For free sessions, also flip `IsReady = true` because they have no pointer turn to wait on. Task-bound sessions still wait for the next `ResultEvent` per the original design - the catch-up just unsticks the `_initSeen` gate so that gate doesn't stay closed forever.
+
+2. **Constructor pre-seed**: if `context.Session.SessionId is not null` at construction time (set by `ClaudeSession.StdoutLoopAsync:270-285` the moment claude emits its first event with a `session_id`), events have already started flowing. Mark `_initSeen = true` and flip `IsReady` for free sessions immediately. Necessary because the ApplyEvent catch-up only fires on subsequent events, and free sessions emit nothing after init - without this they'd stay disabled until the operator typed something, which they can't because the Send button is disabled.
+
+The two together close all variants: race-dropped init on task-bound (catch-up via assistant/result events), race-dropped init on free (constructor snapshot from `SessionId`), and the gap between snapshot and subscription (catch-up handles any event after).
+
+**What was NOT changed.** The `_initSeen=true` set inside the `SystemInitEvent` case in the switch stayed - normal happy-path observation of init still goes through it. Removing it would have made the catch-up the sole writer, which is fragile if anyone ever adds a new event type that should pass through the catch-up but be handled specially in the switch. The redundancy is intentional.
+
+The 2026-05-21 watchdog discussion (rejected): still applies. A timeout-based "if no init within N seconds, flip IsReady anyway" was explicitly rejected to keep silent bring-up failures visible to the operator. This fix does not introduce a watchdog - it only fixes the in-protocol race, not actual bring-up failures (which still require the operator to check the log).
+
+**Files changed:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - catch-up at top of `ApplyEvent`; constructor pre-seed of `_initSeen`/`IsReady` from `Session.SessionId`.
+
+**Build/test:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **981 passed / 3 POSIX-skipped / 0 failed** (parity with prior baseline). No GUI VMs link-compiled into the test assembly - operator owns smoke verification.
+- `dotnet format --verify-no-changes` clean.
+
+**Operator smoke checklist:**
+1. Spawn a free session (folder picker). Status strip should NOT say "Warming up..." and the Send button should enable as soon as the prompt text box has content. Continue/What's next buttons stay disabled for free sessions (no canned task action makes sense - that's existing behavior, not the bug).
+2. Spawn a task-bound session via the per-task "+" button. Status strip says "Warming up..." then transitions to "Sent to..." after the agent's first turn closes. At that point Continue/What's next/Send all enable.
+3. If buttons stay disabled past the first agent turn, check `logs/gui-*.log` for "first user message send failed" - that's the actual-bring-up-failure case the previous flush flagged, and this fix does not address it.
+
+### Phase 3B fix - readiness-gate full-race (both init AND result drained before subscription)
+
+Operator reported buttons still stuck disabled after the prior race-protection fix landed. Root cause: the previous fix closed the "init dispatched before subscription" race via the constructor's `SessionId` check, and the "any post-init event arrives later" race via the catch-up in `ApplyEvent`. But it left a third case open for task-bound sessions: when the reader's `Task.Run` loop drains *both* the `system/init` event *and* the pointer's `ResultEvent` from the channel before `SpawnSessionForTaskAsync` resumes on the UI thread to construct the `SessionRowViewModel`. In that case:
+
+1. Constructor sees `Session.SessionId is not null` -> sets `_initSeen = true`. IsReady stays false (task-bound, no `LastNumTurns` check).
+2. The result event has already fired and been swallowed -> no `ApplyEvent` invocation arrives to flip IsReady via the `ResultEvent` switch arm.
+3. Agent is idle waiting for operator input -> no further events ever come.
+4. IsReady pinned false; Continue / What's next / Send all stuck disabled forever.
+
+For a freshly-spawned task-bound session whose pointer turn closes fast (small task, warm caches), this can be the dominant case.
+
+**Fix.** Extend the constructor pre-seed to consult `context.LastNumTurns`. `SessionManager.CreateAsync` writes it in the reader's `EventObserved` handler the moment any `ResultEvent` is observed (`SessionManager.cs:244-248`), *before* `RaiseEventObserved`. A non-null value at the time the row VM is constructed proves the pointer-acknowledgement turn has already closed - same guarantee the in-protocol `ResultEvent` arm provides. Updated condition:
+
+```csharp
+if (context.ActiveTaskId is null || context.LastNumTurns is not null) IsReady = true;
+```
+
+Same `_initSeen = true` pre-seed as before; only the IsReady flip changed.
+
+**Why `LastNumTurns` and not `LastCostUsd`:** `LastCostUsd` mirrors `ResultEvent.TotalCostUsd` which is nullable on the wire (claude omits it on cached / zero-cost results). `LastNumTurns` mirrors `ResultEvent.NumTurns` which is also nullable but reliably populated on the result events claude emits in practice; either works as a "has any ResultEvent fired" signal, but the turn-count read is the more semantically obvious "a turn happened" check.
+
+**Files changed:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - constructor IsReady condition broadened to flip when `LastNumTurns` is already populated.
+
+**Build/test:**
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes` clean.
+- Full solution test parity preserved (no test added; GUI VMs remain operator-smoke-only per the prior landing's policy).
+
+**Operator smoke (updated):** the previous checklist still applies; the new fix only affects the corner case where the pointer turn closes faster than the UI thread can resume from `await CreateSessionAsync`. If the buttons enable immediately on a task-bound spawn now (instead of "Warming up..." sticking), that's the LastNumTurns pre-seed firing.
+
+**Out of scope (still):** the watchdog rejection from the prior flush remains - if the pointer SEND itself fails (`SendFirstUserMessageAsync` logs "first user message send failed"), no `ResultEvent` will ever fire and IsReady stays false. Operator must consult the log.
+
+### Phase 3B diag - readiness-gate Serilog instrumentation
+
+Operator reported buttons still stuck disabled after the two prior race-protection rounds (constructor `SessionId` pre-seed + catch-up in `ApplyEvent` + `LastNumTurns` pre-seed). Asked for logs to investigate. There were none: `SessionRowViewModel` had no logger plumbed in, so the only way to diagnose was to add `Debug.WriteLine` and rebuild - useless for an operator running a release GUI build.
+
+**Change.** Plumb `Serilog.ILogger` into the row VM and emit at every readiness-gate decision point.
+
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`:
+  - New optional `ILogger? logger` ctor param + `_logger` field. Param is optional so the parameterless `MainWindowViewModel()` design-time path (`App.axaml.cs:23`) and any future test scaffolds keep working without a logger reference.
+  - New `SetIsReady(string reason)` helper - the single writer for `IsReady = true`. Logs `"gui-row[{Row}] IsReady=true reason={Reason}"` on every flip so the reason ("ctor-pre-seed", "init-free", "catch-up-free", "result-after-init") is visible in `logs/gui-*.log`. Idempotent (early-returns if already true).
+  - Constructor now emits a single info line with all pre-seed inputs: `activeTaskId`, `sessionId` (snapshot at ctor), `lastNumTurns` (snapshot at ctor), `_initSeen`, `IsReady`. That's the diagnostic for "did the constructor see a populated state at all?" - the answer to whether the full-race pre-seed actually fires in practice.
+  - `ApplyEvent` now logs a `Debug` line per event with `type/subtype` + current gate state, plus dedicated `Information` lines for: catch-up firing, `system/init` arm entry, `ResultEvent` arm entry (with `numTurns` / `cost`). Three categories of decision + every event observation = full timeline reconstructible from the log.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs`:
+  - `SpawnSessionForTaskAsync` now passes `_host.Logger` into the `SessionRowViewModel` ctor (previously: no logger at all).
+  - `OnFocusedSessionPropertyChanged` logs the focused-session `IsReady` flip with the resulting `CanSendPrompt()` value. That's the diagnostic for "did the parent VM notice the flip and refresh the Send button?" - separate path from the row buttons, which bind directly to `IsReady`.
+
+**What this log set tells you about a stuck-buttons report:**
+1. *Did the ctor pre-seed see anything?* Look at the first `gui-row[XXXX] ctor:` line. If `sessionId=` is null, the spawn finished faster than claude's first event landed; the gate depends entirely on later events. If `sessionId` is set but `isReady=False`, the task-bound branch is active and we're waiting on `LastNumTurns` (which the line also shows).
+2. *Did events flow at all after subscription?* Each `event observed:` line at Debug level is one event the row VM saw. Silence means the spawn produced no transcript events post-subscription - usually means `SendFirstUserMessageAsync` failed (which `ClaudeSession.cs:326-329` logs separately).
+3. *Did init or a result fire?* `init: observed system/init` and `result observed: numTurns=...` are the two events that drive the gate. If neither line appears for a task-bound session, the agent never finished the pointer turn - watch for the bring-up-failure case the prior flushes flagged.
+4. *Did IsReady ever flip?* If `IsReady=true reason=...` is missing, the gate is stuck. The `reason` field disambiguates between the four paths (ctor-pre-seed vs catch-up-free vs init-free vs result-after-init) so the next fix knows which path needs hardening.
+5. *Did the Send button get re-evaluated?* `focused-session IsReady changed ... canSend=...` confirms the parent VM picked up the flip. If `IsReady=true` but the Send button still appears disabled, this line tells us whether the issue is in the gate (no flip) or in the button binding pipeline.
+
+**No behavioral change.** Logging only - the gate logic is byte-identical to before. The `IsReady = true` writes inside `ApplyEvent` and the constructor now route through `SetIsReady`, which adds an idempotency check (was previously redundant unconditional assignment) and the log line.
+
+**Build/test:**
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format src/InfiniContext.Gui/InfiniContext.Gui.csproj --verify-no-changes` clean.
+- No tests added (no GUI VM coverage in this repo per the prior landing's policy).
+
+**Operator next step:** reproduce the stuck-buttons case, then attach the matching `logs/gui-YYYYMMDD-HHmmss.log`. The five lines listed above will identify which gate path is failing.
+
+### Flush note (hard threshold, 2026-05-21)
+
+Host hit hard context-pressure threshold (~85%) right after the Serilog-instrumentation slice landed in working tree. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (uncommitted):**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - logger plumbed in, `SetIsReady(reason)` helper added, ctor/catch-up/init/result log lines added. Compiles + formats clean.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs` - passes `_host.Logger` into the row ctor; `OnFocusedSessionPropertyChanged` logs the IsReady propagation + `CanSendPrompt()` result.
+- `.task/0004-phase-3-ui-implementation-documentation/progress.md` - entry above this flush note describes the diagnostic logging change in full.
+- `.task/0004-phase-3-ui-implementation-documentation/index.md` - `progress.md` row's description + date updated for this entry.
+
+**Working tree summary (per `git status` at session start, now extended):** all four files above modified; no new files created; no files deleted; no commits made this session.
+
+**Next session pickup:** 
+1. Commit + push the diagnostic logging slice (suggested message: "Phase 3B diag: Serilog instrumentation for GUI readiness gate."). No tests to run beyond `dotnet build` + `dotnet format --verify-no-changes`, both already green.
+2. Wait for operator to reproduce the stuck-buttons case with the new logging in place, then attach `logs/gui-*.log`. The five anchor lines documented in the entry above will pinpoint which of the four `SetIsReady` paths failed to fire.
+3. Possible follow-on fix depending on log evidence: if `ctor:` shows `sessionId=null` on the failing repro, the spawn-return happens faster than the first event - need a different signal than `SessionId`. If `event observed:` lines stop at init with no `result observed:`, the pointer turn never closed - bring-up-failure case the prior flushes flagged. If `IsReady=true reason=...` fires but `focused-session IsReady changed` doesn't, the parent-VM subscription path is broken.
+
+**Out of scope (unchanged from prior flushes):** watchdog timeout fail-open, mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors, `<Compile Include>` link housekeeping (only `ApprovalSinkFactory.cs` remains link-compiled). Promote `.task/0004/design.md` -> `docs/stage3/design.md` still gated on user sign-off of design.md s10 decisions. `docs/stage3/plan.md` and `docs/stage3/decisions.md` still not authored.
+
+### Phase 3B fix - FirstUserMessage bring-up deadlock (root cause, not race)
+
+Operator reproduced the stuck-icons case with the Serilog instrumentation in place. The log (`logs/gui-20260521-164609.log`) showed:
+
+```
+16:46:15.345 spawn: exe=claude argv=[...]
+16:46:15.382 gui-row[5f504988] ctor: activeTaskId=4 sessionId=null lastNumTurns=null initSeen=false isReady=false
+16:46:16.090 approval-channel: sidecar connected
+16:47:10.264 state Idle -> Exited (ProcessExit(exitCode=-1))
+16:47:10.265 process exited code=-1 unknown_events=0 malformed_lines=0
+16:47:10.278 session-index: skipping write - claude session id never assigned
+```
+
+Five anchor lines from the prior diagnostic instrumentation: **none of them fired after the ctor line.** No `event observed:`, no `init: observed system/init`, no `result observed:`, no `IsReady=true reason=...`. The session was not failing the readiness gate - claude itself was not bringing up at all. 55 seconds of silence, zero events parsed, exit code -1, session_id never assigned.
+
+Cross-referenced against a recent CLI log (`logs/20260521-101553.log`) that used the real claude binary. First session there (free, no FirstUserMessage) showed the same pattern: spawn -> 17s silence -> exit -1, no events. Second session (task=4, FirstUserMessage set) showed:
+
+```
+10:16:11.049 spawn
+10:16:11.742 sidecar connected
+10:17:30.912 state Idle -> Sending (BeginSend)   <- operator typed a prompt 79s later
+10:17:30.913 tx: {"type":"user",..."content":"make sure..."}
+10:17:30.974 session_id assigned                 <- system/init arrives AFTER stdin write
+10:17:30.974 tx: {"type":"user",...task pointer 165 bytes}
+10:17:30.975 claude version=2.1.143 differs from tested-against 2.1.112
+```
+
+**Root cause.** claude 2.1.143 with `--print --input-format stream-json` does NOT emit `system/init` until it has read at least one user message from stdin. `ClaudeSession.cs:270-285` gated the `FirstUserMessage` send on the `_sessionId is null && ev.SessionId is { } sid` arm inside `StdoutLoopAsync` - i.e., it waited for system/init to fire before writing the pointer. That produces a deadlock:
+
+1. Host spawns claude with `FirstUserMessage` set.
+2. claude opens stdin, blocks reading - emits nothing.
+3. Host's stdout loop sees no events - the `_sessionId is null` branch never fires.
+4. FirstUserMessage never written. claude waits forever (or until it self-times-out and exits -1 ~55s later, depending on platform/version).
+5. GUI's `SessionRowViewModel` never observes `system/init` -> `_initSeen` stays false, `IsReady` never flips -> Send / Continue / What's next buttons stuck disabled.
+
+The three prior race-protection rounds (constructor `SessionId` pre-seed; `ApplyEvent` catch-up; `LastNumTurns` pre-seed) all addressed *races within the event stream* - they assumed events were flowing and we just needed to catch up. They were correct fixes for those races. None of them helped here because there were no events to race against. The recorder's `tools/InfiniContext.Recorder/Program.cs:172` pre-sends the prompt to stdin BEFORE waiting for output, which is why the fixtures and FakeClaude-replay tests worked all along - the wire-protocol assumption "claude emits system/init on startup" was never accurate for `--print` mode; it just happened to be observationally true when something else (the operator's first typed prompt) drove the send.
+
+**Fix.** Send `FirstUserMessage` immediately after the IO loops are wired in `StartAsync`, NOT gated on `system/init`.
+
+- `src/InfiniContext.Core/Sessions/ClaudeSession.cs:194-208`: added fire-and-forget `_ = SendFirstUserMessageAsync(_options.FirstUserMessage)` right after the `Task.Run` lines that start `StdoutLoopAsync` / `StderrLoopAsync`. Comment block explains the wire-protocol observation that justifies the change. Fire-and-forget keeps `StartAsync` non-blocking for `SessionManager.CreateAsync`'s `await`; `SendFirstUserMessageAsync` already wraps `SendUserMessageAsync` in try/catch and logs failures as warnings rather than throwing - same error-handling contract as before, just at a different call site.
+- `src/InfiniContext.Core/Sessions/ClaudeSession.cs:270-285`: removed the inner `if (!string.IsNullOrEmpty(_options.FirstUserMessage))` block that previously fired the send from the `system/init` arm of `StdoutLoopAsync`. The outer `_sessionId is null && ev.SessionId is { } sid` block (session_id assignment + logger reconfigure) stays - that part still needs to fire on the first event with a session_id.
+
+**What this leaves alone.** All three prior race-protection rounds in `SessionRowViewModel.cs` remain in place. They are still correct for what they protect against (events arriving before the row VM has subscribed to `EventObserved`). The catch-up + constructor pre-seed + `LastNumTurns` pre-seed are belt-and-suspenders against a different failure mode than the one this fix addresses; removing them would re-expose those races. The Serilog instrumentation also stays - its anchor lines just told us the gate-protection wasn't the problem this round.
+
+**Test update.**
+
+- `tests/InfiniContext.Tests/Sessions/FakeClaudeIntegrationTests.cs:233`: renamed `FirstUserMessage_is_sent_to_stdin_after_first_system_init` -> `FirstUserMessage_is_sent_to_stdin_on_session_start` and rewrote the comment block to document the wire-protocol observation. The test's substantive assertions (the pointer text reaches stdin via the wire-format user envelope, exactly one line) are unchanged and still pass - FakeClaude's `wait-stdin` action reads the line whenever it gets there, and OS pipe buffering means the host's stdin write before FakeClaude's first action runs is harmless.
+
+**Build/test:**
+
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes` clean.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **981 passed / 3 POSIX-skipped / 0 failed** (exact parity with baseline). The renamed test passes.
+
+**Operator smoke (next):** spawn a task-bound session via the per-task "+" button. Expected new log sequence:
+
+1. `gui-row[XXXX] ctor: activeTaskId=N sessionId=null lastNumTurns=null initSeen=false isReady=false` (unchanged)
+2. *No silent 55s gap.* Within seconds: `first user message sent (N bytes)` (Information level, from `SendFirstUserMessageAsync` in ClaudeSession.cs:324).
+3. `session_id assigned`
+4. `rx: system/init ...`
+5. `gui-row[XXXX] init: observed system/init activeTaskId=N`
+6. claude processes the pointer, emits assistant + tool calls (or just text)
+7. `rx: result/success ...`
+8. `gui-row[XXXX] result observed: numTurns=1 costUsd=...`
+9. `gui-row[XXXX] IsReady=true reason=result-after-init`
+10. `gui-main: focused-session IsReady changed row=XXXX isReady=True canSend=True` (if PromptText is populated)
+
+If line 2 is missing or shows a warning ("first user message send failed: ..."), the SendFirstUserMessageAsync wrapper caught an exception - attach the log; this would be a new failure mode (e.g., child's stdin pipe was closed before the write).
+
+**Out of scope (still).** Free sessions (no `FirstUserMessage`) hit a related-but-distinct issue: claude still won't emit `system/init` without stdin input, so `IsReady` stays false for free sessions until the operator types something - but the Send button is gated on `IsReady`, so the operator CAN'T type. The GUI's free-session flow is therefore unusable in this iteration. Possible fixes: (a) flip `IsReady` immediately in the constructor for `ActiveTaskId is null` sessions (skip the init wait entirely, since there's no pointer turn to wait for); (b) allow Send-button typing regardless of `IsReady` and treat the first operator message as the kick. Either way, separate change - this round only fixes the task-bound deadlock the operator reported. The free-session deadlock is logged for a follow-up.
+
+### Flush note (hard threshold, 2026-05-21)
+
+Host hit hard context-pressure threshold (~85%; reported as 473% of 1M) right after the FirstUserMessage bring-up-deadlock fix landed. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (uncommitted, additive to the prior flush's working tree):**
+- `src/InfiniContext.Core/Sessions/ClaudeSession.cs` - FirstUserMessage send moved from inside `StdoutLoopAsync`'s `_sessionId is null` arm to immediately after the `Task.Run` for stdout/stderr loops in `StartAsync`. Compiles + formats clean.
+- `tests/InfiniContext.Tests/Sessions/FakeClaudeIntegrationTests.cs` - test renamed `FirstUserMessage_is_sent_to_stdin_after_first_system_init` -> `FirstUserMessage_is_sent_to_stdin_on_session_start`; comment block rewritten to document the wire-protocol observation (claude `--print --input-format stream-json` doesn't emit system/init without stdin). Substantive assertions unchanged; passes.
+- `.task/0004-phase-3-ui-implementation-documentation/progress.md` - entry `### Phase 3B fix - FirstUserMessage bring-up deadlock (root cause, not race)` describes the diagnosis (5-anchor log analysis pointed at no events at all, not a race), the wire-protocol root cause cross-referenced via `logs/20260521-101553.log` and `tools/InfiniContext.Recorder/Program.cs:172`, and the fix.
+- `.task/0004-phase-3-ui-implementation-documentation/index.md` - progress.md row description updated; date stays 2026-05-21.
+
+**All four prior-flush files (`SessionRowViewModel.cs`, `MainWindowViewModel.cs`, `progress.md`, `index.md`) plus the two new files above (`ClaudeSession.cs`, `FakeClaudeIntegrationTests.cs`) are uncommitted.** Six modified files total. No new files; no deletions; no commits this session.
+
+**Build/test at flush time:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes` clean.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> 981 passed / 3 POSIX-skipped / 0 failed. Exact parity with the baseline at the prior flush.
+
+**Next session pickup:**
+1. Commit + push both slices together. Suggested message: `"Phase 3B fix: FirstUserMessage sent on session start (claude --print never emits system/init without stdin input)."` Includes the prior-flush's Serilog instrumentation slice; both naturally belong in one commit since the instrumentation is what proved this round's root cause. No tests beyond `dotnet build` + `dotnet format --verify-no-changes` + `dotnet test --no-build`, all already green.
+2. Wait for operator to smoke-test the fix with a fresh task-bound spawn. Expected log sequence is the 10-step list in the prior entry; the key new line is `first user message sent (N bytes)` arriving within ~1s of spawn instead of the 55s silent gap from the failing repro.
+3. If smoke passes: address the free-session deadlock noted in "Out of scope (still)" above. Recommended path is (a) flip `IsReady` in `SessionRowViewModel` constructor when `ActiveTaskId is null` - simplest, preserves the IsReady gate semantics for task-bound sessions where the pointer turn matters. (b) is more invasive and changes the Send-button UX.
+4. If smoke fails (line 2 missing, or a "first user message send failed" warning appears): triage the exception. The most likely cause would be the child's stdin pipe being closed before the write completes - check stderr ring buffer via `StderrTail` for any claude error output that didn't make it to debug logging.
+
+**Out of scope (unchanged):** watchdog timeout fail-open, mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors, `<Compile Include>` link housekeeping (only `ApprovalSinkFactory.cs` remains link-compiled). Promote `.task/0004/design.md` -> `docs/stage3/design.md` still gated on user sign-off of design.md s10 decisions. `docs/stage3/plan.md` and `docs/stage3/decisions.md` still not authored.
+

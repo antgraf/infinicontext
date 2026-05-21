@@ -191,6 +191,20 @@ public sealed class ClaudeSession : IClaudeSession
 
         _stdoutTask = Task.Run(() => StdoutLoopAsync(proc.StandardOutput), CancellationToken.None);
         _stderrTask = Task.Run(() => StderrLoopAsync(proc.StandardError), CancellationToken.None);
+
+        // claude `--print --input-format stream-json` does NOT emit system/init until it reads
+        // at least one user message from stdin (verified against claude 2.1.143 тАФ a free session
+        // with no stdin sits silent until the operator types something, and a task-bound session
+        // with a FirstUserMessage gated on system/init would deadlock forever waiting for an
+        // event that never arrives). Send the pointer immediately after the loops are wired so
+        // claude has something to consume; the resulting system/init then flows through the
+        // stdout reader as normal. Fire-and-forget so StartAsync stays non-blocking for the
+        // caller (SessionManager.CreateAsync) тАФ SendFirstUserMessageAsync logs failures rather
+        // than throwing.
+        if (!string.IsNullOrEmpty(_options.FirstUserMessage))
+        {
+            _ = SendFirstUserMessageAsync(_options.FirstUserMessage);
+        }
     }
 
     public async Task SendUserMessageAsync(string text, CancellationToken cancellationToken = default)
@@ -275,13 +289,6 @@ public sealed class ClaudeSession : IClaudeSession
                         InfiniContextLogger.FormatSessionContext(sid, _options.Cwd));
                     _sessionLogger.UpdateLogger(_logger);
                     _logger.Information("session_id assigned");
-
-                    if (!string.IsNullOrEmpty(_options.FirstUserMessage))
-                    {
-                        // Fire-and-forget so we don't block the stdout reader. SendUserMessageAsync
-                        // takes its own write lock; failures are logged rather than thrown.
-                        _ = SendFirstUserMessageAsync(_options.FirstUserMessage);
-                    }
                 }
 
                 if (ev is SystemInitEvent init) CheckClaudeVersion(init);

@@ -270,7 +270,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             // otherwise the warning stays visible long enough for the operator to notice it.
             if (firstUserMessage is not null || taskId is null) StatusText = spawning;
             var ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
-            var row = new SessionRowViewModel(ctx);
+            var row = new SessionRowViewModel(ctx, _host.Logger);
             var parent = ResolveParentNode(ctx.ActiveTaskId);
             parent.Sessions.Add(row);
             parent.IsExpanded = true;
@@ -402,7 +402,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private void OnFocusedSessionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SessionRowViewModel.IsReady))
+        {
             SendPromptCommand.NotifyCanExecuteChanged();
+            if (sender is SessionRowViewModel row)
+                _host?.Logger.Information(
+                    "gui-main: focused-session IsReady changed row={Row} isReady={IsReady} canSend={CanSend}",
+                    row.ShortId, row.IsReady, CanSendPrompt());
+        }
     }
 
     public async ValueTask DisposeAsync()

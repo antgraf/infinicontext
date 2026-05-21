@@ -6,6 +6,7 @@ using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.State;
+using Serilog;
 
 namespace InfiniContext.Gui.ViewModels;
 
@@ -93,13 +94,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private readonly Action<StateTransition> _onTransition;
     private readonly Action<ClaudeEvent> _onEvent;
     private readonly Action<PendingApproval?> _onApprovalChanged;
+    private readonly ILogger? _logger;
     private TurnNodeViewModel? _pendingTurn;
     private bool _disposed;
 
-    public SessionRowViewModel(SessionContext context)
+    public SessionRowViewModel(SessionContext context, ILogger? logger = null)
     {
         Context = context ?? throw new ArgumentNullException(nameof(context));
         Transcript = new TranscriptViewModel(context.Transcript);
+        _logger = logger;
         _onTransition = OnStateTransition;
         _onEvent = OnEvent;
         _onApprovalChanged = OnApprovalChanged;
@@ -110,6 +113,38 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         context.ApprovalSlot.Changed += _onApprovalChanged;
         PendingApproval = context.ApprovalSlot.Current;
         StatusGlyph = ViewModels.StatusGlyph.ForSession(context.Session.State.State, IsAwaitingApproval);
+
+        // Race protection (companion to the catch-up in ApplyEvent): if events have already
+        // flowed before we got to subscribe, Session.SessionId is non-null (it's assigned the
+        // moment claude's first event carries a session_id - see ClaudeSession.StdoutLoopAsync).
+        // For free sessions claude is idle after system/init, so the catch-up in ApplyEvent
+        // would never fire without further events; mark init-seen here so IsReady flips
+        // immediately. Task-bound sessions also benefit: a missed init still lets the next
+        // ResultEvent flip IsReady because _initSeen is already true.
+        //
+        // Task-bound full-race case: if the reader drained init AND the pointer's ResultEvent
+        // before we subscribed, no future event will fire - the agent is idle waiting for the
+        // operator. SessionManager.CreateAsync writes LastNumTurns the moment a ResultEvent is
+        // observed (see SessionManager.cs:247), so a non-null value proves the pointer turn has
+        // already closed - safe to flip IsReady.
+        var sessionIdAtCtor = context.Session.SessionId;
+        var lastNumTurnsAtCtor = context.LastNumTurns;
+        if (sessionIdAtCtor is not null)
+        {
+            _initSeen = true;
+            if (context.ActiveTaskId is null || lastNumTurnsAtCtor is not null)
+                SetIsReady("ctor-pre-seed");
+        }
+        _logger?.Information(
+            "gui-row[{Row}] ctor: activeTaskId={TaskId} sessionId={SessionId} lastNumTurns={LastNumTurns} initSeen={InitSeen} isReady={IsReady}",
+            ShortId, Context.ActiveTaskId, sessionIdAtCtor, lastNumTurnsAtCtor, _initSeen, IsReady);
+    }
+
+    private void SetIsReady(string reason)
+    {
+        if (IsReady) return;
+        IsReady = true;
+        _logger?.Information("gui-row[{Row}] IsReady=true reason={Reason}", ShortId, reason);
     }
 
     private void OnApprovalChanged(PendingApproval? pending)
@@ -173,6 +208,25 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
     private void ApplyEvent(ClaudeEvent ev)
     {
+        _logger?.Debug(
+            "gui-row[{Row}] event observed: type={Type} subtype={Subtype} initSeen={InitSeen} isReady={IsReady} activeTaskId={TaskId} lastNumTurns={LastNumTurns}",
+            ShortId, ev.Type, ev.Subtype, _initSeen, IsReady, Context.ActiveTaskId, Context.LastNumTurns);
+
+        // Race protection: the per-session reader is started inside SessionManager.CreateAsync
+        // BEFORE this row VM has a chance to subscribe to Context.EventObserved, so the very
+        // first SystemInitEvent can be dispatched-and-dropped if the reader's background loop
+        // beats the GUI's row-VM construction. Without this guard _initSeen would stay false
+        // forever and IsReady would never flip even on subsequent ResultEvents - the exact
+        // symptom of "buttons stay disabled forever". Claude emits system/init before any
+        // other event and the events channel preserves FIFO, so observing ANY non-init event
+        // proves init has already happened: treat that as proof and catch up.
+        if (!_initSeen && ev is not SystemInitEvent)
+        {
+            _initSeen = true;
+            _logger?.Information("gui-row[{Row}] catch-up: _initSeen flipped on first non-init event type={Type}", ShortId, ev.Type);
+            if (Context.ActiveTaskId is null) SetIsReady("catch-up-free");
+        }
+
         switch (ev)
         {
             case SystemInitEvent init:
@@ -192,9 +246,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 // look noisy; the chevron remains a one-click reveal.
                 _pendingTurn = null;
                 _initSeen = true;
+                _logger?.Information("gui-row[{Row}] init: observed system/init activeTaskId={TaskId}", ShortId, Context.ActiveTaskId);
                 // Free sessions have no pointer to wait for - flip ready immediately. Task-bound
                 // sessions wait until the pointer-acknowledgement ResultEvent below.
-                if (Context.ActiveTaskId is null) IsReady = true;
+                if (Context.ActiveTaskId is null) SetIsReady("init-free");
                 break;
 
             case AssistantEvent asst:
@@ -208,9 +263,12 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
             case ResultEvent res:
                 ClosePendingTurnWith(res.Result, res);
+                _logger?.Information(
+                    "gui-row[{Row}] result observed: numTurns={NumTurns} costUsd={Cost} initSeen={InitSeen} isReady={IsReady}",
+                    ShortId, res.NumTurns, res.TotalCostUsd, _initSeen, IsReady);
                 // First ResultEvent after init signals that the FirstUserMessage pointer turn
                 // (if any) has fully closed. Safe to enable operator input now.
-                if (_initSeen && !IsReady) IsReady = true;
+                if (_initSeen && !IsReady) SetIsReady("result-after-init");
                 break;
 
             case SystemCompactEvent:

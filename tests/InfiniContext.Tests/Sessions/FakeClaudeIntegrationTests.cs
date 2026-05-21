@@ -230,10 +230,14 @@ public class FakeClaudeIntegrationTests
     }
 
     [Fact]
-    public async Task FirstUserMessage_is_sent_to_stdin_after_first_system_init()
+    public async Task FirstUserMessage_is_sent_to_stdin_on_session_start()
     {
-        // Verifies the Phase 6 contract: when ClaudeSessionOptions.FirstUserMessage is set, the
-        // session writes that message to stdin as soon as the first system/init event is observed.
+        // Contract: when ClaudeSessionOptions.FirstUserMessage is set, the session writes that
+        // message to stdin immediately after StartAsync wires the IO loops, BEFORE any event has
+        // been observed. Real claude (--print --input-format stream-json, verified against
+        // 2.1.143) does not emit system/init until it has read at least one user message;
+        // gating the auto-send on system/init deadlocks claude (waiting for stdin) against
+        // the host (waiting for init).
         // No SendUserMessageAsync from the test — the session's auto-send is the only thing that
         // can unblock FakeClaude's wait-stdin.
         var sessionId = "00000000-0000-0000-0000-000000000ccc";
