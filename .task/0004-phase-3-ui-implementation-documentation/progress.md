@@ -562,4 +562,13 @@ Working tree clean. Full test suite green (**981 passed / 3 POSIX-skipped / 0 fa
 3. Live per-second countdown in the approval banner (`DispatcherTimer`; cheap polish).
 4. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
 5. `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (ConsoleEchoingApprovalSink, ApprovalSinkFactory still link-compiled - one less link line after 4k; revisit if/when either promotes to Core).
+### Phase 3B slice 4k addendum - dark-theme readability fix on the approval banner (2026-05-21)
+
+Operator flagged that with a dark theme + white default foreground, the approval banner's JSON-dump `SelectableTextBlock` is invisible on the light-yellow background. Slice 4i's banner set explicit `Foreground="#FF6B4E00"` (dark amber) on the two header `TextBlock`s but left the `SelectableTextBlock` to inherit the theme foreground - which is white in dark Fluent and unreadable on `#FFFFF3CD`.
+
+**Fix:** added `Foreground="#FF6B4E00"` to the `SelectableTextBlock` in `src/InfiniContext.Gui/Views/MainWindow.axaml` so the JSON dump uses the same amber as the header. Contrast: `#FFFFF3CD` background vs `#FF6B4E00` foreground is ~6.4:1 - meets WCAG AA for body text. The Deny / Approve buttons are unaffected because Avalonia Fluent's default and accent button styles render an opaque background that overrides the banner's color regardless of theme.
+
+**Build status:** `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` green (0 warnings, 0 errors). Format gate clean. No new tests - this is a XAML-only contrast fix with no testable logic.
+
+**Theme-portability follow-up:** the banner uses three hardcoded amber-on-yellow colors (`#FFFFF3CD`, `#FFD9B441`, `#FF6B4E00`). They are *theme-agnostic* now (the banner ignores the OS theme entirely and always renders amber-on-yellow), which is acceptable for a warning surface but is the only place in the GUI that doesn't honour Fluent's dynamic resources. A future polish slice could replace these with `DynamicResource` brushes that flip the banner's whole palette in dark theme (e.g. dark-amber background + light-amber foreground). Not load-bearing.
 
