@@ -896,3 +896,56 @@ Host hit hard context-pressure threshold (~85%; reported as 473% of 1M) right af
 
 **Out of scope (unchanged):** watchdog timeout fail-open, mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors, `<Compile Include>` link housekeeping (only `ApprovalSinkFactory.cs` remains link-compiled). Promote `.task/0004/design.md` -> `docs/stage3/design.md` still gated on user sign-off of design.md s10 decisions. `docs/stage3/plan.md` and `docs/stage3/decisions.md` still not authored.
 
+### Phase 3B fix - free-session deadlock (ctor-time IsReady for ActiveTaskId is null)
+
+Commit `cc42c1a` ("Phase 3B fix: FirstUserMessage sent on session start") landed the task-bound bring-up-deadlock fix and flagged a parallel free-session deadlock as the next slice. Following up here.
+
+**Symptom.** Spawn a free session via the folder picker. `SessionRowViewModel` ctor runs with `Session.SessionId is null` (no event has fired - claude `--print --input-format stream-json` still waiting on stdin) and `ActiveTaskId is null` (free session, no pointer). Neither existing ctor branch fires: the `sessionIdAtCtor is not null` guard fails, and the inner `lastNumTurnsAtCtor is not null` check is unreachable. `_initSeen=false`, `IsReady=false`. Send button bound to `IsReady` stays disabled - the operator can't type the prompt that would kick claude into emitting `system/init`. 55s of silence, exit -1, the same symptom as the task-bound deadlock but with no observable knob to break it.
+
+The recommended fix from the prior flush's "out of scope" note was option (a): flip `IsReady` in `SessionRowViewModel` constructor when `ActiveTaskId is null`. Option (b) was to ungate the Send button entirely - rejected because it changes UX semantics and would mean operators can fire prompts during the still-coming pointer turn on task-bound sessions.
+
+**Fix.** New ctor `else if` branch parallel to the existing pre-seed:
+
+```csharp
+if (sessionIdAtCtor is not null) { ... /* existing pre-seed */ }
+else if (context.ActiveTaskId is null)
+{
+    // Free-session deadlock break: ...
+    SetIsReady("ctor-free-deferred-init");
+}
+```
+
+Five paths to `IsReady=true` now (was four):
+1. `ctor-pre-seed` - sessionId observed at ctor (pre-existing).
+2. `ctor-free-deferred-init` - **new** - free session, no event has fired yet.
+3. `init-free` - `SystemInitEvent` arm fires for free session (still reachable if init somehow lands before ctor, but mostly defunct in practice now we know claude defers init).
+4. `catch-up-free` - free session, any non-init event before init (still reachable via the race window between subscription and event drain).
+5. `result-after-init` - task-bound, pointer turn closed (unchanged).
+
+For task-bound sessions, the ctor is unchanged: the same `_initSeen=true` + conditional `SetIsReady("ctor-pre-seed")` still gates on the in-flight pointer turn, so the operator can't interleave prompts with claude's acknowledgement of the FirstUserMessage. Only the free-session no-event-yet path got the new break-glass.
+
+`_initSeen` deliberately stays false in the new branch: we don't *know* init has happened, we're just choosing not to wait for it. When init eventually arrives (after the first typed prompt kicks claude awake), the `SystemInitEvent` arm sets `_initSeen=true` and calls `SetIsReady` (idempotent no-op since already ready). Same for the catch-up.
+
+**Files changed:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - new `else if (context.ActiveTaskId is null)` ctor branch + comment block explaining the deadlock; xml-doc on `IsReady` rewritten to document the deferred-init behavior (was inaccurate after the prior bring-up fix - claimed free sessions flip on `system/init`, but claude defers `system/init` until stdin).
+
+**Build/test:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes` clean.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **981 passed / 3 POSIX-skipped / 0 failed** (exact parity with baseline). No new tests added per the GUI VM operator-smoke-only policy.
+
+**Operator smoke (next):** spawn a free session via the folder picker. Expected log sequence:
+
+1. `gui-row[XXXX] ctor: activeTaskId= sessionId= lastNumTurns= initSeen=false isReady=False` - all empty (no event yet).
+2. *Immediately after:* `gui-row[XXXX] IsReady=true reason=ctor-free-deferred-init`.
+3. Send button enables once the operator types into the prompt box (the row VM's `IsReady` is true; `CanSendPrompt` adds the non-empty-text check).
+4. Operator types a prompt and hits Send. Expected: `tx: {"type":"user",...}` -> `session_id assigned` -> `rx: system/init ...` -> assistant content + result.
+5. `gui-row[XXXX] init: observed system/init activeTaskId=` and `gui-row[XXXX] catch-up: _initSeen flipped on first non-init event ...` (whichever wins the race) - both are idempotent on IsReady.
+
+If step 2 is missing, the ctor pre-seed didn't fire - the spawn must have produced an event before ctor completed (unlikely given claude defers init, but the existing `ctor-pre-seed` arm would then fire instead with the same effect). If step 2 fires but the Send button stays disabled, the issue is in `CanSendPrompt()` or the parent-VM PropertyChanged subscription path - `OnFocusedSessionPropertyChanged`'s `canSend=...` log line tells you which.
+
+**Known follow-ups (out of scope this slice):**
+- The 55-second silent exit-1 case still happens if the operator spawns a free session and never types - that's by design (claude doesn't keep idle stdin sessions open forever), but the GUI gives no visual cue. A "spawn timed out" status banner would be a polish item.
+- The watchdog fail-open rejection from prior flushes still applies. Bring-up failures (e.g., child stdin pipe closed before our write) still rely on the operator checking `logs/gui-*.log` for "first user message send failed".
+- The four out-of-scope items from the prior flush (mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors) remain queued.
+

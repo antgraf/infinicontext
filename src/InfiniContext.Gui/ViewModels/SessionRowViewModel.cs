@@ -39,12 +39,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     /// <summary>
     /// False while the session is still bringing itself up; true once communication is safe.
     /// For task-bound sessions (<c>SessionContext.ActiveTaskId is not null</c>), the
-    /// <c>SpawnRequest.FirstUserMessage</c> pointer is sent fire-and-forget after
-    /// <c>system/init</c> (see <c>ClaudeSession.StdoutLoopAsync</c>) - we wait for the first
-    /// <c>ResultEvent</c> after init so that pointer turn has fully closed before the operator
-    /// can interleave their own prompts. For free sessions (no pointer), this flips on the
-    /// <c>system/init</c> event itself. Bound to button <c>IsEnabled</c> in the row template;
-    /// the parent VM watches via <see cref="ObservableObject.PropertyChanged"/> to refresh
+    /// <c>SpawnRequest.FirstUserMessage</c> pointer is sent fire-and-forget at session start
+    /// (see <c>ClaudeSession.StartAsync</c>) - we wait for the first <c>ResultEvent</c> after
+    /// <c>system/init</c> so that pointer turn has fully closed before the operator can
+    /// interleave their own prompts. For free sessions (no pointer) this flips in the
+    /// constructor: claude <c>--print --input-format stream-json</c> defers <c>system/init</c>
+    /// until stdin input arrives, so gating IsReady on init would deadlock - the operator
+    /// couldn't type because Send is disabled. The first typed prompt is what kicks the
+    /// process awake. Bound to button <c>IsEnabled</c> in the row template; the parent VM
+    /// watches via <see cref="ObservableObject.PropertyChanged"/> to refresh
     /// <c>SendPromptCommand.CanExecute</c> when the focused session warms up.
     /// </summary>
     [ObservableProperty]
@@ -134,6 +137,21 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             _initSeen = true;
             if (context.ActiveTaskId is null || lastNumTurnsAtCtor is not null)
                 SetIsReady("ctor-pre-seed");
+        }
+        else if (context.ActiveTaskId is null)
+        {
+            // Free-session deadlock break: claude --print --input-format stream-json does not
+            // emit system/init until it has read a user message from stdin (see the bring-up
+            // deadlock fix in ClaudeSession.StartAsync). For task-bound sessions the host writes
+            // the FirstUserMessage pointer to satisfy that requirement; free sessions have no
+            // pointer, so the only thing that can kick claude awake is the operator's first
+            // typed prompt. If we gate IsReady on init, Send stays disabled, the operator
+            // can't type, and the spawn hangs silently until claude self-exits ~55s later.
+            // Flip IsReady immediately - there is no pointer turn to interleave with, so
+            // operator input is safe from the moment the session exists. _initSeen stays false
+            // here: the catch-up in ApplyEvent will flip it (or the SystemInitEvent arm will)
+            // when init eventually arrives; this branch is only about button enablement.
+            SetIsReady("ctor-free-deferred-init");
         }
         _logger?.Information(
             "gui-row[{Row}] ctor: activeTaskId={TaskId} sessionId={SessionId} lastNumTurns={LastNumTurns} initSeen={InitSeen} isReady={IsReady}",
