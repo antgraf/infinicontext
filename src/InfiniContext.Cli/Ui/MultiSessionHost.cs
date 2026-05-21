@@ -43,6 +43,7 @@ internal sealed class MultiSessionHost : IReplActions
     private readonly IssueCommandHandler? _issueHandler;
     private readonly Func<int, CancellationToken, Task<TaskSwitchPlan?>>? _prepareTaskSwitch;
     private readonly Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? _tryEnterTask;
+    private readonly AutoRotationGuard? _autoRotationGuard;
     private readonly Action<string> _onFragment;
     private readonly Action<StateTransition> _onTransition;
 
@@ -69,7 +70,8 @@ internal sealed class MultiSessionHost : IReplActions
         IssueCommandHandler? issueHandler = null,
         Func<int, CancellationToken, Task<TaskSwitchPlan?>>? prepareTaskSwitch = null,
         Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? tryEnterTask = null,
-        SessionManager? sessionManager = null)
+        SessionManager? sessionManager = null,
+        AutoRotationGuard? autoRotationGuard = null)
     {
         _focused = ctx ?? throw new ArgumentNullException(nameof(ctx));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -85,6 +87,7 @@ internal sealed class MultiSessionHost : IReplActions
         _prepareTaskSwitch = prepareTaskSwitch;
         _tryEnterTask = tryEnterTask;
         _manager = sessionManager;
+        _autoRotationGuard = autoRotationGuard;
 
         _registry = new SlashCommandRegistry(new ISlashCommand[]
         {
@@ -386,7 +389,78 @@ internal sealed class MultiSessionHost : IReplActions
         // The transcript reader already appends the [state: ...] marker; idle/exit signaling is
         // what this handler is responsible for.
         if (t.To == SessionState.Idle) _idleSignal.TrySetResult();
-        if (t.To == SessionState.Exited) _exitSignal.TrySetResult();
+        if (t.To == SessionState.Exited)
+        {
+            // If a context-pressure nudge fired during this task-bound session, the agent's
+            // exit is structured-compaction handoff, not a real "done". Auto-rotate to a fresh
+            // session on the same task by populating _pendingSwitch тАФ Program.cs's outer loop
+            // already respawns on a SwitchPlan, so this reuses /task switch's machinery. The
+            // rotation handler fires _exitSignal once the plan is ready; if rotation can't run
+            // (no plan loader, no task binding, no nudge, cap hit), we fall through to the
+            // normal exit signal immediately.
+            if (TryStartAutoRotation()) return;
+            _exitSignal.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Returns true when an auto-rotation has been started; the caller must suppress the
+    /// normal exit signal (the rotation task fires it once <c>_pendingSwitch</c> is populated).
+    /// Returns false in every other case (no nudge, not task-bound, no plan loader, or cap hit),
+    /// and the caller fires the exit signal as usual.
+    /// </summary>
+    private bool TryStartAutoRotation()
+    {
+        var ctx = _focused;
+        if (ctx.RotationReason == RotationReason.None) return false;
+        if (ctx.ActiveTaskId is not { } taskId) return false;
+        if (_prepareTaskSwitch is null) return false;
+        if (_autoRotationGuard is null)
+        {
+            // No guard configured: refuse rather than risk a runaway loop. Operator can still
+            // /task switch manually.
+            _logger.Warning("auto-rotate: no AutoRotationGuard configured; falling back to normal exit on task {TaskId}", taskId);
+            return false;
+        }
+        if (!_autoRotationGuard.TryRegister(taskId))
+        {
+            Write($"\n[task] auto-rotation refused: hit cap of {_autoRotationGuard.MaxRotations} within {_autoRotationGuard.Window.TotalMinutes:F0} min on task {taskId:D4}. Use /task switch {taskId:D4} to retry manually.\n");
+            _logger.Warning("auto-rotate: cap hit for task {TaskId} ({Max} within {Minutes} min)", taskId, _autoRotationGuard.MaxRotations, _autoRotationGuard.Window.TotalMinutes);
+            return false;
+        }
+        _ = AutoRotateAsync(taskId, ctx.RotationReason);
+        return true;
+    }
+
+    private async Task AutoRotateAsync(int taskId, RotationReason reason)
+    {
+        try
+        {
+            var plan = await _prepareTaskSwitch!(taskId, CancellationToken.None).ConfigureAwait(false);
+            if (plan is null)
+            {
+                Write($"\n[task] auto-rotation: task {taskId:D4} not found; exiting.\n");
+                _exitRequested = true;
+                _exitSignal.TrySetResult();
+                return;
+            }
+            var label = reason switch
+            {
+                RotationReason.Hard => "hard-nudge",
+                RotationReason.Soft => "soft-nudge",
+                _ => "nudge",
+            };
+            Write($"\n[task] {label} flush detected тАФ auto-rotating to task {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+            _logger.Information("auto-rotate: task {TaskId} reason={Reason}", plan.Task.Id, reason);
+            RequestSwitch(plan);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "auto-rotate: failed to build plan for task {TaskId}", taskId);
+            Write($"\n[task] auto-rotation failed: {ex.Message}\n");
+            _exitRequested = true;
+            _exitSignal.TrySetResult();
+        }
     }
 
     private void OnInterrupt()

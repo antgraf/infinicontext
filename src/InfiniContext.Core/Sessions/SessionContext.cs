@@ -60,6 +60,33 @@ public sealed class SessionContext : IAsyncDisposable
     /// <summary>Turn count reported by the most recent <c>ResultEvent</c>.</summary>
     public int? LastNumTurns { get; internal set; }
 
+    private int _rotationReason; // 0=None, 1=Soft, 2=Hard; see RotationReason.
+
+    /// <summary>
+    /// Highest context-pressure nudge that has fired during this session, or <see cref="Sessions.RotationReason.None"/>
+    /// if neither has. The host reads this on the session's <c>Exited</c> transition: a non-<see cref="Sessions.RotationReason.None"/>
+    /// value together with a non-null <see cref="ActiveTaskId"/> is the signal to auto-rotate to a fresh session bound to
+    /// the same task. Wired by <see cref="SessionManager.CreateAsync"/> against
+    /// <see cref="ContextPressureMonitor.SoftCrossed"/> / <see cref="ContextPressureMonitor.HardCrossed"/>.
+    /// </summary>
+    public RotationReason RotationReason => (RotationReason)Volatile.Read(ref _rotationReason);
+
+    /// <summary>
+    /// Record a context-pressure nudge. Escalation-only: a subsequent <see cref="Sessions.RotationReason.Soft"/>
+    /// after <see cref="Sessions.RotationReason.Hard"/> has been recorded is dropped, matching the monitor's "no flapping"
+    /// invariant (a hard crossing implicitly flags soft as observed; soft can never re-fire after hard).
+    /// </summary>
+    internal void MarkRotationReason(RotationReason reason)
+    {
+        var target = (int)reason;
+        int observed;
+        do
+        {
+            observed = Volatile.Read(ref _rotationReason);
+            if (observed >= target) return;
+        } while (Interlocked.CompareExchange(ref _rotationReason, target, observed) != observed);
+    }
+
     public SessionContext(
         Guid id,
         IClaudeSession session,

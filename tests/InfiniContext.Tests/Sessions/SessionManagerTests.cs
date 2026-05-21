@@ -237,6 +237,71 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public async Task CreateAsync_wires_pressure_crossings_to_RotationReason_on_the_context()
+    {
+        // Issue 0013 (task 0005): a context-pressure crossing must mark the SessionContext so
+        // the host can detect "session ended because of a nudge" on the Exited transition and
+        // auto-rotate to a fresh session bound to the same task.
+        var factory = new RecordingSessionFactory();
+        await using var mgr = NewManager(factory);
+        var ctx = await mgr.CreateAsync(NewRequest(activeTaskId: 99));
+        ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.None, "no nudge has fired yet");
+
+        // Drive the monitor through the same observer SessionManager passes to the factory тАФ
+        // that's the wire that the manager's CreateAsync subscribes against.
+        var observer = factory.LastObserver!;
+        var sid = Guid.NewGuid();
+        observer(new SystemInitEvent
+        {
+            Type = "system",
+            Subtype = "init",
+            SessionId = sid,
+            Model = "claude-opus-4-7",
+            Raw = new System.Text.Json.Nodes.JsonObject
+            {
+                ["type"] = "system",
+                ["subtype"] = "init",
+                ["session_id"] = sid.ToString("D"),
+                ["model"] = "claude-opus-4-7",
+            },
+        });
+        observer(BuildResultEvent(sid, used: 130_000, window: 200_000)); // 65% тАФ soft
+        ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Soft);
+
+        observer(BuildResultEvent(sid, used: 180_000, window: 200_000)); // 90% тАФ hard
+        ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Hard, "hard escalates over soft");
+    }
+
+    private static ResultEvent BuildResultEvent(Guid sessionId, int used, int? window)
+    {
+        var usage = new System.Text.Json.Nodes.JsonObject
+        {
+            ["input_tokens"] = used,
+            ["cache_creation_input_tokens"] = 0,
+            ["cache_read_input_tokens"] = 0,
+        };
+        var raw = new System.Text.Json.Nodes.JsonObject
+        {
+            ["type"] = "result",
+            ["session_id"] = sessionId.ToString("D"),
+            ["usage"] = usage,
+        };
+        if (window is { } w)
+        {
+            raw["modelUsage"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["claude-opus-4-7"] = new System.Text.Json.Nodes.JsonObject { ["contextWindow"] = w },
+            };
+        }
+        return new ResultEvent
+        {
+            Type = "result",
+            SessionId = sessionId,
+            Raw = raw,
+        };
+    }
+
+    [Fact]
     public async Task DisposeAsync_records_index_rows_for_live_sessions()
     {
         var fixedSessionId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");

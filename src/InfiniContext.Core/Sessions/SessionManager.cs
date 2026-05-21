@@ -166,6 +166,7 @@ public sealed class SessionManager : IAsyncDisposable
             _logger);
 
         IClaudeSession? sessionRef = null;
+        SessionContext? ctxRef = null;
         var injector = new ThresholdInjector(
             async (msg, innerCt) =>
             {
@@ -173,8 +174,16 @@ public sealed class SessionManager : IAsyncDisposable
                 await sessionRef.SendUserMessageAsync(msg, innerCt).ConfigureAwait(false);
             },
             _logger);
-        pressure.SoftCrossed += c => _ = injector.OnSoftAsync(c);
-        pressure.HardCrossed += c => _ = injector.OnHardAsync(c);
+        pressure.SoftCrossed += c =>
+        {
+            ctxRef?.MarkRotationReason(RotationReason.Soft);
+            _ = injector.OnSoftAsync(c);
+        };
+        pressure.HardCrossed += c =>
+        {
+            ctxRef?.MarkRotationReason(RotationReason.Hard);
+            _ = injector.OnHardAsync(c);
+        };
 
         var options = new ClaudeSessionOptions
         {
@@ -221,6 +230,7 @@ public sealed class SessionManager : IAsyncDisposable
         {
             Cwd = request.Cwd,
         };
+        ctxRef = ctx;
         var createdAt = _clock();
 
         // D3: per-session reader always runs so off-screen sessions don't lose their text.
