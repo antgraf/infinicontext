@@ -1082,3 +1082,101 @@ Operator reported three session-management bugs post-4m: (1) when a session is s
 - Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
 - `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
 
+### Phase 3B fix - readiness gate relaxed to system/init for task-bound sessions
+
+Operator reported "after creation of a session action buttons remain disabled" with the readiness-gate Serilog instrumentation in place. The smoking-gun log was `logs/gui-20260521-181535.log`:
+
+```
+18:15:41.875 [Session new] started pid=17940
+18:15:41.918 first user message sent (165 bytes)
+18:15:41.923 gui-row[2161c394] ctor: activeTaskId=4 sessionId=null lastNumTurns=null initSeen=false isReady=false
+18:15:42.663 session_id assigned
+18:15:42.669 gui-row[2161c394] init: observed system/init activeTaskId=4
+18:15:45.292 state Sending -> Streaming (assistant)
+18:22:47.383 state Streaming -> Exited (ProcessExit(exitCode=-1))
+```
+
+Init arrived (line 5), `_initSeen` was set, but `IsReady` was NOT flipped because the previous design waited for the first `ResultEvent` on task-bound sessions. The agent then streamed for 7 minutes without ever closing the first turn (likely doing initial discovery - reading `.task/0004/index.md`, then the >1000-line `progress.md`, then more reads), and the operator closed the GUI because Send/Continue/What's next were all disabled.
+
+**Diagnosis.** This was never a race or a parser bug - the readiness gate was working exactly as designed. The design itself was the problem: gating on the first `ResultEvent` for task-bound sessions means the operator has zero agency for the entire duration of the agent's first turn. For tasks with non-trivial bootstrap reading, that's minutes during which the operator can neither send guidance nor fire canned prompts. Interrupt is still available (gated only on `IsAlive`) but operators don't reach for it unless they see something wrong - and "buttons disabled" reads as "system bug" to them, not "agent thinking, please wait".
+
+**Fix.** Flip `IsReady` on `system/init` for both free and task-bound sessions, not on the first `ResultEvent`.
+
+Safe because:
+1. `FirstUserMessage` is sent fire-and-forget at session start (cc42c1a), before `system/init` arrives.
+2. claude `--print --input-format stream-json` only emits `system/init` *after* consuming the pointer from stdin (per the wire-protocol observation that drove cc42c1a). So observing init proves the pointer is already in claude's input queue.
+3. Any operator-typed message after `system/init` queues *after* the pointer (`SendUserMessageAsync` takes a write lock; claude processes stdin user messages in order). The pointer turn is guaranteed to run before any operator turn.
+4. Interrupt remains the escape hatch for runaway first turns - gated on `IsAlive` only.
+
+The four `SetIsReady` reasons collapse:
+- `ctor-pre-seed` - now unconditional (was: only when `lastNumTurns is not null` for task-bound).
+- `ctor-free-deferred-init` - unchanged (free, no event yet, no pointer to wait for).
+- `catch-up` (was `catch-up-free`) - now unconditional in the catch-up branch.
+- `init` (was `init-free`) - now unconditional in the SystemInitEvent arm.
+- `result-after-init` - kept as belt-and-braces safety net. In normal operation it's a no-op now (init always fires before result) but unsticks the gate if anything ever swallows init at the parser level. Idempotent via `SetIsReady`'s early-return-if-already-true guard.
+
+**Files changed:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`:
+  - XML doc on `IsReady` rewritten to document the new policy (init-based, not result-based).
+  - XML doc on `_initSeen` rewritten - the "pointer turn in flight" semantic is gone; it's now just a safety-net flag for the `result-after-init` path.
+  - Ctor: dropped the `context.ActiveTaskId is null || lastNumTurnsAtCtor is not null` condition - `SetIsReady("ctor-pre-seed")` is now unconditional when `sessionIdAtCtor is not null`. Comment block above rewritten to explain why.
+  - `ApplyEvent` catch-up: dropped the `if (Context.ActiveTaskId is null)` condition. Reason string `catch-up-free` -> `catch-up`.
+  - `SystemInitEvent` arm: dropped the `if (Context.ActiveTaskId is null)` condition. Reason string `init-free` -> `init`. Comment updated.
+  - `ResultEvent` arm: kept as-is structurally; comment rewritten to explain it's now a safety-net path.
+
+**Behavioural change (subtle).** Before this fix, sending an operator prompt to a task-bound session before its first turn closed was *impossible* (buttons disabled). After this fix, it's *possible* - the operator can type a follow-up while the pointer turn is still streaming. claude queues the second user message and processes it after the pointer turn completes. The operator's mental model needs to accommodate "this prompt will run after the agent finishes its current work" - but that's already true for any in-flight turn (the operator wouldn't expect a mid-streaming send to interrupt the current response). So no real UX surprise.
+
+**What the fix does NOT address.** The 7-minute silent-streaming case in the smoking-gun log is a separate concern - some events between `Sending -> Streaming` and `Streaming -> Exited` must have parsed (the transition reason was `assistant`) but the `rx:` debug lines weren't logged, and no further events ever reached the row VM. Could be a claude 2.1.147 schema drift (`unknown_events=0 malformed_lines=0` says no parse failures, but those counters only fire for events that fail to match any known type - events that match a known type but have new content could parse cleanly while losing semantic meaning). Not chasing that here; the readiness-gate fix unblocks the operator regardless of what the agent is doing during the long turn.
+
+**Build/test:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format --verify-no-changes` clean.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **981 passed / 3 POSIX-skipped / 0 failed** (parity with baseline). No new tests added per the GUI-VMs-are-operator-smoke-only policy.
+
+**Operator smoke checklist:**
+1. Spawn a task-bound session via the per-task "+" button. Expected: `IsReady=true reason=init` (or `reason=ctor-pre-seed` if the spawn was fast enough that init landed before the row VM was constructed) in `logs/gui-*.log` within ~1-2s of spawn. Send / Continue / What's next buttons should enable as soon as the prompt text box has content - no "Warming up..." stall.
+2. Spawn a free session via the folder picker. Expected: `IsReady=true reason=ctor-free-deferred-init` in the first ms (unchanged behaviour for free sessions). Type a prompt; Send enables.
+3. Send a follow-up prompt to a session whose first turn is still streaming. Expected: queued behind the in-flight turn; processed by claude after the current response completes. No data loss; no interleaving.
+4. Hit Interrupt while a first turn is streaming. Expected: claude's current turn cancels (existing `InterruptAsync` path, unchanged by this fix).
+
+**Follow-ups remaining (unchanged):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+- The "silent streaming with no rx logging" anomaly from the smoking-gun log - separate diagnosis; the readiness-gate fix is independent of whether the agent's first turn ever actually completes.
+
+### Flush note (hard threshold, 2026-05-21 post-readiness-gate-relaxation)
+
+Host hit hard context-pressure threshold (~85%; reported as 510% of 1M) immediately after the readiness-gate relaxation slice landed in working tree. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (uncommitted - three files modified this session):**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - readiness gate relaxed. XML docs on `IsReady` + `_initSeen` rewritten. Four code edits:
+  1. Ctor: dropped the `context.ActiveTaskId is null || lastNumTurnsAtCtor is not null` condition - `SetIsReady("ctor-pre-seed")` is now unconditional when `sessionIdAtCtor is not null`.
+  2. `ApplyEvent` catch-up: dropped the `if (Context.ActiveTaskId is null)` condition. Reason string `catch-up-free` -> `catch-up`.
+  3. `SystemInitEvent` arm: dropped the `if (Context.ActiveTaskId is null)` condition. Reason string `init-free` -> `init`. Comment updated.
+  4. `ResultEvent` arm: comment updated to flag it as belt-and-braces safety net (idempotent no-op in normal operation).
+- `.task/0004-phase-3-ui-implementation-documentation/progress.md` - the readiness-gate-relaxation entry above this flush note describes the diagnosis (5-anchor log analysis from `gui-20260521-181535.log` pointing at a 7-minute first-turn stall), the fix, the build/test status, and the operator smoke checklist.
+- `.task/0004-phase-3-ui-implementation-documentation/index.md` - `progress.md` row description updated for this entry; date stays 2026-05-21.
+
+**Branch state:** `main` is **up to date with `origin/main`** at HEAD `3ca1c77`. Three uncommitted working-tree modifications above sit on top.
+
+**Build/test at flush time:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format src/InfiniContext.Gui/InfiniContext.Gui.csproj --verify-no-changes --no-restore` -> exit 0.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> 981 passed / 3 POSIX-skipped / 0 failed. Exact parity with baseline.
+
+**Next session pickup:**
+1. **Commit the readiness-gate relaxation slice.** Suggested message: `"Phase 3B fix: readiness gate flips on system/init for task-bound sessions (was first ResultEvent тАФ too strict for long initial turns)."` Three files: `SessionRowViewModel.cs` + `progress.md` + `index.md`. No tests beyond `dotnet build` + `dotnet format --verify-no-changes` + `dotnet test --no-build`, all already green.
+2. **Operator-driven push.** After 1, `main` will be 1 commit ahead of `origin/main`. Push is operator-owned per the shared-state-action rule.
+3. **Operator smoke verification** (checklist in the entry above):
+   - Task-bound spawn: expect `IsReady=true reason=init` (or `reason=ctor-pre-seed` for very fast spawns) in `logs/gui-*.log` within ~1-2s, buttons enable as soon as the prompt text box has content.
+   - Free-session spawn: expect `IsReady=true reason=ctor-free-deferred-init` (unchanged from prior baseline).
+   - Follow-up send during in-flight first turn: queued behind the pointer turn, no interleaving.
+   - Interrupt during first turn: cancels the in-flight turn (gated only on `IsAlive`).
+4. **If smoke passes:** pick the next polish slice. Three remaining: mid-session approval-mode toggle (largest); "Pending approval (N)" badge (medium); theme-portable banner colors (smallest). Plus the doc work (promote `.task/0004/design.md` -> `docs/stage3/design.md` on operator sign-off; author `docs/stage3/plan.md` + `decisions.md`).
+5. **If smoke fails:** the Serilog instrumentation still logs all five `SetIsReady` paths + per-event observations. Anchor lines: `ctor: ...` shows pre-seed inputs; `event observed:` lines confirm event flow; `IsReady=true reason=...` confirms which path fired; `focused-session changed ... canSend=...` confirms parent-VM refresh.
+6. **Separate diagnosis still open:** the 7-minute silent-streaming case in `gui-20260521-181535.log` - the state transition was `Sending -> Streaming (assistant)` (so an assistant event must have parsed) but no `rx: assistant ...` debug line appeared, no further events reached the row VM, and `unknown_events=0 malformed_lines=0` says the parser didn't reject anything. Could be claude 2.1.147 schema drift or a debug-logging filter quirk. Not addressed by this fix; readiness-gate relaxation unblocks the operator regardless of what the agent is doing during the long turn.
+
+**Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected to keep silent bring-up failures visible); the 55s silent exit-1 case for free sessions where operator spawns and never types (claude self-cleanup, not a host bug, a "spawn timed out" status banner would be polish); `<Compile Include>` link housekeeping for tests (only `ApprovalSinkFactory.cs` remains link-compiled). Promote `.task/0004/design.md` -> `docs/stage3/design.md` still gated on user sign-off of `design.md` section 10 open decisions. `docs/stage3/plan.md` and `docs/stage3/decisions.md` still not authored.
+

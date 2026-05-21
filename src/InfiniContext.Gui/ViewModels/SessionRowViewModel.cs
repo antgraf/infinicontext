@@ -38,25 +38,27 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// False while the session is still bringing itself up; true once communication is safe.
-    /// For task-bound sessions (<c>SessionContext.ActiveTaskId is not null</c>), the
-    /// <c>SpawnRequest.FirstUserMessage</c> pointer is sent fire-and-forget at session start
-    /// (see <c>ClaudeSession.StartAsync</c>) - we wait for the first <c>ResultEvent</c> after
-    /// <c>system/init</c> so that pointer turn has fully closed before the operator can
-    /// interleave their own prompts. For free sessions (no pointer) this flips in the
-    /// constructor: claude <c>--print --input-format stream-json</c> defers <c>system/init</c>
-    /// until stdin input arrives, so gating IsReady on init would deadlock - the operator
-    /// couldn't type because Send is disabled. The first typed prompt is what kicks the
-    /// process awake. Bound to button <c>IsEnabled</c> in the row template; the parent VM
-    /// watches via <see cref="ObservableObject.PropertyChanged"/> to refresh
-    /// <c>SendPromptCommand.CanExecute</c> when the focused session warms up.
+    /// Flips on <c>system/init</c> for both free and task-bound sessions: by that point claude
+    /// has read the FirstUserMessage pointer from stdin (per its <c>--print --input-format
+    /// stream-json</c> behaviour - it doesn't emit init until it has consumed stdin input),
+    /// so the pointer is guaranteed ahead of any operator-typed message in claude's queue.
+    /// An older policy waited for the first <c>ResultEvent</c> on task-bound sessions, on the
+    /// theory that the pointer turn should close before the operator could interleave - but
+    /// that turn can run for minutes (read index.md, read large progress.md, do discovery), and
+    /// the operator had no agency to send guidance or canned prompts the entire time. Interrupt
+    /// stays available throughout (gated on <see cref="IsAlive"/>, not IsReady) as the escape
+    /// hatch for a runaway first turn. Free sessions also flip at ctor time when no event has
+    /// fired yet: claude defers init until stdin input, so gating on init would deadlock - the
+    /// operator couldn't type because Send is disabled. Bound to button <c>IsEnabled</c> in
+    /// the row template; the parent VM watches via <see cref="ObservableObject.PropertyChanged"/>
+    /// to refresh <c>SendPromptCommand.CanExecute</c> when the focused session warms up.
     /// </summary>
     [ObservableProperty]
     private bool _isReady;
 
-    /// <summary>True between <c>system/init</c> and the first <c>ResultEvent</c> on a task-bound
-    /// session - i.e. while the pointer-acknowledgement turn is in flight. Internal flag the
-    /// event router uses to gate the IsReady flip; kept distinct from <see cref="IsReady"/> so
-    /// the latter has a single state-machine meaning (true == operator can send).</summary>
+    /// <summary>True once <c>system/init</c> (or any post-init event via the catch-up branch)
+    /// has been observed. Kept as a safety-net flag for the <c>result-after-init</c> path so the
+    /// gate is idempotent across all the SetIsReady reasons.</summary>
     private bool _initSeen;
 
     [ObservableProperty]
@@ -123,23 +125,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         // Race protection (companion to the catch-up in ApplyEvent): if events have already
         // flowed before we got to subscribe, Session.SessionId is non-null (it's assigned the
         // moment claude's first event carries a session_id - see ClaudeSession.StdoutLoopAsync).
-        // For free sessions claude is idle after system/init, so the catch-up in ApplyEvent
-        // would never fire without further events; mark init-seen here so IsReady flips
-        // immediately. Task-bound sessions also benefit: a missed init still lets the next
-        // ResultEvent flip IsReady because _initSeen is already true.
-        //
-        // Task-bound full-race case: if the reader drained init AND the pointer's ResultEvent
-        // before we subscribed, no future event will fire - the agent is idle waiting for the
-        // operator. SessionManager.CreateAsync writes LastNumTurns the moment a ResultEvent is
-        // observed (see SessionManager.cs:247), so a non-null value proves the pointer turn has
-        // already closed - safe to flip IsReady.
+        // A non-null sessionId at ctor time therefore proves system/init has fired, which - per
+        // claude --print's stdin-first contract - proves the FirstUserMessage pointer has been
+        // consumed. Safe to flip IsReady for both free and task-bound sessions.
         var sessionIdAtCtor = context.Session.SessionId;
         var lastNumTurnsAtCtor = context.LastNumTurns;
         if (sessionIdAtCtor is not null)
         {
             _initSeen = true;
-            if (context.ActiveTaskId is null || lastNumTurnsAtCtor is not null)
-                SetIsReady("ctor-pre-seed");
+            SetIsReady("ctor-pre-seed");
         }
         else if (context.ActiveTaskId is null)
         {
@@ -277,7 +271,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         {
             _initSeen = true;
             _logger?.Information("gui-row[{Row}] catch-up: _initSeen flipped on first non-init event type={Type}", ShortId, ev.Type);
-            if (Context.ActiveTaskId is null) SetIsReady("catch-up-free");
+            SetIsReady("catch-up");
         }
 
         switch (ev)
@@ -300,9 +294,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 _pendingTurn = null;
                 _initSeen = true;
                 _logger?.Information("gui-row[{Row}] init: observed system/init activeTaskId={TaskId}", ShortId, Context.ActiveTaskId);
-                // Free sessions have no pointer to wait for - flip ready immediately. Task-bound
-                // sessions wait until the pointer-acknowledgement ResultEvent below.
-                if (Context.ActiveTaskId is null) SetIsReady("init-free");
+                // system/init is emitted only after claude has read stdin (FirstUserMessage), so
+                // the pointer is guaranteed ahead of any operator-typed message in claude's queue.
+                // Safe to flip for both free and task-bound sessions.
+                SetIsReady("init");
                 break;
 
             case AssistantEvent asst:
@@ -319,8 +314,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 _logger?.Information(
                     "gui-row[{Row}] result observed: numTurns={NumTurns} costUsd={Cost} initSeen={InitSeen} isReady={IsReady}",
                     ShortId, res.NumTurns, res.TotalCostUsd, _initSeen, IsReady);
-                // First ResultEvent after init signals that the FirstUserMessage pointer turn
-                // (if any) has fully closed. Safe to enable operator input now.
+                // Belt-and-braces safety net: in normal operation init/catch-up/ctor-pre-seed
+                // have already flipped IsReady by now, but if anything reaches a ResultEvent
+                // without it (e.g. parser/reader anomaly that swallowed init), this idempotent
+                // flip unsticks the gate so the operator never sees a dead-permanently session.
                 if (_initSeen && !IsReady) SetIsReady("result-after-init");
                 break;
 
