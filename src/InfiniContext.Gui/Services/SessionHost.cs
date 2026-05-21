@@ -4,6 +4,8 @@ using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.Supervision;
+using InfiniContext.Core.Tasks;
+using Serilog;
 
 namespace InfiniContext.Gui.Services;
 
@@ -20,11 +22,14 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly IProcessSupervisor _supervisor;
     private readonly LockRegistry _lockRegistry;
     private readonly SessionManager _sessionManager;
+    private readonly TaskStore? _taskStore;
     private int _disposed;
 
     public InfiniContextSettings Settings { get; }
     public string LogFilePath => _logging.LogFilePath;
     public SessionManager SessionManager => _sessionManager;
+    public TaskStore? TaskStore => _taskStore;
+    public ILogger Logger => _logging.Logger;
     public event Action<SessionContext>? SessionCreated;
     public event Action<Guid>? SessionClosed;
 
@@ -33,13 +38,15 @@ public sealed class SessionHost : IAsyncDisposable
         LoggingHandle logging,
         IProcessSupervisor supervisor,
         LockRegistry lockRegistry,
-        SessionManager sessionManager)
+        SessionManager sessionManager,
+        TaskStore? taskStore)
     {
         Settings = settings;
         _logging = logging;
         _supervisor = supervisor;
         _lockRegistry = lockRegistry;
         _sessionManager = sessionManager;
+        _taskStore = taskStore;
     }
 
     /// <summary>
@@ -73,7 +80,21 @@ public sealed class SessionHost : IAsyncDisposable
             supervisor: supervisor,
             lockRegistry: lockRegistry).ConfigureAwait(false);
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager);
+        // Best-effort task-store open. Failure (e.g. DB ahead of code per migration policy) is
+        // logged but does not block the GUI - the tasks tree degrades to "(no task subsystem)"
+        // and sessions still spawn under the (unattached) root.
+        TaskStore? taskStore = null;
+        try
+        {
+            taskStore = await TaskStore.OpenAsync(settings.Tasks.ResolvedDbPath()).ConfigureAwait(false);
+            logging.Logger.Information("tasks: subsystem ready (db={DbPath})", settings.Tasks.ResolvedDbPath());
+        }
+        catch (Exception ex)
+        {
+            logging.Logger.Warning(ex, "tasks: subsystem unavailable; GUI tree will show sessions under (unattached) only");
+        }
+
+        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore);
     }
 
     public async Task<SessionContext> CreateSessionAsync(string cwd, CancellationToken ct = default)
@@ -97,11 +118,30 @@ public sealed class SessionHost : IAsyncDisposable
         SessionClosed?.Invoke(id);
     }
 
+    public async Task<IReadOnlyList<TaskRecord>> ListTasksAsync(CancellationToken ct = default)
+    {
+        if (_taskStore is null) return Array.Empty<TaskRecord>();
+        try
+        {
+            return await _taskStore.ListAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logging.Logger.Warning(ex, "tasks: ListAsync failed");
+            return Array.Empty<TaskRecord>();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { await _sessionManager.DisposeAsync().ConfigureAwait(false); }
         catch { /* logged inside manager */ }
+        if (_taskStore is not null)
+        {
+            try { await _taskStore.DisposeAsync().ConfigureAwait(false); }
+            catch { /* best-effort */ }
+        }
         _supervisor.Dispose();
         await _logging.DisposeAsync().ConfigureAwait(false);
     }

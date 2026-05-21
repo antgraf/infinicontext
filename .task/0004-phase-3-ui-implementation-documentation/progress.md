@@ -169,3 +169,36 @@ The CLI host doesn't hit this because its REPL accepts user input from second on
 4. Claude responds; assistant text appears in the transcript.
 5. After at least one exchange + window close, `C:\Users\antgr\.infinicontext\index.json` has a new entry for the session.
 6. Esc (or Interrupt button) cancels an in-flight assistant response.
+
+### Phase 3B slice 4a - Tasks tree in left column (2026-05-20)
+
+User requested a UI restructure: left column becomes a tree with tasks as roots, sessions as children; central column becomes a collapsible turn tree (4b); future action icons (4c).
+
+This commit lands slice **4a** only (left tree). 4b ships separately because it requires hooking the raw `ClaudeEvent` stream out of `SessionTranscriptReader` and inventing turn/content-block VMs - much bigger structural change.
+
+**Files added:**
+- `src/InfiniContext.Gui/ViewModels/StatusGlyph.cs` - Unicode glyph map per `SessionState` + an `Aggregate` helper that picks the highest-priority glyph from a set of child sessions. Priority ranking favors "needs operator attention": awaiting-approval > streaming > sending > cancelling > errored > idle > exited. Glyphs picked from Segoe UI Symbol / Apple Color Emoji - no asset pipeline needed.
+- `src/InfiniContext.Gui/ViewModels/TaskNodeViewModel.cs` - top-level node. Wraps a `TaskRecord` or null (for the synthetic "(unattached)" bucket). Holds `ObservableCollection<SessionRowViewModel>`; subscribes to each child's `StatusGlyph` PropertyChanged and re-aggregates its own glyph automatically.
+
+**Files updated:**
+- `src/InfiniContext.Gui/Services/SessionHost.cs` - opens `TaskStore` alongside the `SessionManager`. Failure (DB ahead of code, locked file, etc.) is logged + the GUI degrades gracefully (tasks tree just shows the unattached bucket). New `ListTasksAsync` delegates to the store. `Logger` and `TaskStore` properties exposed for VMs that need them.
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - now `IDisposable`. Subscribes to `Context.Session.State.Transitioned` on construction so `State` and `StatusGlyph` raise `PropertyChanged` automatically on state transitions. The aggregating `TaskNodeViewModel` picks this up and re-rolls its own glyph.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs` - flat `Sessions` collection replaced with `TaskNodes` (newest task first; unattached at the bottom). `LoadTasksAsync` reads `TaskStore.ListAsync` at startup. `ResolveParentNode(ActiveTaskId)` routes new sessions to their owning task node or to unattached. `OnSessionClosed` walks every task node to find + remove the session row. `FocusedSession` two-way bound; clicking a task header in the tree leaves `FocusedSession` unchanged (only `SessionRowViewModel` rows can become focused).
+- `src/InfiniContext.Gui/Views/MainWindow.axaml` - `ListBox` swapped for `TreeView` with two data templates: `TreeDataTemplate` for `TaskNodeViewModel` (status glyph + id + title + home_cwd) and a regular `DataTemplate` for `SessionRowViewModel` (status glyph + short id + cwd + state/drift/cost line). Default style expands all `TreeViewItem`s so the tree starts fully unfolded - the user can collapse manually.
+
+**Build status:** Core + Gui green, 0 warnings, 0 errors.
+
+**Things worth manual-testing for 4a:**
+1. On launch, any existing tasks in `~/.infinicontext/infinicontext.db` show as tree roots; the "(unattached)" bucket appears at the bottom.
+2. "+ New session" still spawns into the (unattached) bucket (sessions don't have an ActiveTaskId yet - `/task switch` flow isn't wired into the GUI).
+3. The session row's status glyph changes as the state machine transitions (Idle -> Sending on first prompt -> Streaming -> Idle).
+4. The parent task's glyph aggregates: a task with one Streaming session shows the play glyph; once that session goes Idle, the task glyph drops to the idle bullet.
+5. Click a session row to focus it; transcript + prompt box wire up as before.
+
+### Phase 3B slice 4b coming next - structured turn tree in central column
+
+Plan for the next commit:
+- Hook `SessionTranscriptReader.EventObserved` (already public per Stage 2B D28) so the GUI sees raw `ClaudeEvent`s, not the rendered string fragments.
+- New `TurnNodeViewModel` per assistant turn. Headline = final assistant text (always visible). Children = thinking blocks, tool-use blocks, tool-result blocks, system events - all collapsed by default.
+- Spinner shown while the turn has no final text yet (state machine != Idle/Exited).
+- The existing flat fragment ItemsControl stays as a fallback until the new tree is proven.

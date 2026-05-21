@@ -34,23 +34,43 @@
           <Border DockPanel.Dock="Top" Padding="8">
             <Button Content="+ New session" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
           </Border>
-          <ListBox ItemsSource="{Binding Sessions}"
-                   SelectedItem="{Binding FocusedSession, Mode=TwoWay}"
-                   BorderThickness="0">
-            <ListBox.ItemTemplate>
+          <TreeView ItemsSource="{Binding TaskNodes}"
+                    SelectedItem="{Binding FocusedSession, Mode=TwoWay}"
+                    BorderThickness="0">
+            <TreeView.DataTemplates>
+              <TreeDataTemplate x:DataType="vm:TaskNodeViewModel" ItemsSource="{Binding Sessions}">
+                <Grid ColumnDefinitions="Auto,*" Margin="0,4">
+                  <TextBlock Grid.Column="0" Text="{Binding StatusGlyph}" FontFamily="Segoe UI Symbol, Apple Color Emoji" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1" Spacing="1">
+                    <TextBlock>
+                      <Run Text="{Binding HeaderId, Mode=OneWay}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" />
+                      <Run Text="  " /><Run Text="{Binding Title, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock Text="{Binding HomeCwd}" FontSize="11" Opacity="0.7" TextTrimming="CharacterEllipsis" IsVisible="{Binding !IsSynthetic}" />
+                  </StackPanel>
+                </Grid>
+              </TreeDataTemplate>
               <DataTemplate x:DataType="vm:SessionRowViewModel">
-                <StackPanel Spacing="2" Margin="4,6">
-                  <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.8" TextTrimming="CharacterEllipsis" />
-                  <TextBlock FontSize="11" Opacity="0.7">
-                    <Run Text="state: " /><Run Text="{Binding State, Mode=OneWay}" />
-                    <Run Text="  drift: " /><Run Text="{Binding Drift, Mode=OneWay}" />
-                    <Run Text="  cost: " /><Run Text="{Binding CostDisplay, Mode=OneWay}" />
-                  </TextBlock>
-                </StackPanel>
+                <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                  <TextBlock Grid.Column="0" Text="{Binding StatusGlyph, Mode=OneWay}" FontFamily="Segoe UI Symbol, Apple Color Emoji" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1" Spacing="1">
+                    <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" FontSize="12" />
+                    <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                    <TextBlock FontSize="11" Opacity="0.6">
+                      <Run Text="{Binding State, Mode=OneWay}" />
+                      <Run Text=" ┬╖ drift " /><Run Text="{Binding Drift, Mode=OneWay}" />
+                      <Run Text=" ┬╖ " /><Run Text="{Binding CostDisplay, Mode=OneWay}" />
+                    </TextBlock>
+                  </StackPanel>
+                </Grid>
               </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+            </TreeView.DataTemplates>
+            <TreeView.Styles>
+              <Style Selector="TreeViewItem">
+                <Setter Property="IsExpanded" Value="True" />
+              </Style>
+            </TreeView.Styles>
+          </TreeView>
         </DockPanel>
       </Border>
 

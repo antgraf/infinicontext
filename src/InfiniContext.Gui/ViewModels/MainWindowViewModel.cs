@@ -1,26 +1,28 @@
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using Avalonia.Controls;
-using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.Tasks;
 using InfiniContext.Gui.Services;
 
 namespace InfiniContext.Gui.ViewModels;
 
 /// <summary>
-/// Root view-model. Owns the <see cref="SessionHost"/> and the observable session list. The
-/// folder picker is launched via a callback the view sets, which keeps the VM testable (no
-/// dependency on a concrete <see cref="Window"/>). Phase 3B scaffold; broadcast, focus rotation,
-/// prompt send, and approval surfaces land in later slices.
+/// Root view-model. Owns the <see cref="SessionHost"/>, a tree of <see cref="TaskNodeViewModel"/>
+/// (left column), and the focused-session pointer. The view injects callbacks (<see cref="FolderPicker"/>,
+/// <see cref="ShowError"/>) so the VM stays free of <see cref="Window"/> references and testable.
 /// </summary>
 public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly SessionHost? _host;
+    private readonly TaskNodeViewModel _unattached = new(null);
 
-    public ObservableCollection<SessionRowViewModel> Sessions { get; } = new();
+    /// <summary>Top-level nodes in the left tree: real tasks (sorted by id desc) plus the
+    /// (unattached) bucket at the bottom for sessions without an <c>ActiveTaskId</c>.</summary>
+    public ObservableCollection<TaskNodeViewModel> TaskNodes { get; } = new();
 
     [ObservableProperty]
     private SessionRowViewModel? _focusedSession;
@@ -31,13 +33,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private string _logFilePath = "(host not initialised)";
 
-    /// <summary>
-    /// Called by the view to launch the OS folder picker. Returns the chosen folder path or null
-    /// if the user cancelled. Wired in <see cref="Views.MainWindow"/>.
-    /// </summary>
+    /// <summary>Called by the view to launch the OS folder picker. Returns the chosen path or null.</summary>
     public Func<Task<string?>>? FolderPicker { get; set; }
 
-    /// <summary>Used by the view to surface fatal startup errors as a modal.</summary>
+    /// <summary>Used by the view to surface fatal startup errors as a status line.</summary>
     public Action<string>? ShowError { get; set; }
 
     [ObservableProperty]
@@ -47,12 +46,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public IAsyncRelayCommand SendPromptCommand { get; }
     public IAsyncRelayCommand InterruptCommand { get; }
 
-    /// <summary>Design-time constructor; the runtime path uses <see cref="CreateAsync"/>.</summary>
+    /// <summary>Design-time constructor; runtime path uses <see cref="CreateAsync"/>.</summary>
     public MainWindowViewModel()
     {
         NewSessionCommand = new AsyncRelayCommand(NewSessionAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
+        TaskNodes.Add(_unattached);
     }
 
     private MainWindowViewModel(SessionHost host) : this()
@@ -65,7 +65,37 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public static async Task<MainWindowViewModel> CreateAsync()
     {
         var host = await SessionHost.StartAsync().ConfigureAwait(false);
-        return new MainWindowViewModel(host);
+        var vm = new MainWindowViewModel(host);
+        await vm.LoadTasksAsync().ConfigureAwait(false);
+        return vm;
+    }
+
+    private async Task LoadTasksAsync()
+    {
+        if (_host is null) return;
+        var records = await _host.ListTasksAsync().ConfigureAwait(true);
+
+        void Apply()
+        {
+            // Tasks newest-first; unattached stays at the bottom.
+            TaskNodes.Clear();
+            foreach (var rec in records.OrderByDescending(r => r.Id))
+                TaskNodes.Add(new TaskNodeViewModel(rec));
+            TaskNodes.Add(_unattached);
+        }
+
+        if (Dispatcher.UIThread.CheckAccess()) Apply();
+        else Dispatcher.UIThread.Post(Apply);
+    }
+
+    private TaskNodeViewModel ResolveParentNode(int? taskId)
+    {
+        if (taskId is null) return _unattached;
+        foreach (var node in TaskNodes)
+            if (node.TaskId == taskId) return node;
+        // Task referenced by a session but missing from the registry - shouldn't happen during a
+        // single host run, but fall back to unattached to avoid losing the row.
+        return _unattached;
     }
 
     private async Task NewSessionAsync()
@@ -88,7 +118,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = $"Spawning claude in {cwd}...";
             var ctx = await _host.CreateSessionAsync(cwd).ConfigureAwait(true);
             var row = new SessionRowViewModel(ctx);
-            Sessions.Add(row);
+            var parent = ResolveParentNode(ctx.ActiveTaskId);
+            parent.Sessions.Add(row);
+            parent.IsExpanded = true;
             FocusedSession = row;
             row.IsFocused = true;
             StatusText = $"Spawned {row.ShortId} in {row.Cwd}.";
@@ -110,8 +142,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         if (target is null || string.IsNullOrWhiteSpace(text)) return;
 
         // Echo the user's prompt into the transcript so they see what they sent. Claude's own
-        // event stream doesn't echo user messages back (per design-doc s4.2), and the renderer
-        // only emits fragments for events FROM claude.
+        // event stream doesn't echo user messages back (per design-doc s4.2).
         target.Context.Transcript.Append($"\n> {text}\n");
         PromptText = "";
 
@@ -148,15 +179,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         void Apply()
         {
-            for (var i = Sessions.Count - 1; i >= 0; i--)
+            foreach (var node in TaskNodes)
             {
-                if (Sessions[i].Id == id)
+                for (var i = node.Sessions.Count - 1; i >= 0; i--)
                 {
-                    Sessions[i].Transcript.Dispose();
-                    Sessions.RemoveAt(i);
+                    if (node.Sessions[i].Id == id)
+                    {
+                        node.Sessions[i].Dispose();
+                        node.Sessions.RemoveAt(i);
+                    }
                 }
             }
-            if (FocusedSession?.Id == id) FocusedSession = Sessions.FirstOrDefault();
+            if (FocusedSession?.Id == id)
+                FocusedSession = TaskNodes.SelectMany(n => n.Sessions).FirstOrDefault();
         }
 
         if (Dispatcher.UIThread.CheckAccess()) Apply();
@@ -173,8 +208,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var s in Sessions) s.Transcript.Dispose();
-        Sessions.Clear();
+        foreach (var node in TaskNodes)
+            foreach (var s in node.Sessions) s.Dispose();
+        TaskNodes.Clear();
         if (_host is not null) await _host.DisposeAsync().ConfigureAwait(false);
     }
 }
