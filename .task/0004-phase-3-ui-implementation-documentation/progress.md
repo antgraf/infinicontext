@@ -547,3 +547,19 @@ Closes follow-up #1 from the 4j flush note: the GUI now honours `settings.Approv
 - `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (ConsoleEchoingApprovalSink, ApprovalSinkFactory remain CLI-internal - one less link line after this slice; revisit if/when either promotes to Core).
 - **New:** mid-session approval-mode toggle in the GUI. Plumbing via `SwitchableApprovalSink` is already there; the slice landed only the *spawn-time default* consumer. A status-strip mode dropdown + `Switch(newInner)` would close the parity gap with the CLI's `/approval` command.
 - **New:** auto-mode decision visibility in the GUI. Either echo into the transcript like the CLI (`ConsoleEchoingApprovalSink` equivalent) or surface in a status strip / per-turn indicator. Today only the Serilog file shows auto-mode allows.
+
+### Flush note (hard threshold, 2026-05-21 post-4k)
+
+Host hit hard context-pressure threshold immediately after slice 4k landed. Nothing partial on disk - the slice closed cleanly:
+
+- `1386ab0` Phase 3B slice 4k (settings.Approval.Mode routed into GUI; AutoApprovalSink promoted CLI -> Core).
+
+Working tree clean. Full test suite green (**981 passed / 3 POSIX-skipped / 0 failed**, parity with 4i/4j). Format gate clean. `dotnet build InfiniContext.slnx -c Release` green (0 warnings, 0 errors). **Behaviour change worth surfacing to the operator on resume:** the GUI now respects `settings.Approval.Mode`; the committed default is `auto`, so on next launch the GUI uses the light-model safety reviewer instead of parking every tool call in the banner. To restore the slice-4i ask-for-everything experience, set `approval.mode = "ask"` in `settings.user.json`. Live GUI smoke test of the four modes (ask, deny, allow, auto) was not performed - the operator owns that verification.
+
+**Next session pick-up, in priority order (from the 4k entry's follow-ups):**
+1. **Auto-mode decision visibility in the GUI.** Today an auto-mode silent-allow leaves no UI trace - only a Serilog line in `logs/gui-*.log`. Two viable shapes: (a) echo allow/deny into `TranscriptModel` via a `ConsoleEchoingApprovalSink` equivalent (would need to be promoted CLI -> Core, same playbook as AutoApprovalSink in 4k); or (b) surface as a per-turn auto-mode indicator chip or a status-strip counter. Without this, operators running `auto` (the new default) have low confidence in what the light model decided.
+2. **Mid-session approval-mode toggle in the GUI.** `SwitchableApprovalSink` plumbing is already there; the slice only landed the spawn-time default consumer. A status-strip mode dropdown + `Switch(newInner)` would close the parity gap with the CLI's `/approval` command.
+3. Live per-second countdown in the approval banner (`DispatcherTimer`; cheap polish).
+4. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+5. `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (ConsoleEchoingApprovalSink, ApprovalSinkFactory still link-compiled - one less link line after 4k; revisit if/when either promotes to Core).
+
