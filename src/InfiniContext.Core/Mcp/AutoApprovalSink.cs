@@ -1,9 +1,8 @@
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.LightModel;
-using InfiniContext.Core.Mcp;
 using Serilog;
 
-namespace InfiniContext.Cli;
+namespace InfiniContext.Core.Mcp;
 
 /// <summary>
 /// Approval sink for the <c>auto</c> mode: delegates the decision to <see cref="ILightModelService.ReviewToolCallSafetyAsync"/>.
@@ -11,15 +10,15 @@ namespace InfiniContext.Cli;
 /// <para>Decision flow:</para>
 /// <list type="number">
 ///   <item>Call the light model with the tool name + input + cwd.</item>
-///   <item>If the model says <c>deny</c> → deny with the model's reason and axis.</item>
-///   <item>If the model says <c>allow</c> with high/medium confidence → allow.</item>
+///   <item>If the model says <c>deny</c> в†’ deny with the model's reason and axis.</item>
+///   <item>If the model says <c>allow</c> with high/medium confidence в†’ allow.</item>
 ///   <item>If the model says <c>allow</c> with <c>low</c> confidence, OR the call times out, OR
-///   the call throws — apply <see cref="AutoApprovalOptions.OnLowConfidence"/>: either deny
+///   the call throws вЂ” apply <see cref="AutoApprovalOptions.OnLowConfidence"/>: either deny
 ///   (fail closed, default) or fall back to the wrapped <see cref="IApprovalSink"/>
 ///   (the slot-based ask sink in multi-session, e.g. <see cref="SlotApprovalSink"/>).</item>
 /// </list>
 /// </summary>
-internal sealed class AutoApprovalSink : IApprovalSink
+public sealed class AutoApprovalSink : IApprovalSink
 {
     private readonly ILightModelService _lightModel;
     private readonly IApprovalSink _fallback;
@@ -41,7 +40,7 @@ internal sealed class AutoApprovalSink : IApprovalSink
         _logger = logger;
     }
 
-    /// <summary>Test-only accessor — lets factory tests assert which back end was wired.</summary>
+    /// <summary>Test-only accessor вЂ” lets factory tests assert which back end was wired.</summary>
     internal ILightModelService LightModel => _lightModel;
 
     public async Task<ApprovalResponse> RequestAsync(ApprovalRequest request, CancellationToken cancellationToken)

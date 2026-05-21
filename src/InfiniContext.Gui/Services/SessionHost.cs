@@ -1,4 +1,5 @@
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Logging;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Mcp.Tasks;
@@ -66,18 +67,25 @@ public sealed class SessionHost : IAsyncDisposable
         var supervisor = ProcessSupervisor.CreateForCurrentPlatform(logging.Logger);
         var lockRegistry = new LockRegistry(logger: logging.Logger);
 
-        // Banner-routed approval sink (design.md s6.3): every tool call parks in the session's
-        // PendingApprovalSlot and the GUI surfaces it as a per-session banner with Approve/Deny
-        // buttons. Replaces the slice-4h static-allow stop-gap; brings the GUI to parity with the
-        // CLI's "ask" mode (the legacy default that the operator interacts with via y/N).
-        // writeTranscriptBanner=false keeps CLI-style [approval] tool=вЂ¦ text out of the GUI
-        // transcript вЂ” the banner UI carries the same information visually.
+        // Approval routing per settings.Approval.Mode (slice 4k). Picks the inner sink at
+        // session-spawn time using the per-session cwd plumbed through SessionApprovalSinkFactory
+        // in slice 4j; auto-mode's safety prompt is cwd-aware as of slice 4h.
+        //
+        // Mode -> sink:
+        //   Ask  : SlotApprovalSink -> banner UI in the focused pane (parity with CLI ask).
+        //   Deny : StaticApprovalSink(Deny) -> every tool call auto-denied.
+        //   Allow: StaticApprovalSink(Allow) -> every tool call auto-allowed (logged as warning;
+        //          GUI status-strip warning is a polish follow-up).
+        //   Auto : AutoApprovalSink(light model) with the slot sink as fallback per
+        //          approval.auto.onLowConfidence. Mirrors CLI ApprovalSinkFactory wiring.
+        //
+        // writeTranscriptBanner=false on the slot sink: the GUI's banner UI carries the same
+        // information visually, so CLI-style "[approval] tool=..." lines stay out of the
+        // transcript model.
         var approvalTimeout = TimeSpan.FromSeconds(settings.Approval.TimeoutSeconds);
-        // cwd is part of the delegate signature so the GUI can wire auto-mode (light-model
-        // safety review) symmetrically with the CLI in a later slice. The ask-equivalent path
-        // below doesn't need it - SlotApprovalSink routes to the banner UI regardless of cwd.
-        SessionApprovalSinkFactory approvalFactory = (slot, transcript, _) =>
-            new SlotApprovalSink(slot, transcript, timeout: approvalTimeout, writeTranscriptBanner: false);
+        var lightModelFactory = new LightModelServiceFactory(settings, logging.Logger, supervisor);
+        SessionApprovalSinkFactory approvalFactory = (slot, transcript, cwd) =>
+            BuildApprovalSink(settings, slot, transcript, cwd, approvalTimeout, lightModelFactory, logging.Logger);
 
         var manager = await SessionManager.OpenAsync(
             settings,
@@ -101,6 +109,51 @@ public sealed class SessionHost : IAsyncDisposable
         }
 
         return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore);
+    }
+
+    private static IApprovalSink BuildApprovalSink(
+        InfiniContextSettings settings,
+        PendingApprovalSlot slot,
+        TranscriptModel transcript,
+        string cwd,
+        TimeSpan askTimeout,
+        LightModelServiceFactory lightModelFactory,
+        ILogger logger)
+    {
+        var slotSink = new SlotApprovalSink(slot, transcript, timeout: askTimeout, writeTranscriptBanner: false);
+        switch (settings.Approval.Mode)
+        {
+            case ApprovalMode.Ask:
+                return slotSink;
+
+            case ApprovalMode.Deny:
+                logger.Information("gui-approval: mode=deny; all tool calls auto-denied for session cwd={Cwd}", cwd);
+                return new StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)");
+
+            case ApprovalMode.Allow:
+                logger.Warning("gui-approval: mode=ALLOW; every tool call will be auto-approved without review (cwd={Cwd})", cwd);
+                return new StaticApprovalSink(ApprovalBehavior.Allow);
+
+            case ApprovalMode.Auto:
+                var effort = settings.Approval.Auto.Effort;
+                ILightModelService light;
+                try
+                {
+                    light = lightModelFactory.Create(thinking: effort == ApprovalAutoEffort.High, cliMode: settings.Approval.Auto.Mode);
+                }
+                catch (Exception ex)
+                {
+                    logger.Error(ex, "gui-approval: mode=auto; failed to construct light model вЂ” falling back to ask for cwd={Cwd}", cwd);
+                    return slotSink;
+                }
+                logger.Information(
+                    "gui-approval: mode=auto effort={Effort} on-low-confidence={OnLowConfidence} timeout={Timeout}s cwd={Cwd}",
+                    effort, settings.Approval.Auto.OnLowConfidence, settings.Approval.Auto.TimeoutSeconds, cwd);
+                return new AutoApprovalSink(light, slotSink, settings.Approval.Auto, cwd, logger);
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(settings), settings.Approval.Mode, "unknown approval mode");
+        }
     }
 
     public async Task<SessionContext> CreateSessionAsync(string cwd, int? activeTaskId = null, CancellationToken ct = default)

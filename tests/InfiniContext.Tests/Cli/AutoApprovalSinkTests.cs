@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using InfiniContext.Cli;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Mcp;

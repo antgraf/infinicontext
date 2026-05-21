@@ -511,3 +511,39 @@ Working tree clean. Full test suite green (**981 passed / 3 POSIX-skipped / 0 fa
 2. Live per-second countdown in the approval banner (`DispatcherTimer`; cheap polish).
 3. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
 4. `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (AutoApprovalSink, ConsoleEchoingApprovalSink, ApprovalSinkFactory test links still present even though their production types remain CLI-internal - revisit if/when any of those promote to Core).
+
+### Phase 3B slice 4k - settings.Approval.Mode routed into the GUI (2026-05-21)
+
+Closes follow-up #1 from the 4j flush note: the GUI now honours `settings.Approval.Mode` (`ask` / `deny` / `allow` / `auto`) instead of being hard-coded to ask-equivalent. Picked shape (a) from the 4j note (settings-driven default at session-spawn time); shape (b) - a UI mode dropdown - is left as a polish follow-up.
+
+**AutoApprovalSink promoted CLI -> Core (textbook fit per `feedback_no_cli_code_duplication`):**
+- `src/InfiniContext.Cli/AutoApprovalSink.cs` -> `src/InfiniContext.Core/Mcp/AutoApprovalSink.cs`. Namespace flipped `InfiniContext.Cli` -> `InfiniContext.Core.Mcp`; visibility `internal sealed` -> `public sealed`. Body unchanged - it depends only on Core interfaces (`ILightModelService`, `IApprovalSink`, `AutoApprovalOptions`).
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`: dropped the `<Compile Include="..\..\src\InfiniContext.Cli\AutoApprovalSink.cs">` link line (the type now lives in Core, already referenced via `ProjectReference`).
+- `tests/InfiniContext.Tests/Cli/AutoApprovalSinkTests.cs`: dropped `using InfiniContext.Cli;` (the test already imports `InfiniContext.Core.Mcp;` where the type now lives). All 8 tests still pass against the Core type.
+- `src/InfiniContext.Cli/ApprovalSinkFactory.cs`: no change. The `new AutoApprovalSink(...)` call already resolves via the file's existing `using InfiniContext.Core.Mcp;`.
+- `ApprovalSinkFactoryTests.cs`: no change for the same reason; both `InfiniContext.Cli` and `InfiniContext.Core.Mcp` were already imported.
+- `AutoApprovalSink.LightModel` accessor stays `internal` to Core - tests still see it via the existing `[InternalsVisibleTo("InfiniContext.Tests")]` in `InfiniContext.Core.csproj`.
+
+**GUI consumer (slice's load-bearing change):**
+- `src/InfiniContext.Gui/Services/SessionHost.cs`: the `SessionApprovalSinkFactory` closure no longer hard-codes `SlotApprovalSink`. It now calls a new static `BuildApprovalSink` helper that maps `settings.Approval.Mode` to the right sink at session-spawn time:
+  - `Ask` -> `SlotApprovalSink(slot, transcript, timeout: approvalTimeout, writeTranscriptBanner: false)` (banner UI; existing 4i path).
+  - `Deny` -> `StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)")`.
+  - `Allow` -> `StaticApprovalSink(ApprovalBehavior.Allow)` with a `logger.Warning(...)` so the dangerous mode is visible in `logs/gui-*.log`.
+  - `Auto` -> `AutoApprovalSink(light, slotSink, settings.Approval.Auto, cwd, logger)`. The light-model service is constructed via `LightModelServiceFactory.Create(thinking: effort == ApprovalAutoEffort.High, cliMode: settings.Approval.Auto.Mode)`, mirroring the CLI's `ApprovalSinkFactory.DefaultFactory` policy line-for-line. Failure to construct the light model logs an error and falls back to the slot sink (ask-equivalent).
+- `LightModelServiceFactory` is constructed once at `SessionHost.StartAsync` and captured by the per-session closure - the factory itself is policy-free, so the per-session knobs (thinking / cliMode) are passed at `Create(...)` time.
+- The `cwd` parameter on the factory delegate is now used (slice 4j just plumbed it; 4k is the first consumer). Each pane's auto-mode safety review treats *its own* cwd as the policy-safe boundary - same correctness story as the CLI multi-pane fix in slice 4j.
+
+**Behaviour change:** prior to this slice, the GUI ignored `settings.Approval.Mode` entirely - every tool call surfaced as a banner (ask-equivalent). After this slice, the GUI matches the committed `settings.json` default of `auto` (light-model safety review), and operators can override via `settings.user.json` or `INFINICONTEXT__APPROVAL__MODE` env var. **`auto` is now the default GUI behaviour** - operators who relied on the 4i banner-for-everything experience must explicitly set `approval.mode = "ask"`.
+
+**Scope notes:**
+- No UI surfacing of the active mode yet. The mode is fixed at session-spawn time; mid-session toggling (the CLI's `/approval <mode>` flow) is not wired - a `SessionContext.ApprovalSink` is a `SwitchableApprovalSink` so the plumbing is there, but no GUI control invokes `.Switch(newInner)`. Tracked as a follow-up.
+- No auto-mode decision echo in the GUI transcript. The CLI uses `ConsoleEchoingApprovalSink` to surface every allow/deny in the transcript model; the GUI's banner UI carries this for `ask`, but auto-mode silent-allows leave only a Serilog trail in `logs/gui-*.log`. A status-strip badge or a per-turn auto-mode indicator is the canonical follow-up.
+- `dotnet build InfiniContext.slnx -c Release` green (0 warnings, 0 errors). Full test suite **981 passed / 3 POSIX-skipped / 0 failed** (parity with 4j). `dotnet format --verify-no-changes` clean.
+- Live GUI smoke test of the four modes was not performed - the operator owns that verification. Per the 4i/4j flush notes, two pre-existing `InfiniContext.Gui.exe` instances may still hold the Debug binaries; the operator should kill those and re-spawn before validating.
+
+**Follow-ups remaining (from the 4j flush, minus #1):**
+- Live per-second countdown in the approval banner (`DispatcherTimer`).
+- "Pending approval (N)" badge in the status strip for multi-session backlog.
+- `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (ConsoleEchoingApprovalSink, ApprovalSinkFactory remain CLI-internal - one less link line after this slice; revisit if/when either promotes to Core).
+- **New:** mid-session approval-mode toggle in the GUI. Plumbing via `SwitchableApprovalSink` is already there; the slice landed only the *spawn-time default* consumer. A status-strip mode dropdown + `Switch(newInner)` would close the parity gap with the CLI's `/approval` command.
+- **New:** auto-mode decision visibility in the GUI. Either echo into the transcript like the CLI (`ConsoleEchoingApprovalSink` equivalent) or surface in a status strip / per-turn indicator. Today only the Serilog file shows auto-mode allows.
