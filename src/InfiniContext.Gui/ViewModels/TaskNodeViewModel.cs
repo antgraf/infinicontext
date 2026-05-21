@@ -8,15 +8,15 @@ namespace InfiniContext.Gui.ViewModels;
 
 /// <summary>
 /// Top-level node in the left-column tree. Wraps either a real <see cref="TaskRecord"/> or the
-/// synthetic "(unattached)" bucket for sessions without an <see cref="Core.Sessions.SessionContext.ActiveTaskId"/>.
+/// synthetic bucket for sessions without an <see cref="Core.Sessions.SessionContext.ActiveTaskId"/>.
 /// Holds an observable collection of child <see cref="SessionRowViewModel"/>s and re-aggregates
 /// its status glyph whenever children change.
 /// </summary>
 public sealed partial class TaskNodeViewModel : ObservableObject
 {
-    /// <summary>Null for the (unattached) synthetic node.</summary>
-    public int? TaskId { get; }
+    private static readonly string EmDash = char.ConvertFromUtf32(0x2014);  // EM DASH
 
+    public int? TaskId { get; }
     public TaskRecord? Record { get; }
     public ObservableCollection<SessionRowViewModel> Sessions { get; } = new();
 
@@ -26,10 +26,11 @@ public sealed partial class TaskNodeViewModel : ObservableObject
     [ObservableProperty]
     private string _statusGlyph = ViewModels.StatusGlyph.Empty;
 
-    public string Title => Record?.Title ?? "(unattached)";
-    public string HeaderId => TaskId is { } id ? $"{id:D4}" : "тАФ";
+    public string Title => Record?.Title ?? "(free sessions)";
+    public string HeaderId => TaskId is { } id ? $"{id:D4}" : EmDash;
     public string HomeCwd => Record?.HomeCwd ?? "";
     public bool IsSynthetic => Record is null;
+    public bool HasSessions => Sessions.Count > 0;
 
     public TaskNodeViewModel(TaskRecord? record)
     {
@@ -40,7 +41,6 @@ public sealed partial class TaskNodeViewModel : ObservableObject
 
     private void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        // Re-aggregate glyph + subscribe to new children's StatusGlyph changes.
         if (e.NewItems is not null)
         {
             foreach (SessionRowViewModel s in e.NewItems)
@@ -52,6 +52,7 @@ public sealed partial class TaskNodeViewModel : ObservableObject
                 s.PropertyChanged -= OnSessionPropertyChanged;
         }
         RefreshGlyph();
+        OnPropertyChanged(nameof(HasSessions));
     }
 
     private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)

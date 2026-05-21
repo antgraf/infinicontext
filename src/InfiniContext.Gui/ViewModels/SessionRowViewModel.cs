@@ -9,27 +9,25 @@ namespace InfiniContext.Gui.ViewModels;
 
 /// <summary>
 /// Row in the Sessions tree (child of a <see cref="TaskNodeViewModel"/>). Wraps a
-/// <see cref="SessionContext"/> and exposes (a) the metadata the tree row needs (short id, cwd,
-/// state badge, drift, cost), and (b) the structured per-turn transcript that drives the central
-/// column's tree.
+/// <see cref="SessionContext"/> and exposes (a) row metadata, and (b) the structured per-turn
+/// transcript that drives the central column.
 ///
-/// <para>
 /// Subscribes to <see cref="SessionContext.EventObserved"/> on construction and groups events
-/// into <see cref="TurnNodeViewModel"/>s. One turn = one user prompt + the resulting
-/// assistant/tool-use/tool-result/result cycle. UI marshalling is via <see cref="Dispatcher"/>.
-/// </para>
+/// into <see cref="TurnNodeViewModel"/>s.
 /// </summary>
 public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 {
+    private static readonly string Separator = " " + char.ConvertFromUtf32(0x00B7) + " ";  // MIDDLE DOT
+    private static readonly string Ellipsis = char.ConvertFromUtf32(0x2026);                // HORIZONTAL ELLIPSIS
+    private static readonly string EmDash = char.ConvertFromUtf32(0x2014);                  // EM DASH
+
     public SessionContext Context { get; }
     public Guid Id => Context.Id;
     public string ShortId => Context.Id.ToString("N").Substring(0, 8);
     public string Cwd => Context.Cwd ?? "<no cwd>";
     public TranscriptViewModel Transcript { get; }
 
-    /// <summary>Per-turn structured view of the conversation. Driven by raw events from
-    /// <see cref="SessionContext.EventObserved"/>; the flat <see cref="Transcript"/> list stays
-    /// as a fallback for debug / raw inspection.</summary>
+    /// <summary>Per-turn structured view of the conversation.</summary>
     public ObservableCollection<TurnNodeViewModel> Turns { get; } = new();
 
     [ObservableProperty]
@@ -54,10 +52,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         StatusGlyph = ViewModels.StatusGlyph.ForSession(context.Session.State.State, context.ApprovalSlot.Current is not null);
     }
 
-    /// <summary>
-    /// Called by <see cref="MainWindowViewModel.SendPromptAsync"/> when the operator sends a
-    /// prompt. Creates a pending <see cref="TurnNodeViewModel"/> with "thinking..." headline.
-    /// </summary>
     public void BeginUserTurn(string promptText)
     {
         var turn = new TurnNodeViewModel(promptText);
@@ -84,8 +78,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
     private void OnEvent(ClaudeEvent ev)
     {
-        // Marshal all turn-tree mutation onto the UI thread so ObservableCollection<TurnNode>
-        // and its children's ObservableCollection<TurnContent> stay single-threaded.
         if (Dispatcher.UIThread.CheckAccess()) ApplyEvent(ev);
         else Dispatcher.UIThread.Post(() => ApplyEvent(ev));
     }
@@ -100,7 +92,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                         TurnContentKind.System,
                         $"system/init model={init.Model ?? "?"} cwd={init.Cwd ?? "?"}",
                         $"claude_code_version={init.ClaudeCodeVersion ?? "?"}\npermissionMode={init.PermissionMode ?? "?"}"));
-                // The init "turn" never gets a real assistant response - close it immediately.
                 ClosePendingTurnWith("(session ready)");
                 break;
 
@@ -110,7 +101,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 break;
 
             case UserEvent userEv:
-                // Tool-result echoes from claude. Attach to the matching tool_use child.
                 if (_pendingTurn is { } current) AttachToolResults(current, userEv);
                 break;
 
@@ -137,9 +127,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                     $"unknown_event: {unk.Discriminator}",
                     unk.Raw.ToJsonString()));
                 break;
-
-            // ControlResponseEvent, RateLimitEvent, PartialMessageEvent: intentionally ignored
-            // in the turn tree (informational; visible in the log).
         }
     }
 
@@ -159,8 +146,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             switch (block)
             {
                 case TextBlock text:
-                    // Last text block becomes the headline; older text gets demoted to a child
-                    // so nothing is lost on multi-step assistant turns.
                     if (!string.IsNullOrEmpty(turn.Headline) && turn.Headline != "thinking..." && turn.Headline != "(session ready)" && turn.Headline != "(claude-initiated)")
                     {
                         turn.Children.Add(new TurnContentItemViewModel(
@@ -211,7 +196,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                     toolUseId: tr.ToolUseId);
                 if (match is not null)
                 {
-                    // Insert right after the matching tool_use for visual locality.
                     var idx = turn.Children.IndexOf(match);
                     turn.Children.Insert(idx + 1, resultItem);
                 }
@@ -234,7 +218,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             if (result.NumTurns is int n) parts.Add($"{n} turn(s)");
             if (result.TotalCostUsd is decimal c) parts.Add($"${c:0.0000}");
             if (result.DurationMs is long d) parts.Add($"{d}ms");
-            if (parts.Count > 0) turn.FooterSummary = string.Join(" ┬╖ ", parts);
+            if (parts.Count > 0) turn.FooterSummary = string.Join(Separator, parts);
         }
         _pendingTurn = null;
     }
@@ -246,11 +230,11 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     }
 
     private static string Truncate(string s, int max) =>
-        s.Length <= max ? s : s[..(max - 1)] + "тАж";
+        s.Length <= max ? s : s[..(max - 1)] + Ellipsis;
 
     public string State => Context.Session.State.State.ToString();
     public int Drift => Context.Session.UnknownEventCount;
-    public string CostDisplay => Context.LastCostUsd is { } c ? $"${c:0.0000}" : "тАФ";
+    public string CostDisplay => Context.LastCostUsd is { } c ? $"${c:0.0000}" : EmDash;
 
     public void Dispose()
     {

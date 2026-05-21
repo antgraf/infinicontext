@@ -6,11 +6,11 @@ namespace InfiniContext.Gui.ViewModels;
 /// <summary>
 /// One logical user-turn-and-claude-response cycle in the central transcript tree.
 ///
-/// Headline = the most recent assistant text block (the "final answer" тАФ always visible).
+/// Headline = the most recent assistant text block (the "final answer", always visible).
 /// Children = thinking blocks, tool-use blocks, tool-result attachments, system events, all
-/// collapsed by default. <see cref="IsInProgress"/> is true between the user's prompt send and
-/// the arrival of the turn's <c>result</c> event - the view renders a spinner / "thinking..."
-/// placeholder during that window.
+/// collapsed by default. <see cref="IsInProgress"/> is true between the user's prompt send
+/// and the arrival of the turn's <c>result</c> event; the view renders a spinner glyph or
+/// "thinking..." placeholder during that window.
 /// </summary>
 public sealed partial class TurnNodeViewModel : ObservableObject
 {

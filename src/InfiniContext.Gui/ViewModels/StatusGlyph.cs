@@ -3,37 +3,39 @@ using InfiniContext.Core.State;
 namespace InfiniContext.Gui.ViewModels;
 
 /// <summary>
-/// Maps session lifecycle state into a single-glyph badge for the tree view. Unicode-only so we
-/// don't need an asset pipeline for the Phase 3B scaffold; a real icon font / SVG set lands in
-/// a polish slice. Priority is "what needs the operator's attention first."
+/// Maps session lifecycle state into a single-glyph badge for the tree view.
+///
+/// All glyph constants are built at runtime via char.ConvertFromUtf32 so the source file is
+/// pure ASCII. A prior attempt with embedded Unicode literals (e.g. the WARNING SIGN char)
+/// was being transcoded to CP1251 mojibake by the tool that wrote this file in a Cyrillic-
+/// locale Windows environment. Hex codepoints + runtime conversion dodge the problem.
 /// </summary>
 internal static class StatusGlyph
 {
-    public const string AwaitingApproval = "тЪа";   // warning sign
-    public const string Streaming = "тЦ╢";          // play (right-pointing triangle)
-    public const string Sending = "тЖТ";            // rightwards arrow
-    public const string Cancelling = "тЬХ";         // multiplication X
-    public const string Compacting = "тЛп";         // midline horizontal ellipsis
-    public const string Retrying = "тЖ╗";           // clockwise open circle arrow
-    public const string Errored = "тЫФ";            // no entry
-    public const string Idle = "тЧЛ";               // hollow circle
-    public const string Exited = "┬╖";             // middle dot
-    public const string Empty = "тЧж";              // white bullet (task with no sessions)
+    public static readonly string AwaitingApproval = char.ConvertFromUtf32(0x26A0);  // WARNING SIGN
+    public static readonly string Streaming = char.ConvertFromUtf32(0x25B6);          // BLACK RIGHT-POINTING TRIANGLE
+    public static readonly string Sending = char.ConvertFromUtf32(0x2192);            // RIGHTWARDS ARROW
+    public static readonly string Cancelling = char.ConvertFromUtf32(0x2715);         // MULTIPLICATION X
+    public static readonly string Compacting = char.ConvertFromUtf32(0x22EF);         // MIDLINE HORIZONTAL ELLIPSIS
+    public static readonly string Retrying = char.ConvertFromUtf32(0x21BB);           // CLOCKWISE OPEN CIRCLE ARROW
+    public static readonly string Errored = char.ConvertFromUtf32(0x26D4);            // NO ENTRY
+    public static readonly string Idle = char.ConvertFromUtf32(0x25CB);               // WHITE CIRCLE
+    public static readonly string Exited = char.ConvertFromUtf32(0x00B7);             // MIDDLE DOT
+    public static readonly string Empty = char.ConvertFromUtf32(0x25E6);              // WHITE BULLET
 
-    /// <summary>Lower number = higher priority for aggregating into a parent task.</summary>
-    public static int Priority(string glyph) => glyph switch
+    public static int Priority(string glyph)
     {
-        AwaitingApproval => 0,
-        Streaming => 1,
-        Sending => 2,
-        Compacting => 3,
-        Retrying => 4,
-        Cancelling => 5,
-        Errored => 6,
-        Idle => 7,
-        Exited => 8,
-        _ => 100,
-    };
+        if (glyph == AwaitingApproval) return 0;
+        if (glyph == Streaming) return 1;
+        if (glyph == Sending) return 2;
+        if (glyph == Compacting) return 3;
+        if (glyph == Retrying) return 4;
+        if (glyph == Cancelling) return 5;
+        if (glyph == Errored) return 6;
+        if (glyph == Idle) return 7;
+        if (glyph == Exited) return 8;
+        return 100;
+    }
 
     public static string ForSession(SessionState state, bool awaitingApproval)
     {
@@ -51,7 +53,6 @@ internal static class StatusGlyph
         };
     }
 
-    /// <summary>Aggregate of child session glyphs. Returns <see cref="Empty"/> when no sessions.</summary>
     public static string Aggregate(IEnumerable<string> childGlyphs)
     {
         string? best = null;

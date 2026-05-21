@@ -236,3 +236,33 @@ Plan for the next commit:
 - Tool calls all auto-deny (DenyAllApprovalSink). The tool-result child will say "denied by host" or similar. The structure renders correctly; the agent just can't actually do anything.
 - Multi-step assistant turns: if claude emits text -> tool use -> tool result -> more text -> final text, the headline gets the LAST text block and intermediate text is demoted to a "(earlier assistant text)" child so nothing is lost.
 - The flat `Transcript.Fragments` ObservableCollection is still maintained for the existing TranscriptViewModel - it's not displayed in the GUI today but kept as a fallback we can toggle in if the turn tree has a regression.
+
+### Phase 3B slice 4c - encoding fix + smart spawn under selected task (2026-05-20)
+
+User reported three follow-ups on the slice 4 redesign:
+1. "(unattached)" was confusing.
+2. "+ New session" should use the selected task's home_cwd instead of asking; needs a separate "+ New task" button.
+3. Strange CJK / Cyrillic symbols in the GUI (and CLI). Screenshot confirmed: task glyph showed as "╤В╨з╨╢" instead of a bullet - classic CP1251 mojibake of UTF-8 source bytes.
+
+**Encoding fix (real bug):**
+- Root cause: my Write tool's pipeline transcoded any embedded Unicode literal in source files through a Cyrillic-locale Windows codepage at write time. The file bytes on disk were CP1251 mojibake of the intended UTF-8 byte sequence. The C# compiler / Avalonia XAML loader then read the corrupted bytes and produced corrupted strings at runtime.
+- Fix: every source file under `src/InfiniContext.Gui/` is now pure ASCII. C# glyph constants are built at runtime via `char.ConvertFromUtf32(0xNNNN)`; XAML uses `&#xNNNN;` numeric character references. Both forms survive any tool round-trip because the source bytes never include a non-ASCII codepoint.
+- Verified with `LC_ALL=C.UTF-8 grep -P '[^\x00-\x7F]' src/InfiniContext.Gui/` returning zero matches across .cs and .axaml.
+
+**Smart "+ New session" under selected task:**
+- `MainWindowViewModel` now tracks `SelectedNode` (object, two-way bound from `TreeView.SelectedItem`) which can be a `TaskNodeViewModel` or a `SessionRowViewModel`. Derived: `SelectedTaskNode` (the task to spawn under) and `FocusedSession` (the row to send prompts / show transcript for).
+- "+ New session" now checks `SelectedTaskNode` first: if it's a real (non-synthetic) task, spawn into `task.HomeCwd` with `ActiveTaskId = task.TaskId` - no folder picker. Falls back to the picker otherwise.
+- `SessionHost.CreateSessionAsync` gained an optional `activeTaskId` parameter that flows into `SpawnRequest.ActiveTaskId`.
+
+**"(unattached)" cleanup:**
+- The synthetic free-sessions bucket is no longer added at startup. It appears only when the first free session is created and disappears when the last free session closes. Tree stays clean for users whose workflow is fully task-bound.
+- Renamed the displayed title from `(unattached)` to `(free sessions)` - clearer that these are sessions without a task home, not "sessions in trouble."
+
+**Inspector tweak:**
+- Inspector now shows the selected task's title + home_cwd at the top (so the operator confirms what "+ New session" will spawn into), then the focused session's cwd below as before.
+
+**Still ahead** (next slice):
+- **"+ New task" button + dialog.** Requires porting the light-model service from CLI to GUI for title generation, OR stubbing it with a user-typed title. The CLI's `/task new "<description>"` route uses `TaskService.CreateAsync` which depends on `ILightModelService.GenerateShortTitleAsync`. For the GUI MVP I'll likely add a simple modal that asks for the task title directly (no light-model call) and folder picker for home_cwd, then writes the row + scaffold via `TaskStore.AllocateIdAsync` + `TaskFolder.ScaffoldAsync` directly. Light-model integration is a Stage-3 polish item.
+- **CLI mojibake report from user:** the user also noticed strange symbols in the CLI. The CLI's renderer uses string literals like `"[state: From -> To]"` and `"[tool: Read({...})]"` which are pure ASCII. The non-ASCII chars in CLI source (e.g. `infinicontext-task` skill markdown which has em-dashes / arrows) may have rotted through the same tool round-trip. Worth a separate audit pass. Not blocking the GUI work but should be filed as a follow-up.
+
+**Build status:** Core + Gui green, 0 warnings, 0 errors. Pure ASCII source verified.

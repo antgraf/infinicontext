@@ -97,7 +97,7 @@ public sealed class SessionHost : IAsyncDisposable
         return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore);
     }
 
-    public async Task<SessionContext> CreateSessionAsync(string cwd, CancellationToken ct = default)
+    public async Task<SessionContext> CreateSessionAsync(string cwd, int? activeTaskId = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cwd);
         var ctx = await _sessionManager.CreateAsync(
@@ -106,6 +106,7 @@ public sealed class SessionHost : IAsyncDisposable
                 Cwd = cwd,
                 Model = Settings.Session.Model,
                 IncludePartialMessages = Settings.Session.IncludePartialMessages,
+                ActiveTaskId = activeTaskId,
             },
             ct).ConfigureAwait(false);
         SessionCreated?.Invoke(ctx);

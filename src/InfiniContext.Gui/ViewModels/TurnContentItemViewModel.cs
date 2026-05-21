@@ -14,19 +14,25 @@ public enum TurnContentKind
 }
 
 /// <summary>
-/// One collapsible row inside a <see cref="TurnNodeViewModel"/>. Each kind has a glyph and a
-/// short summary line shown when collapsed (e.g. <c>"Read(file.cs)"</c>); the full payload
-/// (full tool input, thinking text, tool result body) is in <see cref="Detail"/> and rendered
-/// only when the operator expands the row.
+/// One collapsible row inside a <see cref="TurnNodeViewModel"/>. Each kind has a glyph + a
+/// short summary line; the full payload lives in <see cref="Detail"/> and is rendered only
+/// when expanded. Glyphs come from <see cref="char.ConvertFromUtf32(int)"/> so the source
+/// is pure ASCII (a Cyrillic-locale Windows tool round-trip would otherwise corrupt embedded
+/// Unicode literals).
 /// </summary>
 public sealed partial class TurnContentItemViewModel : ObservableObject
 {
+    private static readonly string ThinkingGlyph = char.ConvertFromUtf32(0x1F4AD);   // THOUGHT BALLOON
+    private static readonly string ToolUseGlyph = char.ConvertFromUtf32(0x1F527);    // WRENCH
+    private static readonly string ToolResultGlyph = char.ConvertFromUtf32(0x21A9);  // LEFTWARDS ARROW WITH HOOK
+    private static readonly string SystemGlyph = char.ConvertFromUtf32(0x24D8);      // CIRCLED LATIN SMALL LETTER I
+    private static readonly string UserPromptGlyph = char.ConvertFromUtf32(0x1F464); // BUST IN SILHOUETTE
+    private static readonly string WarningGlyph = char.ConvertFromUtf32(0x26A0);     // WARNING SIGN
+    private static readonly string FallbackGlyph = char.ConvertFromUtf32(0x00B7);    // MIDDLE DOT
+
     public TurnContentKind Kind { get; }
     public string Glyph { get; }
     public string Summary { get; }
-
-    /// <summary>The id of the originating tool-use block (used to correlate tool-result rows).
-    /// Null for non-tool kinds.</summary>
     public string? ToolUseId { get; }
 
     [ObservableProperty]
@@ -48,13 +54,13 @@ public sealed partial class TurnContentItemViewModel : ObservableObject
 
     private static string GlyphFor(TurnContentKind kind) => kind switch
     {
-        TurnContentKind.Thinking => "ЁЯТн",
-        TurnContentKind.ToolUse => "ЁЯФз",
-        TurnContentKind.ToolResult => "тЖй",
-        TurnContentKind.System => "тУШ",
-        TurnContentKind.UserPrompt => "ЁЯСд",
-        TurnContentKind.UnknownEvent => "тЪа",
-        TurnContentKind.UnknownBlock => "тЪа",
-        _ => "┬╖",
+        TurnContentKind.Thinking => ThinkingGlyph,
+        TurnContentKind.ToolUse => ToolUseGlyph,
+        TurnContentKind.ToolResult => ToolResultGlyph,
+        TurnContentKind.System => SystemGlyph,
+        TurnContentKind.UserPrompt => UserPromptGlyph,
+        TurnContentKind.UnknownEvent => WarningGlyph,
+        TurnContentKind.UnknownBlock => WarningGlyph,
+        _ => FallbackGlyph,
     };
 }

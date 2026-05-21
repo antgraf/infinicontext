@@ -11,21 +11,32 @@ using InfiniContext.Gui.Services;
 namespace InfiniContext.Gui.ViewModels;
 
 /// <summary>
-/// Root view-model. Owns the <see cref="SessionHost"/>, a tree of <see cref="TaskNodeViewModel"/>
-/// (left column), and the focused-session pointer. The view injects callbacks (<see cref="FolderPicker"/>,
-/// <see cref="ShowError"/>) so the VM stays free of <see cref="Window"/> references and testable.
+/// Root view-model. Owns the <see cref="SessionHost"/>, the left-column tree of tasks &amp;
+/// sessions, and the focused-session pointer. The TreeView's selection drives two derived
+/// pointers: <see cref="FocusedSession"/> (when a session row is picked) and
+/// <see cref="SelectedTaskNode"/> (the task to spawn into when "+ New session" is clicked).
 /// </summary>
 public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly SessionHost? _host;
     private readonly TaskNodeViewModel _unattached = new(null);
 
-    /// <summary>Top-level nodes in the left tree: real tasks (sorted by id desc) plus the
-    /// (unattached) bucket at the bottom for sessions without an <c>ActiveTaskId</c>.</summary>
     public ObservableCollection<TaskNodeViewModel> TaskNodes { get; } = new();
+
+    /// <summary>Whichever tree item the operator clicked - <see cref="TaskNodeViewModel"/> or
+    /// <see cref="SessionRowViewModel"/>. Two-way bound from <c>TreeView.SelectedItem</c>.</summary>
+    [ObservableProperty]
+    private object? _selectedNode;
 
     [ObservableProperty]
     private SessionRowViewModel? _focusedSession;
+
+    /// <summary>The task context "+ New session" will spawn into. Derived from <see cref="SelectedNode"/>:
+    /// either the selected task header, or (if a session row is selected) that session's parent task.
+    /// Null when nothing relevant is selected or only the (free sessions) bucket is in play - in
+    /// which case "+ New session" falls back to the folder picker.</summary>
+    [ObservableProperty]
+    private TaskNodeViewModel? _selectedTaskNode;
 
     [ObservableProperty]
     private string _statusText = "Ready.";
@@ -33,10 +44,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private string _logFilePath = "(host not initialised)";
 
-    /// <summary>Called by the view to launch the OS folder picker. Returns the chosen path or null.</summary>
     public Func<Task<string?>>? FolderPicker { get; set; }
-
-    /// <summary>Used by the view to surface fatal startup errors as a status line.</summary>
     public Action<string>? ShowError { get; set; }
 
     [ObservableProperty]
@@ -46,13 +54,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public IAsyncRelayCommand SendPromptCommand { get; }
     public IAsyncRelayCommand InterruptCommand { get; }
 
-    /// <summary>Design-time constructor; runtime path uses <see cref="CreateAsync"/>.</summary>
     public MainWindowViewModel()
     {
         NewSessionCommand = new AsyncRelayCommand(NewSessionAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
-        TaskNodes.Add(_unattached);
+        // _unattached is added lazily on first free-session spawn and removed when emptied -
+        // keeps the tree clean for users who only work via task-bound sessions.
     }
 
     private MainWindowViewModel(SessionHost host) : this()
@@ -77,11 +85,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         void Apply()
         {
-            // Tasks newest-first; unattached stays at the bottom.
             TaskNodes.Clear();
             foreach (var rec in records.OrderByDescending(r => r.Id))
                 TaskNodes.Add(new TaskNodeViewModel(rec));
-            TaskNodes.Add(_unattached);
         }
 
         if (Dispatcher.UIThread.CheckAccess()) Apply();
@@ -90,12 +96,39 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     private TaskNodeViewModel ResolveParentNode(int? taskId)
     {
-        if (taskId is null) return _unattached;
+        if (taskId is null)
+        {
+            // Lazy-add the free-sessions bucket on first use so users with task-bound flows
+            // don't see a permanent empty row.
+            if (!TaskNodes.Contains(_unattached)) TaskNodes.Add(_unattached);
+            return _unattached;
+        }
         foreach (var node in TaskNodes)
             if (node.TaskId == taskId) return node;
-        // Task referenced by a session but missing from the registry - shouldn't happen during a
-        // single host run, but fall back to unattached to avoid losing the row.
+        if (!TaskNodes.Contains(_unattached)) TaskNodes.Add(_unattached);
         return _unattached;
+    }
+
+    partial void OnSelectedNodeChanged(object? oldValue, object? newValue)
+    {
+        // Update both derived pointers based on what kind of tree item is now selected.
+        switch (newValue)
+        {
+            case SessionRowViewModel session:
+                FocusedSession = session;
+                SelectedTaskNode = TaskNodes.FirstOrDefault(t => t.Sessions.Contains(session));
+                break;
+            case TaskNodeViewModel task:
+                SelectedTaskNode = task;
+                // Don't clear FocusedSession when a task header is clicked - the operator may
+                // be readying a new session under that task without losing context of the one
+                // they're reading.
+                break;
+            default:
+                // Selection cleared entirely - keep prior focused session, clear task ptr.
+                SelectedTaskNode = null;
+                break;
+        }
     }
 
     private async Task NewSessionAsync()
@@ -106,7 +139,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             return;
         }
 
-        var cwd = FolderPicker is null ? null : await FolderPicker().ConfigureAwait(true);
+        string? cwd;
+        int? taskId = null;
+        if (SelectedTaskNode is { IsSynthetic: false } task)
+        {
+            // Spawn under the selected task: cwd = task.HomeCwd, no folder picker.
+            cwd = task.HomeCwd;
+            taskId = task.TaskId;
+        }
+        else
+        {
+            // No task context - open the folder picker for a free session.
+            cwd = FolderPicker is null ? null : await FolderPicker().ConfigureAwait(true);
+        }
+
         if (string.IsNullOrWhiteSpace(cwd))
         {
             StatusText = "New session cancelled.";
@@ -115,13 +161,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         try
         {
-            StatusText = $"Spawning claude in {cwd}...";
-            var ctx = await _host.CreateSessionAsync(cwd).ConfigureAwait(true);
+            StatusText = taskId is { } tid ? $"Spawning under task {tid:D4} in {cwd}..." : $"Spawning claude in {cwd}...";
+            var ctx = await _host.CreateSessionAsync(cwd, taskId).ConfigureAwait(true);
             var row = new SessionRowViewModel(ctx);
             var parent = ResolveParentNode(ctx.ActiveTaskId);
             parent.Sessions.Add(row);
             parent.IsExpanded = true;
             FocusedSession = row;
+            SelectedNode = row;
             row.IsFocused = true;
             StatusText = $"Spawned {row.ShortId} in {row.Cwd}.";
         }
@@ -141,9 +188,6 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var text = PromptText;
         if (target is null || string.IsNullOrWhiteSpace(text)) return;
 
-        // Append a pending TurnNodeViewModel before sending so the central tree shows
-        // "thinking..." immediately. The raw flat transcript still gets the echo for the
-        // fallback view / debugging.
         target.BeginUserTurn(text);
         target.Context.Transcript.Append($"\n> {text}\n");
         PromptText = "";
@@ -194,6 +238,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             }
             if (FocusedSession?.Id == id)
                 FocusedSession = TaskNodes.SelectMany(n => n.Sessions).FirstOrDefault();
+            // Remove the free-sessions bucket when it empties.
+            if (_unattached.Sessions.Count == 0 && TaskNodes.Contains(_unattached))
+                TaskNodes.Remove(_unattached);
         }
 
         if (Dispatcher.UIThread.CheckAccess()) Apply();
