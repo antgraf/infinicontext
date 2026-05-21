@@ -169,7 +169,14 @@ Within a single task, every write under `.task/` must go through the MCP `tasks/
 > /approval deny                  # read-only / "explain only" sessions
 ```
 
-`auto` is the default and the right pick for unattended runs: every tool call is reviewed by a cheap Haiku call (`models.light.id`), `confidence=low` routes to deny by default (or `ask`, via `approval.auto.onLowConfidence`). Default timeout per request is 60 s → auto-deny if the user doesn't answer.
+`auto` is the default and the right pick for unattended runs: every tool call is reviewed by a cheap Haiku call (`models.light.id`), `confidence=low` routes to deny by default (or `ask`, via `approval.auto.onLowConfidence`). Default timeout per request is 60 s and a no-answer falls into the deny path the same way an explicit deny would.
+
+A safety-review deny surfaces in the transcript prefixed with the axis the reviewer flagged on, e.g. `auto-deny [PromptInjection]: ...` or `auto-deny [Destructive]: ...`. The axes correspond to the safety taxonomy the light model returns (prompt-injection patterns, destructive/irreversible actions, and so on). The reviewer is conservative and **will sometimes false-positive on benign tool calls**. Two patterns we've seen in the wild:
+
+- **Mixed-script glyphs.** A tool input legitimately contains glyphs from a non-Latin script that share their shape with Latin letters (mojibake from text round-tripped through a different code page, a copy-paste from a localised doc, and so on). The reviewer reads the mixed-script characters as obfuscated instruction injection and denies, e.g. `Pattern contains characters from another script suggesting obfuscated instruction injection attempt.` The call itself is harmless.
+- **Routine `git push`.** A push to a feature branch reads as `destructive action with wide-blast-radius potential` because the reviewer can't tell a feature branch from `main`.
+
+The fastest recovery is `/approval ask` to switch the focused session to interactive mode, retry the call, and approve it manually; flip back to `auto` afterward. Persistent false-positive patterns are worth logging to the task's `issues.md` so the safety-review prompt can be tightened.
 
 Approvals are per-session: a prompt in one pane doesn't block another. If two sessions raise approval requests at once, only the focused pane's request is visible — `/focus` to the other and answer there.
 

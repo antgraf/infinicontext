@@ -18,7 +18,8 @@
 ## 0004 - Add an example of auto-denied tool prompt to the doc (find where it is explained). In this case it wasn t a prompt injection but a good illustration for the doc. [approval] Grep ? DENY (1658ms): auto-deny [PromptInjection]: Pattern contains Cyrillic characters (Д1тАУD36) suggesting obfuscated instruction injection attempt.
 - **Logged:** 2026-05-21T00:53:38Z by host-cli
 - **Kind:** followup
-- **Status:** open
+- **Status:** resolved
+- **Resolution:** Added a "false-positive on benign tool calls" subsection to `docs/quickstart.md` under "Approval modes" with two example axes (mixed-script glyphs, routine `git push`) and the `/approval ask` recovery path. Live-reproduced during the edit: the safety reviewer auto-denied the doc edit itself when it contained the literal example characters, so the doc describes the pattern rather than embedding the offending glyphs.
 
 ## 0005 - Add more allowed tools by default. Analyze what tool permissions are asked frequently and could be auto-allowed.
 - **Logged:** 2026-05-21T00:53:45Z by host-cli
