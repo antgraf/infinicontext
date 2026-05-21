@@ -20,3 +20,4 @@
 
 - Host hit hard context-pressure threshold (~85%) immediately after the Phase 3A draft landed. No additional work in flight; all artifacts are written and locks released. Next session can pick up directly from `design.md` review.
 - State at flush: TaskCreate items #1-#4 all `completed`; design.md / index.md / progress.md all reflect the post-write state. Nothing partial on disk.
+- Phase 3A draft committed as `1c9fb33` ("Phase 3A: GUI vision + high-level design proposal.") and pushed to `origin/main`. Working tree clean.
