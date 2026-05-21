@@ -19,6 +19,7 @@ internal abstract record TaskCommand
     public sealed record Spawn(int Id) : TaskCommand;
     public sealed record Delete(int Id, bool RemoveFolder) : TaskCommand;
     public sealed record Review(int? Id, string? Scope, bool SkipConfirm) : TaskCommand;
+    public sealed record Flush : TaskCommand;
     public sealed record Help : TaskCommand;
 
     /// <summary>
@@ -89,6 +90,15 @@ internal abstract record TaskCommand
 
             case "review":
                 return ParseReview(tokens, i, out command, out error);
+
+            case "flush":
+                if (i < tokens.Count)
+                {
+                    error = "/task flush: unexpected arguments.";
+                    return false;
+                }
+                command = new Flush();
+                return true;
 
             default:
                 error = $"unknown subcommand '{sub}'. Try /task help.";

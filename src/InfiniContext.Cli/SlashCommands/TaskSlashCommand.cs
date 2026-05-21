@@ -98,6 +98,15 @@ internal sealed class TaskSlashCommand : ISlashCommand
             return;
         }
 
+        // /task flush: send a user-message into the focused session asking the agent to flush
+        // task documents now (task 0005 issue 0012). Same channel ThresholdInjector uses for the
+        // automatic context-pressure nudges, just operator-triggered.
+        if (cmd is TaskCommand.Flush)
+        {
+            await TryFlushFocusedSessionAsync(ctx, ct).ConfigureAwait(false);
+            return;
+        }
+
         // /task spawn: same task-binding plan as /task switch, but creates a NEW SessionContext
         // alongside the current one (a parallel pane) rather than replacing it. Useful when the
         // user wants to /flush the current session and start fresh on the same task without
@@ -109,6 +118,30 @@ internal sealed class TaskSlashCommand : ISlashCommand
         }
 
         await ctx.TaskHandler.HandleAsync(cmd, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Inject a single user-turn into the focused session asking the agent to flush task
+    /// artifacts now (progress.md, index.md, decisions.md, etc.). Phrased so the agent treats it
+    /// as a deliberate operator action rather than a context-pressure rescue (so it doesn't also
+    /// exit). The actual injection goes through <see cref="IClaudeSession.SendUserMessageAsync"/>
+    /// тАФ the same channel <c>ThresholdInjector</c> uses for the soft/hard threshold nudges.
+    /// </summary>
+    private static async Task TryFlushFocusedSessionAsync(SlashCommandContext ctx, CancellationToken ct)
+    {
+        var message = ctx.ActiveTaskId is { } activeId
+            ? $"Operator-requested flush. Update this task's documents now (progress.md, index.md, and any other artifacts you've changed since the last flush) to reflect everything you've done so far. Task id: {activeId:D4}. Keep working after the flush; this is not a context-pressure handoff."
+            : "Operator-requested flush. If this session has any task artifacts in flight, update them now (progress.md, index.md, etc.) to reflect everything you've done since the last flush. Keep working after the flush; this is not a context-pressure handoff.";
+
+        ctx.Write("[task] flushing focused session...\n");
+        try
+        {
+            await ctx.Session.SendUserMessageAsync(message, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ctx.Write($"[task] flush failed: {ex.Message}\n");
+        }
     }
 
     private static async Task TryStartTaskSwitchAsync(SlashCommandContext ctx, int id, CancellationToken ct)

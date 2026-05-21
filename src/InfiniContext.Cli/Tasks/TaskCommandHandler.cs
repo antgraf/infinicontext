@@ -109,6 +109,13 @@ internal sealed class TaskCommandHandler
                     await HandleReviewAsync(reviewCmd, activeTaskId: null, ct).ConfigureAwait(false);
                     break;
 
+                case TaskCommand.Flush:
+                    // /task flush is intercepted by the REPL because it needs to write into the
+                    // focused session's stdin (via IClaudeSession.SendUserMessageAsync). The bare
+                    // handler doesn't have a session reference.
+                    Write("[task] /task flush must be invoked from the REPL.\n");
+                    break;
+
                 case TaskCommand.Help:
                     Write(HelpText);
                     break;
@@ -553,6 +560,9 @@ internal sealed class TaskCommandHandler
                                                 run a multi-agent review on a task. Defaults id
                                                 to the focused session's task. --yes skips the
                                                 cost prompt (spawns 6 sub-Claude agents).
+          /task flush                           nudge the focused session to flush task documents
+                                                (progress.md, index.md, etc.) right now, without
+                                                waiting for a context-pressure threshold.
 
         """;
 

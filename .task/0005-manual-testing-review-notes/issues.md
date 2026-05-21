@@ -61,4 +61,5 @@
 ## 0012 - Add /task flush command to force agent to flush task documents
 - **Logged:** 2026-05-21T00:56:00Z by host-cli
 - **Kind:** followup
-- **Status:** open
+- **Status:** resolved
+- **Resolution:** Added `TaskCommand.Flush` (parsed from `/task flush`, no args) and a `TryFlushFocusedSessionAsync` helper in `TaskSlashCommand`. The helper injects a single user-turn into the focused session through `IClaudeSession.SendUserMessageAsync` тАФ the same channel `ThresholdInjector` uses for the automatic soft/hard nudges тАФ phrased as an operator-requested flush so the agent updates artifacts without also exiting. When the focused session is task-bound the active task id is named in the nudge; otherwise the nudge is generic. Updated `HelpText` so `/help task` lists the new subcommand.
