@@ -18,7 +18,8 @@
   <Window.Styles>
     <!-- Compact Expander: the Fluent default leaves ~24 DIP of vertical padding around the toggle
          row, which doubles the height of an otherwise-one-line "Details" pill in every turn. We
-         flatten the toggle area to match the surrounding metadata typography. -->
+         flatten the toggle area and downsize its typography to match the surrounding metadata
+         (small + low-opacity) so the toggle reads as a hint, not a prominent control. -->
     <Style Selector="Expander">
       <Setter Property="MinHeight" Value="0" />
       <Setter Property="Padding" Value="0" />
@@ -26,6 +27,18 @@
     <Style Selector="Expander /template/ ToggleButton">
       <Setter Property="MinHeight" Value="0" />
       <Setter Property="Padding" Value="8,2" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Opacity" Value="0.7" />
+    </Style>
+    <!-- MarkdownScrollViewer alpha (12.0.0-a2) renders paragraphs into TextBlock-derived controls
+         that don't get TextWrapping="Wrap" by default, so long lines run off the right edge of the
+         card. Force wrapping on every text element inside any md:MarkdownScrollViewer in this
+         window. (Codeblocks intentionally keep NoWrap - those should H-scroll inside the fence.) -->
+    <Style Selector="md|MarkdownScrollViewer TextBlock">
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="md|MarkdownScrollViewer SelectableTextBlock">
+      <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
   </Window.Styles>
 
@@ -57,42 +70,81 @@
       <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0">
         <DockPanel>
           <Border DockPanel.Dock="Top" Padding="8">
-            <Button Content="+ New session" Command="{Binding NewSessionCommand}" HorizontalAlignment="Stretch" />
+            <Button Content="+ New task" Command="{Binding NewTaskCommand}" HorizontalAlignment="Stretch"
+                    ToolTip.Tip="Create a new InfiniContext task. (Stub - dialog wiring lands in the next slice.)" />
           </Border>
           <TreeView ItemsSource="{Binding TaskNodes}"
                     SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
                     BorderThickness="0">
             <TreeView.DataTemplates>
               <TreeDataTemplate x:DataType="vm:TaskNodeViewModel" ItemsSource="{Binding Sessions}">
-                <Grid ColumnDefinitions="Auto,*" Margin="0,4">
-                  <TextBlock Grid.Column="0" Text="{Binding StatusGlyph}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center" />
-                  <StackPanel Grid.Column="1" Spacing="1">
-                    <TextBlock>
-                      <Run Text="{Binding HeaderId, Mode=OneWay}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" />
-                      <Run Text="  " /><Run Text="{Binding Title, Mode=OneWay}" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding HomeCwd}" FontSize="11" Opacity="0.7" TextTrimming="CharacterEllipsis" IsVisible="{Binding !IsSynthetic}" />
+                <!-- Row content stacked vertically so a long title can't push the action bar off
+                     the right edge of the panel. Title text gets explicit TextTrimming so a wide
+                     row doesn't trigger a horizontal TreeView scroll. -->
+                <StackPanel Margin="0,4">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0" Text="{Binding StatusGlyph}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Spacing="1">
+                      <TextBlock TextTrimming="CharacterEllipsis">
+                        <Run Text="{Binding HeaderId, Mode=OneWay}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" />
+                        <Run Text="  " /><Run Text="{Binding Title, Mode=OneWay}" />
+                      </TextBlock>
+                      <TextBlock Text="{Binding HomeCwd}" FontSize="11" Opacity="0.7" TextTrimming="CharacterEllipsis" IsVisible="{Binding !IsSynthetic}" />
+                    </StackPanel>
+                  </Grid>
+                  <!-- Action bar: under the row content, indented to align with the title column.
+                       Bound to the root VM via $parent[TreeView]; the row VM travels as parameter. -->
+                  <StackPanel Orientation="Horizontal" Spacing="2" Margin="22,3,0,0">
+                    <Button Content="+"
+                            Classes="rowAction"
+                            ToolTip.Tip="Spawn a new claude session under this task"
+                            Command="{Binding $parent[TreeView].DataContext.SpawnSessionForTaskCommand}"
+                            CommandParameter="{Binding}" />
                   </StackPanel>
-                </Grid>
+                </StackPanel>
               </TreeDataTemplate>
               <DataTemplate x:DataType="vm:SessionRowViewModel">
-                <Grid ColumnDefinitions="Auto,*" Margin="0,2">
-                  <TextBlock Grid.Column="0" Text="{Binding StatusGlyph, Mode=OneWay}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
-                  <StackPanel Grid.Column="1" Spacing="1">
-                    <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" FontSize="12" />
-                    <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                    <TextBlock FontSize="11" Opacity="0.6">
-                      <Run Text="{Binding State, Mode=OneWay}" />
-                      <Run Text=" &#xB7; drift " /><Run Text="{Binding Drift, Mode=OneWay}" />
-                      <Run Text=" &#xB7; " /><Run Text="{Binding CostDisplay, Mode=OneWay}" />
-                    </TextBlock>
+                <StackPanel Margin="0,2">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Grid.Column="0" Text="{Binding StatusGlyph, Mode=OneWay}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Spacing="1">
+                      <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                      <TextBlock FontSize="11" Opacity="0.6" TextTrimming="CharacterEllipsis">
+                        <Run Text="{Binding State, Mode=OneWay}" />
+                        <Run Text=" &#xB7; drift " /><Run Text="{Binding Drift, Mode=OneWay}" />
+                        <Run Text=" &#xB7; " /><Run Text="{Binding CostDisplay, Mode=OneWay}" />
+                      </TextBlock>
+                    </StackPanel>
+                  </Grid>
+                  <!-- Action bar: canned prompts to this session (not necessarily the focused one). -->
+                  <StackPanel Orientation="Horizontal" Spacing="2" Margin="20,3,0,0">
+                    <Button Content="&#x25B6;"
+                            Classes="rowAction"
+                            ToolTip.Tip="Send 'Continue with the task.' to this session"
+                            Command="{Binding $parent[TreeView].DataContext.SendContinueCommand}"
+                            CommandParameter="{Binding}" />
+                    <Button Content="?"
+                            Classes="rowAction"
+                            ToolTip.Tip="Send 'What's next for the task?' to this session"
+                            Command="{Binding $parent[TreeView].DataContext.SendWhatsNextCommand}"
+                            CommandParameter="{Binding}" />
                   </StackPanel>
-                </Grid>
+                </StackPanel>
               </DataTemplate>
             </TreeView.DataTemplates>
             <TreeView.Styles>
               <Style Selector="TreeViewItem">
                 <Setter Property="IsExpanded" Value="True" />
+              </Style>
+              <!-- Compact action buttons: borderless square chips that don't dominate the row. -->
+              <Style Selector="Button.rowAction">
+                <Setter Property="Padding" Value="6,2" />
+                <Setter Property="MinWidth" Value="22" />
+                <Setter Property="MinHeight" Value="22" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
               </Style>
             </TreeView.Styles>
           </TreeView>
@@ -117,21 +169,33 @@
                         BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
                         Background="{DynamicResource SystemAltLowColor}">
                   <StackPanel Spacing="6">
-                    <!-- User prompt header -->
-                    <TextBlock FontSize="11" Opacity="0.7">
-                      <Run Text="&#x1F464; " /><Run Text="{Binding UserPrompt, Mode=OneWay}" />
-                    </TextBlock>
+                    <!-- Operator block: visible only when this turn carries a real user prompt.
+                         Synthetic markers like "(claude-initiated)" / "(session start)" set
+                         HasOperatorMessage=false so the block stays hidden. Label intentionally
+                         small + grey so it reads as a speaker tag, not a heading. -->
+                    <StackPanel Spacing="2" IsVisible="{Binding HasOperatorMessage}">
+                      <TextBlock Text="{Binding OperatorLabel}" FontSize="11" Opacity="0.7" />
+                      <md:MarkdownScrollViewer Markdown="{Binding UserPrompt, Mode=OneWay}"
+                                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                               ScrollViewer.VerticalScrollBarVisibility="Disabled" />
+                    </StackPanel>
 
-                    <!-- Headline / final answer (or thinking placeholder). Rendered as Markdown so
-                         assistant replies with fenced code, headings, bullets, and inline code keep
-                         their structure instead of degrading to a wall of text. Scrollbars disabled
-                         so the inner control acts as a content renderer inside the transcript's
-                         outer ScrollViewer. -->
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                      <TextBlock Text="&#x23F3;" IsVisible="{Binding IsInProgress}" FontSize="14" VerticalAlignment="Top" />
+                    <!-- Agent block: visible only when a real assistant headline has arrived. While
+                         IsInProgress and Headline is still the "thinking..." placeholder, the entire
+                         block (label + body) hides so the card reads as "operator + details". The
+                         small in-progress indicator below preserves the "claude is working" signal. -->
+                    <StackPanel Spacing="2" IsVisible="{Binding HasHeadline}">
+                      <TextBlock Text="{Binding AgentLabel}" FontSize="11" Opacity="0.7" />
                       <md:MarkdownScrollViewer Markdown="{Binding Headline, Mode=OneWay}"
                                                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                ScrollViewer.VerticalScrollBarVisibility="Disabled" />
+                    </StackPanel>
+
+                    <!-- Lightweight progress hint - visible only while the turn is mid-flight and
+                         the Agent block is still hidden (i.e. before the first assistant text). -->
+                    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsInProgress}">
+                      <TextBlock Text="&#x23F3;" FontSize="11" Opacity="0.6" />
+                      <TextBlock Text="thinking..." FontSize="11" Opacity="0.55" />
                     </StackPanel>
 
                     <!-- Footer: cost / turns / duration once the result event lands -->

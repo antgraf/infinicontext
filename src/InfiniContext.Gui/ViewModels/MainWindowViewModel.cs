@@ -15,7 +15,7 @@ namespace InfiniContext.Gui.ViewModels;
 /// Root view-model. Owns the <see cref="SessionHost"/>, the left-column tree of tasks &amp;
 /// sessions, and the focused-session pointer. The TreeView's selection drives two derived
 /// pointers: <see cref="FocusedSession"/> (when a session row is picked) and
-/// <see cref="SelectedTaskNode"/> (the task to spawn into when "+ New session" is clicked).
+/// <see cref="SelectedTaskNode"/> (the task most recently focused - used by tree-row commands).
 /// </summary>
 public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
@@ -61,9 +61,17 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private string _promptText = "";
 
-    public IAsyncRelayCommand NewSessionCommand { get; }
+    public IAsyncRelayCommand NewTaskCommand { get; }
+    public IAsyncRelayCommand<TaskNodeViewModel?> SpawnSessionForTaskCommand { get; }
     public IAsyncRelayCommand SendPromptCommand { get; }
     public IAsyncRelayCommand InterruptCommand { get; }
+    public IAsyncRelayCommand<SessionRowViewModel?> SendContinueCommand { get; }
+    public IAsyncRelayCommand<SessionRowViewModel?> SendWhatsNextCommand { get; }
+
+    /// <summary>Canned prompt fired by the play button on a session row's action bar.</summary>
+    public const string ContinuePromptText = "Continue with the task.";
+    /// <summary>Canned prompt fired by the question button on a session row's action bar.</summary>
+    public const string WhatsNextPromptText = "What's next for the task?";
 
     public MainWindowViewModel() : this(new GuiSettings())
     {
@@ -73,9 +81,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         _guiSettings = guiSettings;
         _leftColumnWidth = new GridLength(guiSettings.LeftColumnWidth);
-        NewSessionCommand = new AsyncRelayCommand(NewSessionAsync);
+        NewTaskCommand = new AsyncRelayCommand(NewTaskAsync);
+        SpawnSessionForTaskCommand = new AsyncRelayCommand<TaskNodeViewModel?>(SpawnSessionForTaskAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
+        SendContinueCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, ContinuePromptText));
+        SendWhatsNextCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, WhatsNextPromptText));
         // _unattached is added lazily on first free-session spawn and removed when emptied -
         // keeps the tree clean for users who only work via task-bound sessions.
     }
@@ -165,7 +176,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
-    private async Task NewSessionAsync()
+    /// <summary>"+ New task" top-bar button. Stub for now - the full flow needs a modal that
+    /// captures title + home_cwd, then writes via <c>TaskStore.AllocateIdAsync</c> +
+    /// <c>TaskFolder.ScaffoldAsync</c>. Tracked as a follow-up; this stub just surfaces the gap
+    /// so the button is wired before the dialog lands.</summary>
+    private Task NewTaskAsync()
+    {
+        StatusText = "+ New task: dialog not wired yet (stub).";
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Spawn a new session under <paramref name="task"/>. Bound to the per-task "+"
+    /// action button in the left tree. Falls back to the folder picker if <paramref name="task"/>
+    /// is null or synthetic (the (free sessions) bucket).</summary>
+    private async Task SpawnSessionForTaskAsync(TaskNodeViewModel? task)
     {
         if (_host is null)
         {
@@ -175,15 +199,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         string? cwd;
         int? taskId = null;
-        if (SelectedTaskNode is { IsSynthetic: false } task)
+        if (task is { IsSynthetic: false } realTask)
         {
-            // Spawn under the selected task: cwd = task.HomeCwd, no folder picker.
-            cwd = task.HomeCwd;
-            taskId = task.TaskId;
+            cwd = realTask.HomeCwd;
+            taskId = realTask.TaskId;
         }
         else
         {
-            // No task context - open the folder picker for a free session.
             cwd = FolderPicker is null ? null : await FolderPicker().ConfigureAwait(true);
         }
 
@@ -221,11 +243,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var target = FocusedSession;
         var text = PromptText;
         if (target is null || string.IsNullOrWhiteSpace(text)) return;
+        PromptText = "";
+        await SendToSessionAsync(target, text).ConfigureAwait(true);
+    }
 
+    /// <summary>Fire-and-forget canned prompt to <paramref name="session"/>. Bound to the per-row
+    /// play / question action buttons; does NOT use <see cref="FocusedSession"/> so the operator
+    /// can ping a non-focused session without losing their current focus.</summary>
+    private Task SendCannedAsync(SessionRowViewModel? session, string text) =>
+        session is null ? Task.CompletedTask : SendToSessionAsync(session, text);
+
+    private async Task SendToSessionAsync(SessionRowViewModel target, string text)
+    {
         target.BeginUserTurn(text);
         target.Context.Transcript.Append($"\n> {text}\n");
-        PromptText = "";
-
         try
         {
             await target.Context.Session.SendUserMessageAsync(text).ConfigureAwait(true);

@@ -303,3 +303,81 @@ User-driven UX punch list (four follow-ups on the slice 4c GUI):
 **Follow-ups noted (out of scope):**
 - Right-edge inspector column is still fixed at 280 DIP. The user only asked for the left splitter; can add an inspector splitter symmetrically if they want one later.
 - Markdown.Avalonia 12.0.0-a2 alpha may have rough edges on long code fences or unusual nesting. Worth a real-world session to confirm before declaring done.
+
+### Phase 3B slice 4e - tree action bars + Operator/Agent card labels (2026-05-21)
+
+User raised three follow-ups on slice 4d:
+1. `permissionMode=default` in the session-ready card - is `default` correct or should it be `auto`?
+2. Add small action-bar buttons on tree rows (`+` on task rows to spawn a session; play / `?` on session rows for canned prompts). Replace the top "+ New session" with "+ New task" (non-operational stub).
+3. Rework the per-turn card: title=Operator + body=user prompt; agent's reply gets title=Agent (was the cryptic "(claude-initiated)"). The "(session ready)" technical chatter should not occupy the assistant body slot - tuck it into Details.
+
+**Item 1 (explanation, no code change):**
+- `permissionMode` is emitted by claude itself in its init event. We don't pass `--permission-mode`; we rely on `--permission-prompt-tool` to route approvals through our MCP sidecar. Claude's four `--permission-mode` values (`default`, `acceptEdits`, `bypassPermissions`, `plan`) are orthogonal to InfiniContext's auto/ask/deny/allow setting. `default` means "ask the prompt-tool for each request" - which is exactly what we want.
+- Confirmed with user before any code change. If they want to force a different mode later, the hook is `ClaudeSessionOptions.ExtraArgs` (the builder already supports passing `--permission-mode plan` etc).
+
+**Item 2 - tree action bars:**
+- Bound action buttons in the row templates use `{Binding $parent[TreeView].DataContext.XxxCommand}` to reach the root VM, with `CommandParameter="{Binding}"` so the row VM travels with the click. Avoids back-references from row VMs to the root VM.
+- New commands on `MainWindowViewModel`:
+  - `SpawnSessionForTaskCommand(TaskNodeViewModel)` - extracted from the old `NewSessionAsync`. Spawns under the passed task's `HomeCwd` with `ActiveTaskId` set; falls back to the folder picker if the param is null or synthetic.
+  - `SendContinueCommand(SessionRowViewModel)` - sends the canned prompt `"Continue with the task."`.
+  - `SendWhatsNextCommand(SessionRowViewModel)` - sends `"What's next for the task?"`.
+  - `NewTaskCommand` - stub; sets `StatusText` to flag the gap until the dialog lands.
+- Canned-prompt path goes through a new private `SendToSessionAsync(target, text)` helper that does NOT use `FocusedSession`. The operator can ping a backgrounded session without losing focus on whatever they were reading. `SendPromptAsync` (the Ctrl+Enter / Send button path) was refactored to call the same helper.
+- Removed the obsolete `NewSessionCommand` VM property. The only consumer was the top button.
+- Row templates now have a third `Auto` column for the action stack. `Button.rowAction` style in `TreeView.Styles` keeps the buttons compact (22x22, padding 6,2, no border-heavy chrome).
+- Icons: `+` and `?` are plain ASCII; play uses `&#x25B6;` (BLACK RIGHT-POINTING TRIANGLE). Encoding stays safe.
+
+**Item 3 - Operator/Agent labels:**
+- `TurnNodeViewModel` got two `IReadOnlyList<string>` static markers: `SyntheticPrompts` (the placeholders that mean "no real user message") and `SyntheticHeadlines` (placeholders that mean "no real assistant body"). Derived bools `HasOperatorMessage` / `HasHeadline` drive `IsVisible` in XAML.
+- `UserPromptChanged` / `HeadlineChanged` partials raise `PropertyChanged` for the derived bools so the bindings refresh.
+- `SessionRowViewModel.ApplyEvent` SystemInitEvent branch no longer calls `ClosePendingTurnWith("(session ready)")`. Instead it pushes "(session ready)" into Children as a system note, leaves `Headline` empty, sets `IsInProgress=false`, and auto-expands the Details so the operator sees the session-init payload immediately (it's the only content the card has).
+- `AppendAssistantContent` switched the inline list of synthetic strings to `TurnNodeViewModel.SyntheticHeadlines.Contains(...)` so the same set drives both filtering and display.
+- XAML turn template now renders two stacked sub-blocks per card:
+  - Operator: `IsVisible="{Binding HasOperatorMessage}"`, Markdown body = UserPrompt.
+  - Agent: always visible, label = "Agent", Markdown body = Headline with `IsVisible="{Binding HasHeadline}"` so synthetic placeholders hide the body but keep the label.
+- Net effect: the first card after spawn shows `Agent` header + an empty body + an auto-expanded Details listing the init payload and the "(session ready)" marker. User prompts show `Operator` / their text and `Agent` / claude's reply stacked.
+
+**Encoding:** all four edited files (MainWindow.axaml, MainWindowViewModel.cs, TurnNodeViewModel.cs, SessionRowViewModel.cs) verified ASCII-only post-edit. Same UTF-8 byte scan as slice 4d.
+
+**Build status:** Gui project builds clean (0 warnings, 0 errors); `dotnet format --verify-no-changes` passes. Full-solution build still blocked locally by running CLI processes holding bin DLL locks; left untouched.
+
+**Follow-ups deferred:**
+- "+ New task" dialog (modal: title + folder picker, then `TaskStore.AllocateIdAsync` + `TaskFolder.ScaffoldAsync`). Stub button surfaces the missing flow.
+- The play / `?` buttons currently don't disable themselves when the session is not in a state to receive a prompt (e.g. mid-turn). Acceptable for the initial pass - claude itself will queue the input. Add `CanExecute` wiring if needed later.
+- The `$parent[TreeView].DataContext.XxxCommand` binding is correct in principle and the build accepts it; runtime resolution needs a real GUI launch to confirm the path is reachable from inside the nested `TreeDataTemplate`. If it doesn't resolve, fallback is to expose commands on the row VMs directly with a constructor-injected callback to the root VM.
+
+### Phase 3B slice 4f - left-tree clipping, markdown wrap, card typography (2026-05-21)
+
+User tested 4e and reported five follow-ups:
+1. Buttons fire correctly (confirmed).
+2. Action bar buttons are clipped on long task titles - a horizontal scroll bar appears in the left panel and the buttons sit off-screen until the operator scrolls right. Layout needs to be redone.
+3. MarkdownScrollViewer is not wrapping or scrolling - long lines disappear off the right edge.
+4. The Operator card should not show the "Agent" label until claude has actually replied; for the operator-only state, keep only the operator message + Details.
+5. Operator/Agent labels are too prominent (SemiBold 13). Want them small + grey like the original `&#x1F464;` user-prompt header. Same treatment for the Details expander toggle.
+
+**Item 2 - action bar layout:**
+- Row template restructured. Was a three-column Grid with actions on the rightmost `Auto` column - long titles pushed the Auto column past the visible panel.
+- Now the row is a vertical StackPanel: top row = `Grid ColumnDefinitions="Auto,*"` (glyph + title content), bottom row = action StackPanel indented by ~20-22 DIP (visually aligned under the title). Always visible regardless of title length.
+- Added `TextTrimming="CharacterEllipsis"` to the title TextBlocks so a wide row truncates instead of triggering horizontal scroll in the TreeView.
+
+**Item 3 - markdown wrap:**
+- Root cause: Markdown.Avalonia 12.0.0-a2 alpha renders paragraphs into TextBlock-derived controls without setting `TextWrapping="Wrap"`. With `ScrollViewer.HorizontalScrollBarVisibility="Disabled"` the content is clipped instead of scrolled or wrapped.
+- Fix: two Window.Styles selectors force every TextBlock / SelectableTextBlock inside any `md|MarkdownScrollViewer` to wrap. Targeted by namespace prefix (`md|...`) so the rule doesn't spill onto unrelated TextBlocks elsewhere in the window.
+- Code blocks intentionally NOT covered - those should keep `NoWrap` and H-scroll inside their fence (alpha may not honor that yet; revisit when the library has a stable 12.x).
+
+**Item 4 - hide Agent label while thinking:**
+- Agent block (`<StackPanel Spacing="2">`) now has `IsVisible="{Binding HasHeadline}"` on the outer container. While the headline is the synthetic "thinking..." placeholder, `HasHeadline` is false and the whole label+body block hides.
+- Replaced the spinner-in-line-with-Agent-body with a small horizontal indicator (`hourglass` + "thinking...") that's visible only while `IsInProgress`. So the operator still sees a "claude is working" signal, just without a misleading "Agent" label attached to an empty body.
+
+**Item 5 - smaller grey labels:**
+- Operator/Agent labels: `FontWeight="SemiBold" FontSize="13"` -> `FontSize="11" Opacity="0.7"`. Matches the original `&#x1F464; <prompt>` typography that was there before slice 4e.
+- Details expander toggle (`Expander /template/ ToggleButton` style) gained `FontSize="11"` + `Opacity="0.7"` so the toggle pill matches the speaker labels in weight.
+
+**Encoding:** MainWindow.axaml verified ASCII-only after edits.
+
+**Build status:** Gui project builds clean (0/0); `dotnet format --verify-no-changes` passes.
+
+**Follow-ups still deferred:**
+- "+ New task" dialog wiring (still a stub).
+- Per-action `CanExecute` (play/question buttons stay enabled mid-turn).
+- Code-block wrap/scroll under Markdown.Avalonia 12.0.0-a2 alpha - not addressed here, may need a stable upstream release.

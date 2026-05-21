@@ -87,12 +87,19 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         switch (ev)
         {
             case SystemInitEvent init:
-                EnsurePendingTurn(initialPrompt: "(session start)")
-                    .Children.Add(new TurnContentItemViewModel(
-                        TurnContentKind.System,
-                        $"system/init model={init.Model ?? "?"} cwd={init.Cwd ?? "?"}",
-                        $"claude_code_version={init.ClaudeCodeVersion ?? "?"}\npermissionMode={init.PermissionMode ?? "?"}"));
-                ClosePendingTurnWith("(session ready)");
+                var initTurn = EnsurePendingTurn(initialPrompt: "(session start)");
+                initTurn.Children.Add(new TurnContentItemViewModel(
+                    TurnContentKind.System,
+                    $"system/init model={init.Model ?? "?"} cwd={init.Cwd ?? "?"}",
+                    $"claude_code_version={init.ClaudeCodeVersion ?? "?"}\npermissionMode={init.PermissionMode ?? "?"}"));
+                // "(session ready)" is technical chatter, not an assistant reply - park it in
+                // Details and leave the Agent body empty so the card reads as a status note.
+                initTurn.Children.Add(new TurnContentItemViewModel(
+                    TurnContentKind.System, "(session ready)", ""));
+                initTurn.Headline = "";
+                initTurn.IsInProgress = false;
+                initTurn.IsExpanded = true;
+                _pendingTurn = null;
                 break;
 
             case AssistantEvent asst:
@@ -146,7 +153,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             switch (block)
             {
                 case TextBlock text:
-                    if (!string.IsNullOrEmpty(turn.Headline) && turn.Headline != "thinking..." && turn.Headline != "(session ready)" && turn.Headline != "(claude-initiated)")
+                    if (!string.IsNullOrEmpty(turn.Headline) && !TurnNodeViewModel.SyntheticHeadlines.Contains(turn.Headline))
                     {
                         turn.Children.Add(new TurnContentItemViewModel(
                             TurnContentKind.System,
