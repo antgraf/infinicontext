@@ -65,3 +65,18 @@ Post-bump scan: Core + Gui build green (0 warnings, 0 errors). `dotnet list pack
 - `Serilog` 4.3.1, `Serilog.Sinks.File` 7.0.0 - latest stable.
 - `Spectre.Console` 0.55.2 + `Spectre.Console.Testing` 0.55.2 - pinned per Stage 2B D17 (Dependabot/manual upgrades as separate PRs).
 - `xunit` 2.9.3 - latest 2.x stable.
+
+### NuGet refresh part 2 (2026-05-20) - Avalonia 12.0.3 + held-item decisions
+
+User decisions on the three held items:
+
+- **Avalonia 11.3.16 -> 12.0.3.** Bumped. The minimal scaffold (FluentTheme, DockPanel/Grid/Border/StackPanel/TextBlock, WithInterFont, compiled bindings) has no API surface that v12 changed, so XAML and code-behind compile without modification. Debug + Release builds green; 0 warnings, 0 errors. **Caveat:** `Avalonia.Diagnostics` has not shipped a 12.x release (latest 11.3.16 as of 2026-05-20); mixing it with Avalonia 12 is unsafe (overlay hooks into Avalonia internals). The csproj reference was removed with an inline comment explaining the gap - re-add when 12.x lands. Dev-only diagnostic overlay is the only thing we lose; not load-bearing for the scaffold.
+- **FluentAssertions stays at 7.2.0.** "Use the latest non-commercial one" - 7.2.0 IS the latest non-commercial FluentAssertions; 7.2.0 was the final MIT release before 8.0 moved to the Xceed XPL. No 7.3.x patches were issued. No action required.
+- **Microsoft.NET.Test.Sdk stays at 17.14.1.** "Match FluentAssertions as needed" - FA isn't moving, so neither is Test.Sdk. v18 is a major bump (changed test-discovery internals) and we have no concrete reason to swallow that risk now.
+
+Post-bump scan: zero vulnerable packages across all six projects (Avalonia 12.0.3 also vendors a non-vulnerable Tmds.DBus.Protocol; the 11.3.16 fix carries forward into 12.x).
+
+### Known follow-ups (carry-over)
+
+- Re-add `Avalonia.Diagnostics` when its 12.x release ships. Watch https://www.nuget.org/packages/Avalonia.Diagnostics.
+- The held FluentAssertions + Test.Sdk evaluation pair stays open as a future test-infra hardening task. If `AwesomeAssertions` (community fork of FA 7) gets traction, it's a drop-in replacement worth considering. Not on the immediate path.

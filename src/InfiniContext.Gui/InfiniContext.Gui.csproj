@@ -20,11 +20,15 @@
       in infinicontext-initial-design.md s6.1 and confirmed in stage2/decisions.md s13.
       CommunityToolkit.Mvvm is the recommended MVVM flavour per Phase 3A design.md s10 #1.
     -->
-    <PackageReference Include="Avalonia" Version="11.3.16" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.16" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.16" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.16" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.16" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="Avalonia" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.3" />
+    <!--
+      Avalonia.Diagnostics has not shipped a 12.x release yet (latest 11.3.16 as of 2026-05-20).
+      Mixing Diagnostics 11.x with Avalonia 12.x is unsafe - the debugger overlay hooks Avalonia
+      internals. Re-add this reference when AvaloniaUI/Avalonia.Diagnostics 12.x is published.
+    -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
