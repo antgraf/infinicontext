@@ -497,3 +497,17 @@ Picks up follow-up #1 from the 4i flush note: extend the delegate so auto-mode s
 - "Pending approval (N)" badge in the status strip for multi-session backlog.
 - `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`.
 - **New:** wire the GUI's approval mode toggle. The signature unblock is in; the GUI now needs either a settings-driven default (`approval.mode` from `settings.json`) routed through `ApprovalSinkFactory.Build`, or a UI mode dropdown. Either way the factory closure has the cwd available now.
+
+### Flush note (hard threshold, 2026-05-21 post-4j)
+
+Host hit hard context-pressure threshold immediately after slice 4j landed. Nothing partial on disk - the slice closed cleanly:
+
+- `867c169` Phase 3B slice 4j (SessionApprovalSinkFactory carries per-session cwd).
+
+Working tree clean. Full test suite green (**981 passed / 3 POSIX-skipped / 0 failed**, parity with 4i). Format gate clean. `dotnet build InfiniContext.slnx -c Release` green (0 warnings, 0 errors). Live GUI smoke test of the new signature path was not performed - the operator owns that verification, and per the 4i flush note two pre-existing `InfiniContext.Gui.exe` instances may still be running and holding Debug binaries.
+
+**Next session pick-up, in priority order (from the 4j entry's follow-ups):**
+1. Wire the GUI's approval mode toggle. Two viable shapes: (a) read `settings.Approval.Mode` from `settings.json` at GUI startup and route it through a CLI-style `ApprovalSinkFactory.Build` in `SessionHost.cs`, or (b) add a mode dropdown to the GUI status strip and route changes through `SessionContext.ApprovalSink.Switch(newInner)` the same way the CLI's `/approval` handler does. Cwd is now plumbed (slice 4j); auto-mode safety prompt is cwd-aware (slice 4h). The only missing piece is the consumer.
+2. Live per-second countdown in the approval banner (`DispatcherTimer`; cheap polish).
+3. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+4. `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (AutoApprovalSink, ConsoleEchoingApprovalSink, ApprovalSinkFactory test links still present even though their production types remain CLI-internal - revisit if/when any of those promote to Core).
