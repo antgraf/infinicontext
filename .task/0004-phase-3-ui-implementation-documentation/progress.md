@@ -454,3 +454,18 @@ Closes the largest gap left by slice 4h: the GUI no longer auto-allows every too
 **Follow-ups added:**
 - Live per-second countdown in the approval banner (cheap `DispatcherTimer`; minor polish).
 - Per-row approval indicator: today only the focused pane shows the banner; off-screen sessions waiting on approval are only flagged by the tree-row `StatusGlyph`. A small "Pending approval (N)" badge in the status strip would surface multi-session backlog.
+
+### Flush note (hard threshold, 2026-05-21 post-4i)
+
+Host hit hard context-pressure threshold immediately after slice 4i landed. Nothing partial on disk - both commits closed cleanly:
+
+- `f555329` Phase 3B slices 4g + 4h (StaticApprovalSink -> Core, GUI Allow stop-gap, cwd-aware safety prompt).
+- `9f53d80` Phase 3B slice 4i (banner-routed approval sink, SlotApprovalSink -> Core public + writeTranscriptBanner flag).
+
+Working tree clean. Full test suite green (981 passed / 3 POSIX-skipped). Format gate clean. Two pre-existing `InfiniContext.Gui.exe` instances were running during the slice and still hold the Debug binaries; **a live GUI smoke test of the new approval banner has not been performed** - the operator owns that verification.
+
+**Next session pick-up, in priority order (from the 4i entry's follow-ups):**
+1. Extend `SessionApprovalSinkFactory` signature to carry per-session `cwd`. Today it's `(slot, transcript)`; needs to become `(slot, transcript, cwd)` so the GUI can wire auto-mode (light-model safety review with the cwd-aware safety prompt landed in 4h) symmetrically with the CLI. This unblocks GUI auto-mode entirely.
+2. Live per-second countdown in the approval banner (DispatcherTimer; cheap polish).
+3. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+4. Housekeeping: there is no longer any reason for the `<Compile Include>` link pattern for files that have all moved to Core. The remaining links in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (AutoApprovalSink, ConsoleEchoingApprovalSink, ApprovalSinkFactory, etc.) are still CLI-internal; revisit if/when any of those follow the same Core-promotion path.
