@@ -75,4 +75,4 @@ The following code shipped on `main` in commit `72f92ff` unvalidated against a r
 
 After the first green `ci-macos.yml`, append a "macOS validation: passed on YYYY-MM-DD via run #N" line below.
 
-**macOS validation:** _pending first `workflow_dispatch`_
+**macOS validation:** passed on 2026-05-20 via the first `ci-macos.yml` `workflow_dispatch`. All `[MacOnlyFact]` `PosixSignalSupervisorTests` cases ran green on `macos-latest`; the Phase 7 POSIX supervisor (`PosixSignalSupervisor`), case-sensitive filesystem hardening (`FileSystemNaming`), and the multi-session lock-contention E2E test (`MultiSessionLockContentionTests`) are now validated end-to-end. Stage 2B is closed.

@@ -515,7 +515,7 @@ Not user-visible; load-bearing for everything that follows.
 - `/task switch` on a stale row (deleted folder) refuses with a clear "/task delete to drop" message rather than spawning into nothing.
 - Full unit/integration suite green (Windows-only — macOS lands in 2B).
 
-**Estimated effort:** 3–5 weeks. Mostly shipped; remaining items live in `docs/stage2/todo.md` §A–B and `docs/todo.md`.
+**Estimated effort:** 3–5 weeks. Mostly shipped; remaining items live in `docs/todo.md` §A–B and `docs/todo.md`.
 
 **Stage 2A is Windows-only.** The macOS supervisor backend, CI matrix, and any case-sensitive-filesystem hardening land in Stage 2B.
 
@@ -534,7 +534,7 @@ Not user-visible; load-bearing for everything that follows.
 - **Tool approval UI per session:** approval prompts queue inline in the session's pane, never modal; tab-scoped. Multiple concurrent approvals across sessions handled in parallel.
 - **Schema-drift counter** visible in the status bar (per-session unknown-event count).
 - **macOS supervision (§5):** signal-handler / `ProcessExit` implementation lands here; `IProcessSupervisor` resolves to the platform-specific backend at startup.
-- **macOS-specific hardening:** case-sensitive filename compare in `TaskFolder` / `TaskService` (`OrdinalIgnoreCase` only when `RuntimeInformation.IsOSPlatform(OSPlatform.Windows)`; otherwise `Ordinal`). Filed in `docs/stage2/todo.md` §B as C7.
+- **macOS-specific hardening:** case-sensitive filename compare in `TaskFolder` / `TaskService` (`OrdinalIgnoreCase` only when `RuntimeInformation.IsOSPlatform(OSPlatform.Windows)`; otherwise `Ordinal`). Filed in `docs/todo.md` §B as C7.
 - **CI matrix:** `dotnet test` runs on `windows-latest` and `macos-latest`. The test matrix is the macOS validation gate — tests must pass on Mac before Stage 2B is signed off.
 - **Tests:** session-manager tests, broadcast fan-out, resume flow, multi-session approval queueing. The Stage 2A multi-session lock-contention E2E test (filed as T4) lands here if not before.
 - **Logging:** per-session correlation in log lines (already designed in §7.4) plus broadcast-fan-out log entries.

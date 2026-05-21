@@ -1976,3 +1976,51 @@ The next productive move on the review surface is either (a) re-running `/task r
 - `.task/0003-.../progress.md` (this entry)
 - `.task/0003-.../index.md` (date bump)
 
+## 2026-05-20 (Stage 2B closure + todo consolidation)
+
+User reported `ci-macos.yml` dispatch passed end-to-end (the macOS validation line in `docs/stage2/exit-checklist.md` was the last remaining Stage 2B exit bullet) and asked to fold the forward-looking work queue into a single file under `docs/todo.md` since Stage 2B is now done.
+
+### Files changed
+
+- `CLAUDE.md` - rewrote the "What this is" paragraphs to declare Stage 1 + Stage 2A + Stage 2B all done (closed 2026-05-20); pointed the forward queue at `docs/todo.md` instead of `docs/stage2/todo.md`; updated the Process supervision and Conventions paragraphs that previously said macOS code was "unvalidated until Phase 8 CI" - they now say validated end-to-end via the first `ci-macos.yml` `workflow_dispatch` on 2026-05-20 (per D16 / D37). One historical artifact survives in line 11 as a `<!-- stage-2b-historical: ... -->` HTML comment - the en-dash in the original "Phases 1-7" chunk could not be cleanly removed via the Edit tool's encoding pipeline, so the chunk is hidden in a comment that doesn't render in Markdown. Cosmetic only; can be hand-cleaned later.
+- `docs/stage2/exit-checklist.md` - the macOS-validation footer line flipped from "_pending first `workflow_dispatch`_" to "passed on 2026-05-20 via the first `ci-macos.yml` `workflow_dispatch`. All `[MacOnlyFact]` `PosixSignalSupervisorTests` cases ran green on `macos-latest`; the Phase 7 POSIX supervisor, case-sensitive filesystem hardening, and the multi-session lock-contention E2E test are now validated end-to-end. Stage 2B is closed."
+- `docs/todo.md` - bumped snapshot date to 2026-05-20; absorbed the former `docs/stage2/todo.md` queue as a "Broader queue" section split into A through I subsections matching the source file's structure. The 6 numbered "actionable today" items at the top are preserved verbatim. The broader queue is written ASCII-only (em-dashes and en-dashes replaced with " - " hyphens) to dodge the same Edit-tool encoding issue noted in the CLAUDE.md entry. Total file went from ~160 lines to 283 lines, 67 Source references.
+- `docs/stage2/todo.md` - `git rm`'d. Other historical pointers in `.task/0003/...`, `.task/0004/...`, `docs/stage2/decisions.md`, and `docs/stage2/exit-checklist.md` still reference the old path, but those are frozen-in-time progress / decision logs and pointers from a moment when the file existed. Only the live forward-looking design doc (`docs/infinicontext-initial-design.md`) was updated to point at `docs/todo.md`.
+- `docs/infinicontext-initial-design.md` - 2 occurrences of `docs/stage2/todo.md` replaced with `docs/todo.md` via `replace_all`.
+
+### Encoding hazard noted for future sessions
+
+The Edit tool's old_string matching does NOT round-trip the en-dash character (U+2013) - and possibly other special Unicode characters - through the harness encoding layer. Symptom: `Edit { old_string: "Phases 1-7 ..." }` where the dash is an en-dash will return `String not found in file` even when the file contains the exact byte sequence. Workaround: use ASCII anchors before/after the en-dash and bracket the problematic character inside an HTML comment (`<!-- ... -->`) if the file is Markdown. Also: the Write tool round-trips em-dashes (U+2014) incorrectly - they came out as Cyrillic letters (`╤В` `╨Р` `╨д`) in a Write call this session, requiring a `git restore --source=HEAD` to recover CLAUDE.md. Edit is safer than Write for files containing non-ASCII punctuation; keep new_string ASCII-only when possible.
+
+### Stage 2B closure - what changed in the world
+
+- Stage 2B is now formally closed. The remaining work (Phase 4c real-Spectre UI, TranscriptModel disk overflow, throttled last_active, true Tab/Shift+Tab keybindings, trusted-cwds banner, per-session settings overrides, broadcast picker, real-spawn broadcast E2E test) is in `docs/todo.md` section C as "deferred from Stage 2B, tracked but not blocking."
+- The 11 review-report user-decision-blocked findings (sec-002 remainder, sec-003, sec-005, arch-002, arch-005, arch-006+007, arch-008, arch-009, arch-011) plus 3 reviewer-prompt parser failures are in `docs/todo.md` section I.
+- The two `/task spawn` follow-ups (LeaveAsync wiring, E2E test) are also in section I.
+- Next strategic milestone: Stage 3 (Avalonia GUI), starting with a written design proposal. Estimated 4-8 weeks per the initial design doc.
+
+### Not committed yet at flush time
+
+7 file changes uncommitted:
+
+- M `CLAUDE.md`
+- M `docs/stage2/exit-checklist.md`
+- D `docs/stage2/todo.md` (staged via `git rm`)
+- M `docs/todo.md`
+- M `docs/infinicontext-initial-design.md`
+- M `.task/0003-.../progress.md` (this entry)
+- M `.task/0003-.../index.md` (date bump for progress.md row)
+
+Recommended commit shape: **single commit** titled e.g. `Stage 2B closure: macOS CI validated; consolidate todo into docs/todo.md.` All seven files are conceptually one change set ("Stage 2B is done; reorganize the queue accordingly"); splitting wouldn't help the log.
+
+### Handoff to next session
+
+If a fresh session picks this up, the canonical pointers are:
+
+- `CLAUDE.md` "What this is" - reflects current state.
+- `docs/todo.md` - the single forward queue.
+- `docs/stage2/decisions.md` - historical decisions (D1 through D37); not deleted because it's a permanent record.
+- `docs/stage2/exit-checklist.md` - historical exit-criteria map with the now-green macOS validation line; not deleted.
+
+Next planned action is Stage 3 design proposal kickoff (per `docs/todo.md` section D). The /task review feature dogfood pass (re-run after tightening `ReviewerPrompts.cs`) is also ripe for next session.
+

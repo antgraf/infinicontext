@@ -1,8 +1,8 @@
 # InfiniContext — Open Engineering Items
 
-Snapshot date: **2026-05-08** (post Session 5 of `.claude/tasks/20260507-manual-test-session/`).
+Snapshot date: **2026-05-20** (post Stage 2B close: macOS CI dispatched and validated; absorbed the former `docs/stage2/todo.md` queue into this single file).
 
-This list is the carry-over from the manual-test-session task after auto-approval performance and `/task` home_cwd realignment landed. Each item is written to be picked up cold — file paths, decisions to consult, acceptance criteria, and cost estimates inline. Items are independent unless noted.
+This file is the single consolidated work queue for InfiniContext. Items 1-6 below are the "actionable today" pile with full files-to-touch / acceptance / cost detail (carried over from the manual-test-session task after auto-approval performance and `/task` home_cwd realignment landed). After item 6, sections A through I capture the broader queue absorbed from the former `docs/stage2/todo.md` on 2026-05-20: open bugs and hardening (┬зA), Stage 2A leftover items (┬зB), items deferred from Stage 2B (┬зC), Stage 3 (┬зD), Stage 4 (┬зE), light-model research follow-ups (┬зF), fixture/testing follow-ups (┬зG), and `/task review` / `/task spawn` follow-ups (┬зI). Each item is written to be picked up cold — file paths, decisions to consult, acceptance criteria, and cost estimates inline. Items are independent unless noted.
 
 When you complete an item, **delete its section from this file** (the canonical truth lives in code + decision records; this file is a queue, not a log).
 
@@ -158,3 +158,126 @@ Session 5 hit the equivalent issue for `lightModelForTasks` and fixed it via `aw
 - **Decision records** at `.claude/tasks/20260507-manual-test-session/decisions.md` — D1–D13 cover the light-model architecture. New decisions should append.
 - **Research doc** at `docs/research/claude-cli-light-model.md` — canonical, externally-publishable. Any new bench data goes into the sister `docs/research/claude-cli-light-model/` folder.
 - **Build/test commands** are in `CLAUDE.md` at the repo root.
+
+---
+
+# Broader queue (absorbed from former `docs/stage2/todo.md`, 2026-05-20)
+
+The items below were the long tail of InfiniContext deferred work. They lived in `docs/stage2/todo.md` while Stage 2B was in flight; once Stage 2B closed (2026-05-20, after `ci-macos.yml` ran green on `macos-latest`) the queue was folded into this file so there is one place to look. Format follows the prior file: brief item summaries with file pointers and source references; full design context lives in the linked decisions / progress documents.
+
+When an item is picked up, **remove its bullet from this file** (or promote it into the numbered items 1-6 pile above first if a real "actionable today" workup is needed, then remove from there when shipped).
+
+## A. Bugs and hardening (open queue, not yet in the numbered list above)
+
+- **C-6 - `.cmd` shim spawn under `UseShellExecute=false`.** Documented-fragile across .NET runtime versions; path with `%` in `Path.GetTempPath()` could be misquoted. Not observed. Files: `ClaudeArgvBuilder.ResolveExecutable`. Source: `20260506-review-stage1-poc`.
+- **C-4 / C-5 - narrow races.** Process-handle race in `Attach` failure path; `mcp-config` temp-file leak window. Safe-by-construction with `await using` but not zero-risk. Source: `20260506-review-stage1-poc`.
+- **`SessionStateMachine` adversarial test gaps.** `JobObjectSupervisor` double-Dispose; `Attach` of already-exited process; `McpServer` `tools/call` missing `arguments`; notification-style `tools/call` (no `id`). Source: `20260506-review-stage1-poc/context.md`.
+- **Flakiness watch.** `Script_slow_stream_remains_in_streaming_through_inter_event_gap` (200 ms sleep / 150 ms assert); `SidecarSmokeTests.Sidecar_handshake_then_tools_list...` (5 s read timeout); `Repl_renders_*` (20 s `WaitForExit`). Source: `20260506-review-stage1-poc/context.md`.
+- **Automated Ctrl+C smoke test never landed** (deferred from Stage 1G to 1H, still open). Cross-platform Ctrl+C synthesis is fiddly. Source: `20260506-poc/decisions.md`.
+- **`BelowMinimum` does not yet block.** `ClaudeVersionPolicy` logs error but allows spawn; should eventually hard-fail. Source: `20260506-poc/decisions.md`.
+- **`/task relocate <id> <new-home>`** - move the folder (if present) and update the DB row to fix stale `home_cwd` entries. The 2026-05-09 manual-testing follow-ups for "validate home_cwd at switch time" and "reject build-output `--home` paths" already landed in `TaskService.PrepareSwitchAsync` and `TaskService.CreateAsync` respectively. Source: `.claude/tasks/20260509-manual-testing-session/research.md`.
+- **Smoke tests create real SQLite at `~/.infinicontext/infinicontext.db`.** Easy follow-up: set `INFINICONTEXT__TASKS__DBPATH` to a temp path in the smoke driver. Source: `20260507-tasks-and-sessions-management/progress.md` Phase 5 known caveat.
+- **Update `ApprovalSinkFactory.cs:73` warning text** - be specific about OAuth-vs-API-key gap and link `console.anthropic.com`. *May already be done in Session 4; verify.* Source: `20260507-manual-test-session/findings.md`.
+- **Out-of-process "kill host -> child cleanup" integration test.** Spawn `InfiniContext.Cli` as a child, `/n` one or two sessions, kill the host, scan for orphan PIDs. Deferred per D37 (per `docs/stage2/decisions.md`): the existing `JobObjectSupervisorTests` (Windows, same kernel path as host crash) and `PosixSignalSupervisorTests` (POSIX SIGTERM path) cover the kill primitives; the integration gap is the disposal-cascade wiring, which manager-level disposal tests cover indirectly. Files: new `tests/InfiniContext.Tests/Cli/KillHostCleanupTests.cs` (~100 LOC). Source: `20260516-phase-8`.
+
+## B. Stage 2A leftover items (tasks and sessions)
+
+- **T3 - outer-loop refactor into `HostLoopState` / `TaskActivityCoordinator`.** Extract state machine from `Program.cs` outer loop so status flips, `pendingFirstUserMessage` clearing, and skill-install-warning path are unit-testable against synthetic `ReplResult` values. Source: `20260507-discuss-and-apply/progress.md`.
+- **A4 (full) - `Program.cs:169, 234` status-flip writes** still use `DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()` directly. Natural injection point is T3's extracted `HostLoopState`. Source: same.
+- **A6 - `TaskService.MergeAsync` should go through `TaskFolder` ops** (`WriteArtifactAsync` / `ReadArtifactAsync` / `MergeArtifactsAsync`) instead of raw `File.Read/WriteAllTextAsync`. Files: `TaskService.cs:139-165`. Defer until light/full-model merge tiers ship. Source: same.
+- **C6 - `parent_task_id` index.** Add `CREATE INDEX idx_tasks_parent ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;` as a **new `Migration_002_*`** (never edit `Migration_001`). Defer until lineage queries land. Source: same.
+- **T5 - `SkillInstaller` startup-integration smoke test.** Pre-create v1 `SKILL.md` in temp `HOME`, launch `infinicontext run`, assert file is now v2. Review's own confidence Low. Source: same.
+- **A8(b) - `protocol_version` field on every lock/approval message** (default 1). Buys nothing today; revisit when older host meets newer sidecar. Source: same.
+- **C2(b) - non-blocking dispatch in `ApprovalChannel.RunServerAsync`** so long approvals don't serialize lock releases. C2(a)'s cross-rule validator closes the foot-gun; defer the deeper refactor. Source: same.
+- **Cherry-pick test gaps.** `LockAcquireResponse.FromJson` round-trip on failure shape; `LockRegistry` same-owner re-acquire semantics; `TaskFolder.DetectDriftAsync` on malformed `index.md`; `TaskStore.AllocateIdAsync` concurrent calls. Source: same.
+- **Light-model and full-model merge tiers** - currently throw `NotImplementedException`; only `DeterministicConcat` ships. Source: `20260507-tasks-and-sessions-management/design.md` section 2.4, `plan.md`.
+- **`InSync` / `Stale` status states.** MVP ships only `InProgress` and `Idle`. Source: `20260507-tasks-and-sessions-management/plan.md`.
+- **`/task switch` while another session is running on the same task** should error cleanly. Multi-session orchestration UX is post-MVP. Source: same.
+- **Task rename / archival UX.** Post-MVP. (`/task delete` shipped in 2A.) Source: `20260507-tasks-and-sessions-management/decisions.md`, `docs/cli/howto/task-commands.md`.
+- **Hard-threshold force-flush guardrail.** Design sketched in `design.md` section 8; MVP omits. If telemetry shows non-compliance, add an `InterruptAsync`-backed cancel path. Source: same (Phase 8).
+- **Automatic successor-session spawn after flush** - host fires the next session without user "go". Part of the "long-running uninterruptible sessions" workstream. Source: `20260507-tasks-and-sessions-management/design.md` section 8.3.
+- **Host-controlled flush on errors/cancels** - guarantee artifacts consistent even on crash paths. Future session-reliability task. Source: same.
+- **Cross-machine ID coordination.** Host-local SQLite means IDs aren't globally unique across machines. Source: same.
+- **Light-model bulk-regeneration of `index.md` as explicit user command.** Possible later as user-invoked feature; explicitly NOT automatic. Source: `20260507-tasks-and-sessions-management/design.md` section 3.4.
+- **Slug recovery via `Slugify.For(title)`.** `TaskRecord` doesn't store the slug; recomputed from stored title. Works until rename lands; when it does, swap to folder-discovery scan over `<id:D4>-*`. Source: Phase 3 progress.
+- **Multi-parent lineage.** Schema records only one `parent_task_id`; multi-parent is post-MVP. Captured as class-level note on `MergeAsync`. Source: Phase 3 progress.
+- **Cross-home `/task merge`.** Guard: "All merge sources must share the same home_cwd. Cross-home merge is post-MVP." Source: `TaskService.cs:117-119`, `20260509-manual-testing-session/research.md`.
+- **Author `docs/cli/howto/commands.md`** - long-form REPL-only reference; link out to `docs/cli/howto/task-commands.md` rather than duplicate. Explicitly deferred to a separate task. Source: `20260509-improve-cli-repl-help/decisions.md` D2/D8.
+- **`/issue promote <n>`** - spin an open `issues.md` entry out into a new task: seed `description.md` from the issue body, mark the source issue as `filed-as-task <new-id>`, optionally record `parent_task_id` lineage. Postponed from the v1 `issues.md` design (2026-05-17 conversation). The done-gate / task-completion ceremony is also postponed pending a full requirements + design cycle; v1 has no review gate, user runs `/issue list` on demand. Source: 2026-05-17 issues.md design conversation.
+
+## C. Deferred from Stage 2B (tracked here; not blockers)
+
+- **Phase 4c - real Spectre `Layout` + `Live` continuous repaint** (per D29). Requires `Console.ReadKey`-based input loop (prerequisite for true `Tab`/`Shift+Tab` keybindings). Also bundles `Ui/SessionListView.cs`, `Ui/SessionView.cs`, `Ui/StatusBar.cs`, persistent schema-drift counter in status bar. Adopting `Console.ReadKey` would ripple through `StringReader`-based test fixtures and the `Process.StandardInput.Write` smoke-test pipeline; only worth landing if the slash-command UX (`/focus`/`/next`/`/prev`, `/list`) proves too rough in real use.
+- **`TranscriptModel` on-disk overflow** (per D20). Currently a bounded in-memory ring (10 000 entries, `DropOldest`); D4 envisions disk-backed overflow per `~/.infinicontext/transcripts/<session_id>.log`. Pair with Phase 4c when there's a continuous-render consumer to validate the design against.
+- **Throttled mid-session `last_active` updates to the session index** (per D22). Phase 3 writes only on close. The throttled `last_active` from D5 lands with Phase 4c if/when a UI consumer needs "recently used" sorting of *live* sessions.
+- **True `Tab` / `Shift+Tab` keybinding for focus rotation** (per D7/D29). `/next` and `/prev` slash commands are the Phase 4b substitute.
+- **"Trusted cwds" first-time-discovery banner** - explicitly deferred past Stage 2B per D15. Orthogonal to multi-session mechanics; will become its own task.
+- **Per-session settings overrides** - Stage 3 UX territory per D10.
+- **N1 - `r` key shortcut for `/resume <highlighted row>`.** Same `Console.ReadKey` dependency as `Tab`; lands with Phase 4c if at all.
+- **`b` key + Spectre `MultiSelectionPrompt` picker for `/broadcast`.** Plan section 6 sketched a "press `b` -> checkbox-pick -> one prompt" flow as the broadcast UI; Phase 6 shipped only the slash-command surface. Same `Console.ReadKey` dependency as `Tab`/`r`; lands with Phase 4c iff comma-prefix selection feels clunky in real use for >=4 targets.
+- **Real-spawn broadcast fan-out test.** Phase 6 tests drive `BroadcastAsync` against the in-memory `RecordingSession` and `FakeSession`. The end-to-end version (two FakeClaude processes via `SessionManager.CreateAsync`, one `/broadcast` line, both transcripts converge) was deferred; the exit-criteria smoke battery exercises the wiring at unit level.
+- **C-1 deeper restructure (stdin/stdout deadlock).** Current `DropOldest` mitigation suffices through Phase 4b. Stage 2 should consider a dedicated stdin-writer task driven by a queue if multi-session contention surfaces deadlocks. Files: `ClaudeSession.cs` (write path). Source: `20260506-poc/decisions.md` (Pending), `20260506-review-stage1-poc/context.md`.
+
+## D. Stage 3 (Avalonia GUI)
+
+- **Avalonia 11.x app on Win + Mac.** Begins with a written design proposal; supersedes `infinicontext-initial-design.md` section 9 Stage 3. Estimated 4-8 weeks.
+- **MVVM flavour decision: CommunityToolkit.Mvvm vs ReactiveUI.** Deferred to Stage 3 spike. Source: `infinicontext-initial-design.md` section 8 item 5.
+- **Markdown library decision: Markdown.Avalonia vs alternative.** Source: `infinicontext-initial-design.md` section 8 item 6.
+- **Collapsible tree view per session.** Each turn = root; assistant text/thinking/tool calls/sub-agents = children. Markdown rendering with syntax-highlighted code blocks. Source: `infinicontext-initial-design.md` section 4.7 / 9.
+- **Persistence escalation decision.** Flat JSON vs SQLite for non-task host state - stay flat unless query patterns force the upgrade. (Task registry is already SQLite per Stage 2A.) Source: `infinicontext-initial-design.md` section 9.
+- **Settings UX scope.** Model per session, allowed-tools selection, env overrides - table editor or per-spawn dialog. Source: same.
+- **Lazy-loading large tool results.** `VirtualizingStackPanel` + on-expand `Read` from Claude's jsonl. Source: `infinicontext-initial-design.md` section 6.2 / 9.
+- **Host-side slash commands.** `/clear`, `/cost`, `/model`, `/resume <id>` - not a terminal. Source: same.
+- **Aggregate status strip.** Counts (idle / working / awaiting-approval / schema-drift); full dashboard v2 if it adds value. Source: same.
+- **Decoded `stream_event` inner discriminator.** Modeled as `JsonElement` for now; decode only when Stage 3 needs it. Files: `Events/ClaudeEvent.cs`. Source: `20260506-poc/stage-1-plan.md`.
+- **Hand-rolled parser converters revisited.** Parser uses `JsonNode` round-trip; hand-rolled can come back if Stage 3 needs typed access to deeply nested fields (e.g. `assistant.message.content[i].input`). Source: `20260506-poc/decisions.md`.
+- **Tree-view UI.** Source: `20260507-tasks-and-sessions-management/decisions.md`, `design.md` section 6.
+- **Auto-start mode.** UI checkbox firing off agents without confirmation - footgun to design carefully. Source: same.
+
+## E. Stage 4 (release engineering)
+
+- **macOS code-signing / notarization.** Flagged as a Stage 4 problem. Source: `infinicontext-initial-design.md` section 6.1.
+
+## F. Light-model research follow-ups (beyond items 2-5 above)
+
+- **Investigate single-shot wall-clock variance.** Native p95 of 17 s on uncapped variant still rough; check if nothink+cap closed the tail enough. Source: `20260507-manual-test-session/findings.md` section 7.
+- **How does long-lived child interact with rate limits across the rest of InfiniContext?** Source: same.
+- **Long-lived process supervision details.** Crash restart, drain stdin/stdout cleanly on host shutdown, integrate with `IProcessSupervisor` Job Object on Windows. Source: same.
+- **Track GH `anthropics/claude-code#38022`.** If Anthropic ships `--bare --auth` or `--no-context` with OAuth support, revisit immediately. Source: same, `docs/research/claude-cli-light-model.md` Appendix B.
+- **First-party consumer for `LongLivedCliLightModelService`.** Service exists per user directive to support all four corners but has no consumer yet; wire as features land. Source: `20260507-implement-light-model-for-non-api-subscriptions/context.md`.
+- **Larger-scale labelled eval before adversarial use.** Small synthetic probe is a sanity check, not a quality benchmark. Source: `docs/research/claude-cli-light-model.md` section 5.3 / 8.
+- **N=100 follow-up pass.** N=10 enough for 4x shift, not for tight CIs. Source: `docs/research/claude-cli-light-model.md` section 8.
+- **Identify the actual `/clear` reset trigger.** Hypothesized 5-min cache TTL but never directly tested by timing the turns. Source: same.
+- **Re-bench on macOS / Linux.** All measurements Windows 11 only. Source: same.
+- **Re-bench Sonnet / Opus.** Only Haiku 4.5 measured. Source: same.
+- **Strip the cosmetic ```json fence wrapper.** Tighten the prompt further. Source: `docs/research/claude-cli-light-model.md` section 5.3.
+- **Watch for upstream Anthropic changes.** `CLAUDE_CODE_DISABLE_THINKING`, `--no-session-persistence`, etc. are not all documented stable contracts. Apply `MinClaudeVersion` / `TestedAgainstVersion` discipline. Source: same.
+
+## G. Fixture and testing follow-ups (beyond item 6 above)
+
+- **Manual smoke test of `/task new` end-to-end under OAuth.** Unit/integration suite passes but failing command not re-run in live session post-fix. Source: `20260507-manual-test-session/progress.md` session 4.
+- **Record `compaction.jsonl`.** Deferred - needs context fill. Source: `tests/fixtures/README.md`.
+- **Record `api-retry.jsonl`.** Deferred - hard to induce (rate-limit). Source: same.
+- **Record `cancel-mid-stream.jsonl`.** Deferred - recorder needs interrupt support. Files: `tools/InfiniContext.Recorder/`. Source: same.
+- **Produce state-machine `<scenario>.expected-trace.txt` files** as part of state-machine tests. Source: same.
+- **Lock recordings in `tests/fixtures/`** - confirm exact NDJSON event schema vs current SDK source. Source: `infinicontext-initial-design.md` section 4.2 / 8 item 2.
+- **Confirm 60 s approval-MCP timeout.** Pick another if real users find it too short. Source: `infinicontext-initial-design.md` section 8 item 4, `20260506-poc/decisions.md` (Pending).
+
+## I. /task review and /task spawn follow-ups (2026-05-17 onward)
+
+`/task review` v1 shipped over 12 small commits plus 9 follow-ups. `/task spawn <id>` shipped 2026-05-17 (commit `b450ae8`). Items below are the residual follow-ups that didn't fit v1.
+
+### /task review
+
+- **Walk the 11 user-decision-blocked findings from `review-2026-05-18T041337.md`** plus 3 meta findings: sec-002 remainder (the borderline secret patterns: `settings.json`, `appsettings.Development.json`, `*.crt`, `.kube/config`), sec-003 (raw reviewer output scrubbing), sec-005 (git PATH trust model), arch-002 (CliReviewerAgentService / CliLightModelChild coupling), arch-005 (`.task/` lock-contract enforcement at executor), arch-006+007 (cross-cutting options-record refactor in CLI), arch-008 (intentional duplication of unparseable-reviewer synthesis), arch-009 (Core layering for decisions.md discovery), arch-011 (configurable secret patterns via `ReviewSettings.ExcludedFilePatterns` ctor seam), plus 3 reviewer-prompt parser failures (completeness / codelogic / tests). Each one is blocked on a product / policy / scope decision. Source: `.task/0003-infinicontext-phase-2b-continuation-plan/review-2026-05-18T041337.md` and `progress.md` handoffs of 2026-05-18 and 2026-05-20.
+- **Re-run `/task review` after tightening `ReviewerPrompts.cs`** so completeness, codelogic, and tests reviewers actually produce output (the 1-of-21 auto-apply ratio in the 2026-05-18 dogfood was partly a parser-failure artifact). Likely 2-3 prompt-tightening commits before the surface is shippable. Source: same.
+- **Configurable secret-file patterns via `ReviewSettings.ExcludedFilePatterns`.** v1 hardcodes a list in `ScopeResolver` (expanded 2026-05-20 to add credentials / netrc / npmrc / pypirc / git-credentials / kubeconfig / htpasswd / jks / keystore / asc / gpg / tfvars). Add the configurable seam when dogfood surfaces a false-positive / missed-positive that the user wants to override per-project. Files: `src/InfiniContext.Core/Review/ScopeResolver.cs` (static arrays), `InfiniContextSettings.ReviewSettings`. Cross-references arch-011 in the review report.
+- **`.gitignore` integration for ScopeResolver.** No `git check-ignore` plumbing today; the secret-file guard is heuristic-only. If a project's `.gitignore` adds new secret shapes the hardcoded list misses, ScopeResolver won't know. Files: new `IGitRunner.CheckIgnoreAsync`.
+- **Per-token "matched nothing" diagnostic in `--scope` glob expansion.** When `--scope "src/A.cs;ghost/**"` matches A.cs but `ghost/**` matches zero files, the user gets just `["src/A.cs"]` with no feedback that `ghost/**` was a typo. Empty-scope short-circuit catches the all-zero case; partial-zero is silent. Files: `src/InfiniContext.Cli/Tasks/ScopeGlobExpander.cs`.
+- **Negation patterns (`!exclude/**`) in `--scope` glob expansion.** `Matcher.AddExclude` supports them but the expander doesn't expose the syntax yet. Files: same.
+
+### /task spawn
+
+- **Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`.** When a `/task spawn`-spawned (or `/n`-spawned) session is closed mid-host-lifecycle, the coordinator's task claim is NOT released. The task row stays at `InProgress` until host restart. This gap pre-exists for every non-focused multi-session path; `/task spawn` makes the gap more visible because it's now a routine flow. Files: `src/InfiniContext.Core/Sessions/SessionManager.CloseAsync` + a `SessionContext.OnDispose` hook.
+- **End-to-end test for `/task spawn`** against real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. v1 ships with only parser tests; the helper-side flow (`TrySpawnTaskSessionAsync` - local pre-check, plan build, `CreateAsync`, coordinator Enter with rollback-on-refusal) is integration-only and uncovered. Files: new `tests/InfiniContext.Tests/Cli/SlashCommands/TaskSpawnSlashCommandTests.cs` or fold into the existing `TaskCommandHandlerReviewTests` scaffold.
+
