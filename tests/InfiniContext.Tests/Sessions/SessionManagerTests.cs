@@ -209,7 +209,7 @@ public class SessionManagerTests
         await using var mgr = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: new RecordingSessionFactory().Build,
             indexPath: tmp.IndexPath);
 
@@ -320,7 +320,7 @@ public class SessionManagerTests
         new(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             supervisor: null,
             lockRegistry: null,
             sessionFactory: (factory ?? new RecordingSessionFactory()).Build,

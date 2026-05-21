@@ -101,7 +101,7 @@ public class MultiSessionExitCriteriaTests
         await using var resumed = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: reopenFactory.Build,
             indexPath: tmp.IndexPath);
 
@@ -164,7 +164,7 @@ public class MultiSessionExitCriteriaTests
         new(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             supervisor: null,
             lockRegistry: null,
             sessionFactory: (factory ?? new StreamingFakeSessionFactory()).Build,

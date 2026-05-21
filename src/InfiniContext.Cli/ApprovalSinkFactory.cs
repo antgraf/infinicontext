@@ -37,7 +37,6 @@ internal sealed class ApprovalSinkFactory
     private readonly object _writeLock;
     private readonly TextWriter _output;
     private readonly ILogger _logger;
-    private readonly string _cwd;
     private readonly LightModelServiceFactory _lightModelServiceFactory;
     private readonly Func<ApprovalAutoEffort, ILightModelService> _lightModelFactory;
 
@@ -46,7 +45,6 @@ internal sealed class ApprovalSinkFactory
         object writeLock,
         TextWriter output,
         ILogger logger,
-        string cwd,
         Func<ApprovalAutoEffort, ILightModelService>? lightModelFactory = null,
         IProcessSupervisor? supervisor = null,
         LightModelServiceFactory? lightModelServiceFactory = null)
@@ -55,7 +53,6 @@ internal sealed class ApprovalSinkFactory
         _writeLock = writeLock;
         _output = output;
         _logger = logger;
-        _cwd = cwd;
         _lightModelServiceFactory = lightModelServiceFactory ?? new LightModelServiceFactory(settings, logger, supervisor);
         _lightModelFactory = lightModelFactory ?? DefaultFactory;
     }
@@ -66,12 +63,13 @@ internal sealed class ApprovalSinkFactory
     private ILightModelService DefaultFactory(ApprovalAutoEffort effort) =>
         _lightModelServiceFactory.Create(thinking: effort == ApprovalAutoEffort.High, cliMode: _settings.Approval.Auto.Mode);
 
-    public IApprovalSink Build(ApprovalMode mode, PendingApprovalSlot slot, TranscriptModel transcript, out ApprovalMode effectiveMode, bool announce = true)
+    public IApprovalSink Build(ApprovalMode mode, PendingApprovalSlot slot, TranscriptModel transcript, string cwd, out ApprovalMode effectiveMode, bool announce = true)
     {
         ArgumentNullException.ThrowIfNull(slot);
         ArgumentNullException.ThrowIfNull(transcript);
+        ArgumentNullException.ThrowIfNull(cwd);
 
-        var inner = BuildInner(mode, slot, transcript, announce, out effectiveMode);
+        var inner = BuildInner(mode, slot, transcript, cwd, announce, out effectiveMode);
         // Wrap every constructed sink so decisions land in the originating session's transcript
         // for ALL modes. ApprovalChannel already logs at Information for every request/response,
         // which covers the file side; the decorator covers the user-visible side. Phase 5 routes
@@ -80,7 +78,7 @@ internal sealed class ApprovalSinkFactory
         return new ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "\n"));
     }
 
-    private IApprovalSink BuildInner(ApprovalMode mode, PendingApprovalSlot slot, TranscriptModel transcript, bool announce, out ApprovalMode effectiveMode)
+    private IApprovalSink BuildInner(ApprovalMode mode, PendingApprovalSlot slot, TranscriptModel transcript, string cwd, bool announce, out ApprovalMode effectiveMode)
     {
         effectiveMode = mode;
 
@@ -116,7 +114,7 @@ internal sealed class ApprovalSinkFactory
                     effectiveMode = ApprovalMode.Ask;
                     return BuildAsk(slot, transcript);
                 }
-                return new AutoApprovalSink(light, BuildAsk(slot, transcript), _settings.Approval.Auto, _cwd, _logger);
+                return new AutoApprovalSink(light, BuildAsk(slot, transcript), _settings.Approval.Auto, cwd, _logger);
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, null);

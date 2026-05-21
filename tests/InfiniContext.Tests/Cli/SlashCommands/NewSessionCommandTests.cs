@@ -62,7 +62,7 @@ public class NewSessionCommandTests
         var mgr = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             indexPath: Path.Combine(Path.GetTempPath(), $"cp-nstest-{Guid.NewGuid():N}.json"),
             sessionFactory: (_, _, _, _) => new FakeSession());
         var actions = new RecordingActions();

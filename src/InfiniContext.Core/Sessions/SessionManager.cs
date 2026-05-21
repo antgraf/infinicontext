@@ -29,7 +29,8 @@ public delegate IClaudeSession SessionFactory(
 /// </summary>
 public delegate IApprovalSink SessionApprovalSinkFactory(
     PendingApprovalSlot slot,
-    TranscriptModel transcript);
+    TranscriptModel transcript,
+    string cwd);
 
 /// <summary>
 /// Stage 2B Phase 2. Host-scoped registry of live sessions. Owns the per-session construction
@@ -202,7 +203,7 @@ public sealed class SessionManager : IAsyncDisposable
         // alive across mode swaps; only the wrapper's inner changes.
         var transcript = new TranscriptModel();
         var approvalSlot = new PendingApprovalSlot();
-        var approvalSink = new SwitchableApprovalSink(_approvalSinkFactory(approvalSlot, transcript));
+        var approvalSink = new SwitchableApprovalSink(_approvalSinkFactory(approvalSlot, transcript, request.Cwd));
 
         var session = _sessionFactory(options, pressure.OnEvent, approvalSink, _logger);
         sessionRef = session;

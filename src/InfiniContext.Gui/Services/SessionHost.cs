@@ -73,7 +73,10 @@ public sealed class SessionHost : IAsyncDisposable
         // writeTranscriptBanner=false keeps CLI-style [approval] tool=вЂ¦ text out of the GUI
         // transcript вЂ” the banner UI carries the same information visually.
         var approvalTimeout = TimeSpan.FromSeconds(settings.Approval.TimeoutSeconds);
-        SessionApprovalSinkFactory approvalFactory = (slot, transcript) =>
+        // cwd is part of the delegate signature so the GUI can wire auto-mode (light-model
+        // safety review) symmetrically with the CLI in a later slice. The ask-equivalent path
+        // below doesn't need it - SlotApprovalSink routes to the banner UI regardless of cwd.
+        SessionApprovalSinkFactory approvalFactory = (slot, transcript, _) =>
             new SlotApprovalSink(slot, transcript, timeout: approvalTimeout, writeTranscriptBanner: false);
 
         var manager = await SessionManager.OpenAsync(

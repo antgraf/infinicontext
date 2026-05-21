@@ -469,3 +469,31 @@ Working tree clean. Full test suite green (981 passed / 3 POSIX-skipped). Format
 2. Live per-second countdown in the approval banner (DispatcherTimer; cheap polish).
 3. "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
 4. Housekeeping: there is no longer any reason for the `<Compile Include>` link pattern for files that have all moved to Core. The remaining links in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (AutoApprovalSink, ConsoleEchoingApprovalSink, ApprovalSinkFactory, etc.) are still CLI-internal; revisit if/when any of those follow the same Core-promotion path.
+
+### Phase 3B slice 4j - SessionApprovalSinkFactory carries per-session cwd (2026-05-21)
+
+Picks up follow-up #1 from the 4i flush note: extend the delegate so auto-mode safety review (cwd-aware prompt landed in 4h) can be wired into the GUI symmetrically with the CLI. The signature change is the load-bearing piece; the GUI's actual mode toggle is a separate slice.
+
+**Delegate + Core call site:**
+- `src/InfiniContext.Core/Sessions/SessionManager.cs`: `SessionApprovalSinkFactory(slot, transcript)` -> `(slot, transcript, cwd)`. XML doc updated to call out the per-session-cwd intent. `CreateAsync` passes `request.Cwd` (non-null, `[required]` on `SpawnRequest`).
+
+**CLI:**
+- `src/InfiniContext.Cli/ApprovalSinkFactory.cs`: dropped the `_cwd` field + `cwd` constructor parameter (it was captured once at host startup, which already ignored multi-session cwd differences - dead weight after this slice). `Build` now takes `string cwd` as a required parameter and forwards it to `AutoApprovalSink`. `BuildInner` signature updated to match.
+- `src/InfiniContext.Cli/Program.cs`: the `perSessionSinkFactory` closure becomes `(slot, transcript, cwd) =>` and threads `cwd` into `approvalFactory.Build`. The `/approval` mode-swap loop on line 338 now passes `sctx.Cwd ?? string.Empty` so each session's switch picks up its own cwd, not the host-startup one. The `new ApprovalSinkFactory(...)` call on line 235 no longer passes `parsed.Cwd`.
+
+**GUI:**
+- `src/InfiniContext.Gui/Services/SessionHost.cs`: closure becomes `(slot, transcript, _) =>` with a comment noting the cwd is unused today (SlotApprovalSink doesn't consume it) but available for the future auto-mode wiring.
+
+**Tests:**
+- 9 test sites updated for the delegate signature (`(slot, transcript) =>` -> `(slot, transcript, cwd) =>`): `BroadcastCommandTests`, `FocusCommandTests`, `NewSessionCommandTests`, `MultiSessionExitCriteriaTests` (x2), `MultiSessionHostTests` (x2), `SessionManagerTests` (x2).
+- `ApprovalSinkFactoryTests.cs`: 12 `factory.Build(...)` calls updated to pass `cwd: "/tmp"` after the slot/transcript args; 4 `new ApprovalSinkFactory(...)` constructor sites lost their `cwd: "/tmp"` arg.
+
+**Behaviour change (subtle but real):** the CLI's auto-mode safety prompt now uses the per-session cwd in the user payload (was: host-startup cwd captured at `ApprovalSinkFactory` construction). For single-session use the cwd is unchanged; for multi-session use where panes are rooted in different repos, each pane's safety review now correctly treats *its own* cwd as the policy-safe boundary. Pre-existing behaviour matched the host-startup cwd for every pane, which was a latent bug.
+
+**Build status:** Core + Cli + Gui + Tests all green in Release (0 warnings, 0 errors). Full test suite: **981 passed / 3 POSIX-skipped / 0 failed** (parity with 4i). `dotnet format --verify-no-changes` clean.
+
+**Follow-ups remaining (from the 4i flush, minus #1):**
+- Live per-second countdown in the approval banner (DispatcherTimer).
+- "Pending approval (N)" badge in the status strip for multi-session backlog.
+- `<Compile Include>` link housekeeping in `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`.
+- **New:** wire the GUI's approval mode toggle. The signature unblock is in; the GUI now needs either a settings-driven default (`approval.mode` from `settings.json`) routed through `ApprovalSinkFactory.Build`, or a UI mode dropdown. Either way the factory closure has the cwd available now.

@@ -232,7 +232,7 @@ if (taskStore is not null)
     issueCommandHandler = new IssueCommandHandler(issueService, Console.Out, consoleWriteLock);
 }
 
-var approvalFactory = new ApprovalSinkFactory(settings, consoleWriteLock, Console.Out, logging.Logger, parsed.Cwd, supervisor: supervisor, lightModelServiceFactory: lightModelServiceFactory);
+var approvalFactory = new ApprovalSinkFactory(settings, consoleWriteLock, Console.Out, logging.Logger, supervisor: supervisor, lightModelServiceFactory: lightModelServiceFactory);
 var initialMode = parsed.ApprovalMode ?? settings.Approval.Mode;
 // Phase 5: the approval sink is per-session — each session has its own PendingApprovalSlot and
 // SwitchableApprovalSink, built by the SessionApprovalSinkFactory closure below. `bannersEmitted`
@@ -242,9 +242,9 @@ var initialMode = parsed.ApprovalMode ?? settings.Approval.Mode;
 // sessions); /approval iterates SessionManager.Active to swap each session in lockstep.
 var currentApprovalMode = initialMode;
 var bannersEmittedForCurrentMode = false;
-SessionApprovalSinkFactory perSessionSinkFactory = (slot, transcript) =>
+SessionApprovalSinkFactory perSessionSinkFactory = (slot, transcript, cwd) =>
 {
-    var inner = approvalFactory.Build(currentApprovalMode, slot, transcript, out var effective, announce: !bannersEmittedForCurrentMode);
+    var inner = approvalFactory.Build(currentApprovalMode, slot, transcript, cwd, out var effective, announce: !bannersEmittedForCurrentMode);
     bannersEmittedForCurrentMode = true;
     // Pin to the post-fallback mode (e.g. Auto → Ask if the light-model construct failed) so
     // subsequent sessions see the resolved mode, not the requested one.
@@ -335,7 +335,7 @@ while (true)
                 var first = true;
                 foreach (var sctx in sessionManager.Active)
                 {
-                    var newInner = approvalFactory.Build(requested, sctx.ApprovalSlot, sctx.Transcript, out effective, announce: first);
+                    var newInner = approvalFactory.Build(requested, sctx.ApprovalSlot, sctx.Transcript, sctx.Cwd ?? string.Empty, out effective, announce: first);
                     sctx.ApprovalSink.Switch(newInner);
                     first = false;
                 }

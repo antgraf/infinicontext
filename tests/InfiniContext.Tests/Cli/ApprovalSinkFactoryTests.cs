@@ -17,7 +17,7 @@ public class ApprovalSinkFactoryTests
     public void Ask_mode_builds_slot_sink()
     {
         var (factory, _, slot, transcript) = NewFactory();
-        var sink = factory.Build(ApprovalMode.Ask, slot, transcript, out var effective);
+        var sink = factory.Build(ApprovalMode.Ask, slot, transcript, cwd: "/tmp", out var effective);
         effective.Should().Be(ApprovalMode.Ask);
         Unwrap(sink).Should().BeOfType<SlotApprovalSink>();
     }
@@ -26,7 +26,7 @@ public class ApprovalSinkFactoryTests
     public async Task Deny_mode_returns_static_deny_sink()
     {
         var (factory, _, slot, transcript) = NewFactory();
-        var sink = factory.Build(ApprovalMode.Deny, slot, transcript, out var effective);
+        var sink = factory.Build(ApprovalMode.Deny, slot, transcript, cwd: "/tmp", out var effective);
         effective.Should().Be(ApprovalMode.Deny);
         Unwrap(sink).Should().BeOfType<StaticApprovalSink>();
 
@@ -38,7 +38,7 @@ public class ApprovalSinkFactoryTests
     public async Task Allow_mode_emits_warning_banner_suggests_auto_and_allows_everything()
     {
         var (factory, output, slot, transcript) = NewFactory();
-        var sink = factory.Build(ApprovalMode.Allow, slot, transcript, out var effective);
+        var sink = factory.Build(ApprovalMode.Allow, slot, transcript, cwd: "/tmp", out var effective);
         effective.Should().Be(ApprovalMode.Allow);
 
         var rendered = output.ToString();
@@ -64,7 +64,7 @@ public class ApprovalSinkFactoryTests
                 observedEffort = effort;
                 return new StubLightModel();
             });
-            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, out var effective);
+            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, cwd: "/tmp", out var effective);
 
             effective.Should().Be(ApprovalMode.Auto, "auto-without-key now lands on the CLI back end, not ask");
             Unwrap(sink).Should().BeOfType<AutoApprovalSink>();
@@ -87,7 +87,7 @@ public class ApprovalSinkFactoryTests
             Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-test-not-real");
             var lightStub = new StubLightModel();
             var (factory, output, slot, transcript) = NewFactory(_ => lightStub);
-            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, out var effective);
+            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, cwd: "/tmp", out var effective);
             effective.Should().Be(ApprovalMode.Auto);
             Unwrap(sink).Should().BeOfType<AutoApprovalSink>();
             output.ToString().Should().Contain("back-end=SDK");
@@ -106,7 +106,7 @@ public class ApprovalSinkFactoryTests
         {
             Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-test-not-real");
             var (factory, output, slot, transcript) = NewFactory(_ => throw new InvalidOperationException("ctor exploded"));
-            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, out var effective);
+            var sink = factory.Build(ApprovalMode.Auto, slot, transcript, cwd: "/tmp", out var effective);
             effective.Should().Be(ApprovalMode.Ask);
             Unwrap(sink).Should().BeOfType<SlotApprovalSink>();
             output.ToString().Should().Contain("InvalidOperationException");
@@ -140,13 +140,12 @@ public class ApprovalSinkFactoryTests
                 new object(),
                 output,
                 Silent,
-                cwd: "/tmp",
                 lightModelFactory: e =>
                 {
                     observed = e;
                     return new StubLightModel();
                 });
-            factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), out _);
+            factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), cwd: "/tmp", out _);
             observed.Should().Be(configuredEffort);
             output.ToString().Should().Contain($"effort={configuredEffort}");
         }
@@ -176,9 +175,8 @@ public class ApprovalSinkFactoryTests
                 new object(),
                 output,
                 Silent,
-                cwd: "/tmp",
                 lightModelFactory: _ => new StubLightModel());
-            factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), out _);
+            factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), cwd: "/tmp", out _);
 
             // Catches accidental swap of low/high estimates in the banner.
             output.ToString().Should().Contain("~9 s");
@@ -222,9 +220,9 @@ public class ApprovalSinkFactoryTests
             };
             // No custom lightModelFactory — exercise DefaultFactory.
             var output = new StringWriter();
-            var factory = new ApprovalSinkFactory(settings, new object(), output, Silent, cwd: "/tmp");
+            var factory = new ApprovalSinkFactory(settings, new object(), output, Silent);
 
-            var sink = factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), out _);
+            var sink = factory.Build(ApprovalMode.Auto, new PendingApprovalSlot(), new TranscriptModel(), cwd: "/tmp", out _);
             var auto = Unwrap(sink).Should().BeOfType<AutoApprovalSink>().Subject;
             auto.LightModel.Should().BeOfType(expected,
                 "approval.auto.mode={0} must override models.light.cli.mode for the auto path", mode);
@@ -239,7 +237,7 @@ public class ApprovalSinkFactoryTests
     public async Task Built_sink_echoes_decision_to_transcript_for_deny()
     {
         var (factory, _, slot, transcript) = NewFactory();
-        var sink = factory.Build(ApprovalMode.Deny, slot, transcript, out _);
+        var sink = factory.Build(ApprovalMode.Deny, slot, transcript, cwd: "/tmp", out _);
 
         await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
 
@@ -255,7 +253,7 @@ public class ApprovalSinkFactoryTests
     public async Task Built_sink_echoes_decision_to_transcript_for_allow()
     {
         var (factory, _, slot, transcript) = NewFactory();
-        var sink = factory.Build(ApprovalMode.Allow, slot, transcript, out _);
+        var sink = factory.Build(ApprovalMode.Allow, slot, transcript, cwd: "/tmp", out _);
 
         await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
 
@@ -276,7 +274,6 @@ public class ApprovalSinkFactoryTests
             new object(),
             output,
             Silent,
-            cwd: "/tmp",
             lightModelFactory: lightModelFactory);
         return (factory, output, new PendingApprovalSlot(), new TranscriptModel());
     }

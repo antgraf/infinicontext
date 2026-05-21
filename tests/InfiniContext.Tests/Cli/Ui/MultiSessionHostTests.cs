@@ -81,7 +81,7 @@ public class MultiSessionHostTests
         await using var mgr = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: factory.Build,
             indexPath: Path.Combine(Path.GetTempPath(), $"cp-multifocus-{Guid.NewGuid():N}.json"));
         var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
@@ -113,7 +113,7 @@ public class MultiSessionHostTests
         await using var mgr = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
-            (slot, transcript) => new StubApprovalSink(),
+            (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: factory.Build,
             indexPath: Path.Combine(Path.GetTempPath(), $"cp-unfoc-{Guid.NewGuid():N}.json"));
         var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
