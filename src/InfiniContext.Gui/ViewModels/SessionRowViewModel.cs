@@ -35,6 +35,26 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isFocused;
 
+    /// <summary>
+    /// False while the session is still bringing itself up; true once communication is safe.
+    /// For task-bound sessions (<c>SessionContext.ActiveTaskId is not null</c>), the
+    /// <c>SpawnRequest.FirstUserMessage</c> pointer is sent fire-and-forget after
+    /// <c>system/init</c> (see <c>ClaudeSession.StdoutLoopAsync</c>) - we wait for the first
+    /// <c>ResultEvent</c> after init so that pointer turn has fully closed before the operator
+    /// can interleave their own prompts. For free sessions (no pointer), this flips on the
+    /// <c>system/init</c> event itself. Bound to button <c>IsEnabled</c> in the row template;
+    /// the parent VM watches via <see cref="ObservableObject.PropertyChanged"/> to refresh
+    /// <c>SendPromptCommand.CanExecute</c> when the focused session warms up.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isReady;
+
+    /// <summary>True between <c>system/init</c> and the first <c>ResultEvent</c> on a task-bound
+    /// session - i.e. while the pointer-acknowledgement turn is in flight. Internal flag the
+    /// event router uses to gate the IsReady flip; kept distinct from <see cref="IsReady"/> so
+    /// the latter has a single state-machine meaning (true == operator can send).</summary>
+    private bool _initSeen;
+
     [ObservableProperty]
     private string _statusGlyph = ViewModels.StatusGlyph.Idle;
 
@@ -171,6 +191,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 // see the init payload at a glance, but in practice it just made the first card
                 // look noisy; the chevron remains a one-click reveal.
                 _pendingTurn = null;
+                _initSeen = true;
+                // Free sessions have no pointer to wait for - flip ready immediately. Task-bound
+                // sessions wait until the pointer-acknowledgement ResultEvent below.
+                if (Context.ActiveTaskId is null) IsReady = true;
                 break;
 
             case AssistantEvent asst:
@@ -184,6 +208,9 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
             case ResultEvent res:
                 ClosePendingTurnWith(res.Result, res);
+                // First ResultEvent after init signals that the FirstUserMessage pointer turn
+                // (if any) has fully closed. Safe to enable operator input now.
+                if (_initSeen && !IsReady) IsReady = true;
                 break;
 
             case SystemCompactEvent:

@@ -194,7 +194,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     /// <summary>Spawn a new session under <paramref name="task"/>. Bound to the per-task "+"
     /// action button in the left tree. Falls back to the folder picker if <paramref name="task"/>
-    /// is null or synthetic (the (free sessions) bucket).</summary>
+    /// is null or synthetic (the (free sessions) bucket).
+    ///
+    /// <para>For task-bound spawns, calls <see cref="TaskService.PrepareSwitchAsync"/> to build
+    /// the pointer message (<see cref="TaskSessionPointer"/>) and passes it through as
+    /// <c>SpawnRequest.FirstUserMessage</c>. Mirrors the CLI's <c>/task switch</c> /
+    /// <c>/task spawn</c> path so the agent learns its task binding before the operator types.
+    /// If the task subsystem is unavailable or <c>PrepareSwitchAsync</c> fails, the session still
+    /// spawns - just without the pointer - and the operator is warned via <see cref="StatusText"/>.
+    /// </para></summary>
     private async Task SpawnSessionForTaskAsync(TaskNodeViewModel? task)
     {
         if (_host is null)
@@ -221,10 +229,47 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             return;
         }
 
+        // Build the task-pointer first message when spawning under a real task. Failure here
+        // (subsystem missing, task row gone, home folder wiped) is non-fatal: log + warn, then
+        // fall through to spawning without a pointer. The operator will see the warning and can
+        // type context manually.
+        string? firstUserMessage = null;
+        IReadOnlyList<string>? drift = null;
+        if (taskId is { } tid)
+        {
+            if (_host.TaskService is { } svc)
+            {
+                try
+                {
+                    var plan = await svc.PrepareSwitchAsync(tid).ConfigureAwait(true);
+                    if (plan is null)
+                    {
+                        StatusText = $"Task {tid:D4} not found - spawning without task pointer.";
+                    }
+                    else
+                    {
+                        firstUserMessage = plan.FirstUserMessage;
+                        drift = plan.Drift;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    StatusText = $"Task pointer load failed: {ex.Message} - spawning without pointer.";
+                }
+            }
+            else
+            {
+                StatusText = "Task subsystem unavailable - spawning without pointer.";
+            }
+        }
+
         try
         {
-            StatusText = taskId is { } tid ? $"Spawning under task {tid:D4} in {cwd}..." : $"Spawning claude in {cwd}...";
-            var ctx = await _host.CreateSessionAsync(cwd, taskId).ConfigureAwait(true);
+            var spawning = taskId is { } stid ? $"Spawning under task {stid:D4} in {cwd}..." : $"Spawning claude in {cwd}...";
+            // Only overwrite a "spawning without pointer" warning when we *do* have a pointer;
+            // otherwise the warning stays visible long enough for the operator to notice it.
+            if (firstUserMessage is not null || taskId is null) StatusText = spawning;
+            var ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
             var row = new SessionRowViewModel(ctx);
             var parent = ResolveParentNode(ctx.ActiveTaskId);
             parent.Sessions.Add(row);
@@ -232,7 +277,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             FocusedSession = row;
             SelectedNode = row;
             row.IsFocused = true;
-            StatusText = $"Spawned {row.ShortId} in {row.Cwd}.";
+            var driftSuffix = drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
+            var warmingSuffix = firstUserMessage is not null ? " Warming up..." : "";
+            StatusText = $"Spawned {row.ShortId} in {row.Cwd}.{warmingSuffix}{driftSuffix}";
         }
         catch (Exception ex)
         {
@@ -241,7 +288,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
-    private bool CanSendPrompt() => _host is not null && FocusedSession is not null && !string.IsNullOrWhiteSpace(PromptText);
+    private bool CanSendPrompt() =>
+        _host is not null
+        && FocusedSession is { IsReady: true }
+        && !string.IsNullOrWhiteSpace(PromptText);
     private bool CanInterrupt() => FocusedSession is not null;
 
     private async Task SendPromptAsync()
@@ -255,9 +305,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     /// <summary>Fire-and-forget canned prompt to <paramref name="session"/>. Bound to the per-row
     /// play / question action buttons; does NOT use <see cref="FocusedSession"/> so the operator
-    /// can ping a non-focused session without losing their current focus.</summary>
-    private Task SendCannedAsync(SessionRowViewModel? session, string text) =>
-        session is null ? Task.CompletedTask : SendToSessionAsync(session, text);
+    /// can ping a non-focused session without losing their current focus. The row buttons are
+    /// also disabled at the XAML layer via <c>IsEnabled="{Binding IsReady}"</c>; the guard here
+    /// is defence-in-depth for programmatic invocation (future keybindings, scripting).</summary>
+    private Task SendCannedAsync(SessionRowViewModel? session, string text)
+    {
+        if (session is null) return Task.CompletedTask;
+        if (!session.IsReady)
+        {
+            StatusText = $"{session.ShortId} is still warming up - try again in a moment.";
+            return Task.CompletedTask;
+        }
+        return SendToSessionAsync(session, text);
+    }
 
     private async Task SendToSessionAsync(SessionRowViewModel target, string text)
     {
@@ -320,10 +380,29 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     partial void OnFocusedSessionChanged(SessionRowViewModel? oldValue, SessionRowViewModel? newValue)
     {
-        if (oldValue is not null) oldValue.IsFocused = false;
-        if (newValue is not null) newValue.IsFocused = true;
+        if (oldValue is not null)
+        {
+            oldValue.IsFocused = false;
+            oldValue.PropertyChanged -= OnFocusedSessionPropertyChanged;
+        }
+        if (newValue is not null)
+        {
+            newValue.IsFocused = true;
+            newValue.PropertyChanged += OnFocusedSessionPropertyChanged;
+        }
         SendPromptCommand.NotifyCanExecuteChanged();
         InterruptCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Refresh <see cref="SendPromptCommand"/>'s CanExecute when the focused session
+    /// flips <c>IsReady</c>. Without this, the Send button stays disabled even after the session
+    /// finishes warming up until the operator types another character to retrigger the prompt-
+    /// text path. <c>IsReady</c> updates on the reader thread but the property-changed event is
+    /// already marshalled to the UI thread by <see cref="ObservableObject"/>.</summary>
+    private void OnFocusedSessionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SessionRowViewModel.IsReady))
+            SendPromptCommand.NotifyCanExecuteChanged();
     }
 
     public async ValueTask DisposeAsync()

@@ -24,12 +24,14 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly LockRegistry _lockRegistry;
     private readonly SessionManager _sessionManager;
     private readonly TaskStore? _taskStore;
+    private readonly TaskService? _taskService;
     private int _disposed;
 
     public InfiniContextSettings Settings { get; }
     public string LogFilePath => _logging.LogFilePath;
     public SessionManager SessionManager => _sessionManager;
     public TaskStore? TaskStore => _taskStore;
+    public TaskService? TaskService => _taskService;
     public ILogger Logger => _logging.Logger;
     public event Action<SessionContext>? SessionCreated;
     public event Action<Guid>? SessionClosed;
@@ -40,7 +42,8 @@ public sealed class SessionHost : IAsyncDisposable
         IProcessSupervisor supervisor,
         LockRegistry lockRegistry,
         SessionManager sessionManager,
-        TaskStore? taskStore)
+        TaskStore? taskStore,
+        TaskService? taskService)
     {
         Settings = settings;
         _logging = logging;
@@ -48,6 +51,7 @@ public sealed class SessionHost : IAsyncDisposable
         _lockRegistry = lockRegistry;
         _sessionManager = sessionManager;
         _taskStore = taskStore;
+        _taskService = taskService;
     }
 
     /// <summary>
@@ -98,9 +102,15 @@ public sealed class SessionHost : IAsyncDisposable
         // logged but does not block the GUI - the tasks tree degrades to "(no task subsystem)"
         // and sessions still spawn under the (unattached) root.
         TaskStore? taskStore = null;
+        TaskService? taskService = null;
         try
         {
             taskStore = await TaskStore.OpenAsync(settings.Tasks.ResolvedDbPath()).ConfigureAwait(false);
+            // Light model for TaskService is unused by PrepareSwitchAsync (the only entry point the
+            // GUI currently calls), but the ctor requires a non-null instance. Mirrors the CLI's
+            // construction at Program.cs:149-150.
+            var lightForTasks = lightModelFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
+            taskService = new TaskService(taskStore, lightForTasks);
             logging.Logger.Information("tasks: subsystem ready (db={DbPath})", settings.Tasks.ResolvedDbPath());
         }
         catch (Exception ex)
@@ -108,7 +118,7 @@ public sealed class SessionHost : IAsyncDisposable
             logging.Logger.Warning(ex, "tasks: subsystem unavailable; GUI tree will show sessions under (unattached) only");
         }
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore);
+        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService);
     }
 
     private static IApprovalSink BuildApprovalSink(
@@ -169,7 +179,11 @@ public sealed class SessionHost : IAsyncDisposable
         return new ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "\n"));
     }
 
-    public async Task<SessionContext> CreateSessionAsync(string cwd, int? activeTaskId = null, CancellationToken ct = default)
+    public async Task<SessionContext> CreateSessionAsync(
+        string cwd,
+        int? activeTaskId = null,
+        string? firstUserMessage = null,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cwd);
         var ctx = await _sessionManager.CreateAsync(
@@ -179,6 +193,7 @@ public sealed class SessionHost : IAsyncDisposable
                 Model = Settings.Session.Model,
                 IncludePartialMessages = Settings.Session.IncludePartialMessages,
                 ActiveTaskId = activeTaskId,
+                FirstUserMessage = firstUserMessage,
             },
             ct).ConfigureAwait(false);
         SessionCreated?.Invoke(ctx);

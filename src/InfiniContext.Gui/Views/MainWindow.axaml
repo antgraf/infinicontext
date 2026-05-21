@@ -122,11 +122,13 @@
                     <Button Content="&#x25B6;"
                             Classes="rowAction"
                             ToolTip.Tip="Send 'Continue with the task.' to this session"
+                            IsEnabled="{Binding IsReady}"
                             Command="{Binding $parent[TreeView].DataContext.SendContinueCommand}"
                             CommandParameter="{Binding}" />
                     <Button Content="?"
                             Classes="rowAction"
                             ToolTip.Tip="Send 'What's next for the task?' to this session"
+                            IsEnabled="{Binding IsReady}"
                             Command="{Binding $parent[TreeView].DataContext.SendWhatsNextCommand}"
                             CommandParameter="{Binding}" />
                   </StackPanel>

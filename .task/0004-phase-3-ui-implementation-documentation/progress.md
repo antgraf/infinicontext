@@ -599,4 +599,86 @@ Closes follow-up #1 from the 4k flush note. With `auto` being the new committed 
 - "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
 - `<Compile Include>` link housekeeping: after 4k+4l, only `ApprovalSinkFactory.cs` remains link-compiled. Promotion candidate when a second consumer (likely the GUI's eventual mode-toggle handler) needs the same mode->sink mapping.
 - Theme-portable approval banner: the amber-on-yellow palette is hardcoded; replacing the three colors with `DynamicResource` brushes that flip in dark theme is the canonical polish slice. Not load-bearing.
+### Bug investigation - task-bound GUI session has no task context (2026-05-21, context-pressure flush)
+
+Operator opened a session under task 0004 in the GUI, clicked the в–¶ Continue button (which sends the canned prompt `"Continue with the task."`), and the receiving agent reported "no active task in this conversation" - it had no idea which task it was bound to. Operator suspected a race condition where the session hadn't loaded its context before the prompt arrived.
+
+**Investigation found two independent root causes, not just a race.**
+
+**1. Primary: pointer never injected in the GUI spawn path.**
+
+The CLI's `/task switch` calls `TaskService.PrepareSwitchAsync(id)` which returns a `TaskSwitchPlan` carrying a pointer string via `TaskSessionPointer.ComposeFirstMessage` - format: `"Working on task NNNN (\"title\"). Task folder: .task/NNNN-slug/. Use the infinicontext-task skill."` (plus a drift-reconciliation prefix when applicable). The CLI then sets `SpawnRequest.FirstUserMessage = plan.FirstUserMessage` (`src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs:187`). `ClaudeSession.StdoutLoopAsync` fires that message into stdin the moment `session_id` is observed (`src/InfiniContext.Core/Sessions/ClaudeSession.cs:279-284`), so the agent learns its task binding before the operator types anything.
+
+The GUI **does not do this**. `SessionHost.CreateSessionAsync` (`src/InfiniContext.Gui/Services/SessionHost.cs:172-186`) accepts `activeTaskId`, sets `SpawnRequest.ActiveTaskId`, but never calls `PrepareSwitchAsync` and never sets `FirstUserMessage`. `MainWindowViewModel.SpawnSessionForTaskAsync` (`src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs:198-242`) passes only `cwd` + `taskId`. Consequence: the literal `"Continue with the task."` (the canned text at `MainWindowViewModel.cs:78`) is the first message the agent ever sees, with zero task context. This explains the reported behaviour completely.
+
+`SessionHost` exposes `TaskStore` but **not** `TaskService` - the fix needs to construct one (cheap; `TaskService` wraps the existing `TaskStore` and a `Clock`).
+
+**2. Secondary: no readiness gate on prompt buttons.**
+
+Even after fixing #1, a real race remains. `SendFirstUserMessageAsync` is fire-and-forget (`ClaudeSession.cs:283`: `_ = SendFirstUserMessageAsync(...)`). `SendUserMessageAsync` takes a write lock so two messages can't physically interleave on stdin, but ordering depends on whoever grabs the lock first. The Continue / What's next / Send buttons have **no `CanExecute` gate on session state** - they enable as soon as `FocusedSession is not null` (`MainWindowViewModel.cs:244` and `SendContinueCommand` / `SendWhatsNextCommand` constructors at lines 94-95). A fast click can either beat the pointer to the lock, or queue immediately behind it so the agent gets two user turns back-to-back before processing either.
+
+**Proposed two-part fix (mid-discussion when flush triggered).**
+
+Part A - inject the pointer (real bug):
+- Construct `TaskService` alongside `TaskStore` in `SessionHost.StartAsync` and expose it via a `TaskService?` property.
+- `SessionHost.CreateSessionAsync` adds a `string? firstUserMessage = null` parameter, forwards to `SpawnRequest.FirstUserMessage`.
+- In `SpawnSessionForTaskAsync`, when `task is { IsSynthetic: false } realTask`: call `_host.TaskService.PrepareSwitchAsync(realTask.TaskId)` first, then pass `plan.FirstUserMessage` through `CreateSessionAsync`. Drift, if any, surfaces via `StatusText`.
+- Failure mode: if `TaskService` is null (subsystem unavailable) or `PrepareSwitchAsync` throws, fall back to spawning without the pointer and warn in `StatusText`.
+
+Part B - readiness gate:
+- Add `IsReady` (default false) to `SessionRowViewModel`. Flip true after the *first turn following `system/init`* completes (`ResultEvent`) - that guarantees the agent has *processed* the pointer, not just received it.
+- For non-task sessions (no `FirstUserMessage`), flip `IsReady` directly on `system/init`.
+- Gate `SendContinueCommand` / `SendWhatsNextCommand` / `SendPromptCommand` on `target.IsReady`. Approve/Deny banner buttons are independent (the operator should still be able to resolve an approval that came in during warmup).
+- UX: status strip says "warming up..." until ready; row glyph already covers state.
+
+**Open decisions (operator was asked, response empty - reask next session):**
+- Scope: both parts, Part A only, or Part B only?
+- Ready signal: after pointer turn's `ResultEvent` (safer, recommended), or on `system/init` (faster)?
+
+**What was NOT touched:** no code changes yet. Investigation only. Build/test status from prior 4l commit (981 passed) still applies.
+
+**Resume pointer for next session:** Re-ask the two questions above, then implement Part A first (it's the real bug), Part B second. Files in play: `src/InfiniContext.Gui/Services/SessionHost.cs`, `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs`, `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`. Reference CLI implementation at `src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs:181-200` for the spawn-with-pointer pattern.
+### Phase 3B fix - inject task pointer into GUI sessions + readiness gate (2026-05-21)
+
+Resolves the bug investigation above. Operator chose: both parts, ready signal after first `ResultEvent` post-init (the safer option). Code landed and gates green.
+
+**Part A - task pointer plumbed through the GUI spawn path:**
+- `src/InfiniContext.Gui/Services/SessionHost.cs`:
+  - New private `TaskService? _taskService` field and public `TaskService` property. Constructed alongside `TaskStore` in `StartAsync` by reusing the existing `lightModelFactory` (`Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode)`) - mirrors the CLI's wiring at `Program.cs:149-150`. The light model is unused by `PrepareSwitchAsync` (the only method the GUI calls today) but the `TaskService` ctor requires a non-null instance.
+  - `CreateSessionAsync` gained a `string? firstUserMessage = null` parameter, forwarded to `SpawnRequest.FirstUserMessage`. Two-arg call sites still work via the default.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs::SpawnSessionForTaskAsync`:
+  - For task-bound spawns: call `_host.TaskService.PrepareSwitchAsync(tid)` *before* `CreateSessionAsync`. Use the returned `plan.FirstUserMessage` as the pointer. Drift, if any, is surfaced inline in `StatusText` ("drift: file1.md, file2.md (agent will reconcile)") - the pointer itself already carries the reconciliation instruction, so this is just operator-visible breadcrumb.
+  - Graceful fallback at three layers: (a) `TaskService` is null (subsystem unavailable) -> `StatusText = "Task subsystem unavailable - spawning without pointer."`; (b) `PrepareSwitchAsync` returns null (task row missing) -> warn + spawn without pointer; (c) `PrepareSwitchAsync` throws (e.g. home folder wiped per `TaskService.cs:264-271`) -> warn with exception message + spawn without pointer. None of these are fatal - the operator can still type context manually.
+  - StatusText management: the "spawning under task NNNN..." message only overwrites the warning when we *do* have a pointer, so a missing-pointer warning stays visible long enough for the operator to notice.
+
+**Part B - readiness gate:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`:
+  - New `[ObservableProperty] private bool _isReady` (default false) + private `bool _initSeen` (state-machine internal). `IsReady` carries a single meaning: true == operator can send.
+  - State-machine in `ApplyEvent`: on `SystemInitEvent`, set `_initSeen = true`; if `Context.ActiveTaskId is null` (free session, no pointer expected), flip `IsReady = true` immediately. On the first `ResultEvent` after init (`_initSeen && !IsReady`), flip `IsReady = true` - that's the pointer-acknowledgement turn closing for task-bound sessions, which guarantees the agent has *processed* the pointer rather than just received it.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs`:
+  - `CanSendPrompt` now requires `FocusedSession is { IsReady: true }`. The bottom Send button + Ctrl+Enter binding both feed through this.
+  - `OnFocusedSessionChanged` now subscribes/unsubscribes the focused row's `PropertyChanged`; the handler `OnFocusedSessionPropertyChanged` calls `SendPromptCommand.NotifyCanExecuteChanged()` when `IsReady` flips. Without this, the Send button stayed disabled even after warmup until the operator typed another character. `ObservableObject` already marshals the event to the UI thread, so no Dispatcher.Post needed here.
+  - `SendCannedAsync` adds a defence-in-depth guard: if `!session.IsReady`, set `StatusText = "<short-id> is still warming up - try again in a moment."` and return without sending. Belt-and-braces protection against future keybindings / scripting that bypass the XAML `IsEnabled` gate.
+- `src/InfiniContext.Gui/Views/MainWindow.axaml`: row action buttons (`Continue`, `?` What's next) gain `IsEnabled="{Binding IsReady}"`. Binding-level gating gives instant visual feedback (button greys out) without needing per-row notification plumbing on the parent VM.
+
+**Status-strip UX:**
+- Spawning a task-bound session now reads: `"Spawned ab12cd34 in /path/to/cwd. Warming up..."`. Once the pointer turn closes, the next state-changing event updates `StatusText` to whatever's current ("Sent to ..." after a send, etc.). For free sessions: no "Warming up..." suffix - they're immediately ready.
+
+**Build/test:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **981 passed / 3 POSIX-skipped / 0 failed** (parity with 4l). No GUI VMs are link-compiled into the test assembly so the fix is exercised only by manual smoke; the operator owns that verification.
+- `dotnet format --verify-no-changes` clean.
+
+**No new tests added:** Avalonia ViewModels aren't unit-tested in this repo today (the tests/InfiniContext.Tests folder targets Core + CLI). If/when GUI test coverage lands as a separate slice, the candidates are:
+1. `SessionRowViewModel.IsReady` flips correctly across the SystemInit -> ResultEvent sequence for task-bound vs free sessions.
+2. `MainWindowViewModel.SpawnSessionForTaskAsync` calls `PrepareSwitchAsync` and forwards `FirstUserMessage` when a task is selected; falls back cleanly on null / exception.
+
+**Edge case considered but not protected:** if `SendFirstUserMessageAsync` fails (logged at `ClaudeSession.cs:326-329` but no event surfaced), `IsReady` stays false indefinitely because the agent never emits a `ResultEvent`. A timeout-based fail-open was considered and rejected: the operator should see the warming-up status, check the log, and close/restart the session. Adding a watchdog would silently mask a real bring-up failure. Possible polish if the failure mode shows up in practice.
+
+**Follow-ups remaining (from the 4l flush, unchanged):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- Live per-second countdown in the approval banner (`DispatcherTimer`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+- Theme-portable approval banner: hardcoded amber-on-yellow palette; replace with `DynamicResource` brushes for dark-theme flip.
 
