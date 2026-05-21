@@ -123,3 +123,49 @@ User requested to continue implementation. Landed the first slice that takes the
 **Verified:** Core + Gui both build green, 0 warnings, 0 errors. Cli build is blocked locally by orphan Cli processes (same env issue as before; not introduced by this change). The compile-side of the Cli build succeeded - errors are MSB3021/MSB3027 file-lock from the orphans.
 
 **Follow-up risk:** when manual-testing again, verify that the sidecar actually writes JSON-RPC on its stdout despite the GUI being `<OutputType>WinExe</OutputType>` (Windows subsystem app, no console attached by default). Theory: claude spawns the sidecar with redirected stdin/stdout/stderr pipes, which the child inherits regardless of subsystem, so `Console.Out` writes to the inherited pipe and reaches claude. If this turns out to be wrong, the fallback is to switch the GUI csproj `<OutputType>` to `Exe` (briefly flashes a console window on launch) or to delegate sidecar duties to a sibling `InfiniContext.Cli.exe` via `ApprovalSidecarLauncher.ConfigureAsync`'s `sidecarExecutable` parameter.
+
+### Phase 3B slice 3 - prompt box (2026-05-20)
+
+**Manual test from user, post-second-window fix:**
+- + New session creates a session row + populates the inspector. Multi-session switching works.
+- **No transcript appears in the focused pane.**
+- Processes close cleanly when the GUI closes (claude.exe gone; node.exe ambiguous but probably also gone).
+- `C:\Users\antgr\.infinicontext\index.json` NOT updated after close.
+- Log file created at `<gui-cwd>/logs/gui-<timestamp>.log` as expected.
+
+**Diagnosis (from `D:\src\infinicontext\src\InfiniContext.Gui\bin\Debug\net10.0\logs\gui-20260520-223322.log`):**
+
+```
+22:33:28.293 approval-channel: waiting for connection on pipe=infinicontext-approval-8db034b7879c
+22:33:28.298 spawn: exe=claude argv=[--print --verbose --input-format stream-json ...] cwd=C:\Users\antgr\.infinicontext
+22:33:28.309 supervisor: attached pid=29964
+22:33:28.976 approval-channel: sidecar connected
+22:35:06.529 state Idle -> Exited (ProcessExit(exitCode=-1))
+22:35:06.530 process exited code=-1 unknown_events=0 malformed_lines=0
+22:35:06.545 session-index: skipping write - claude session id never assigned (cwd=...)
+```
+
+Both symptoms collapse to one root cause: `claude --print --input-format stream-json` is a non-interactive headless mode that does NOT emit `system/init` until the host sends a first stdin message. The GUI scaffold had no prompt input UI, so:
+1. claude spawned, sidecar handshook, then sat for 98 seconds with zero events emitted.
+2. The transcript pane stayed empty (no events -> no fragments).
+3. SessionId was never set (it's populated from `system/init`).
+4. When the user closed the window, the GUI's shutdown path disposed the SessionManager, which tried to record the index entry, found `claudeSessionId is null`, logged the skip-warning, and bailed (this is by design in `SessionManager.TryRecordIndexEntryAsync` - persisting a "ghost" row with no claude session id would create unresumable entries; D23).
+
+The CLI host doesn't hit this because its REPL accepts user input from second one - the first prompt the user types kicks claude into emitting events.
+
+**Fix:** add the prompt box. Once the user can send a message, claude emits `system/init` + `assistant` events, the transcript fills, SessionId gets assigned, and the index write succeeds on close.
+
+**Files updated:**
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs` - new `PromptText` observable property, `SendPromptCommand` (echoes `> {text}` into the focused session's transcript before calling `Session.SendUserMessageAsync`), `InterruptCommand` (calls `Session.InterruptAsync`). `CanExecute` re-notified on focus and prompt-text change so the buttons enable/disable correctly.
+- `src/InfiniContext.Gui/Views/MainWindow.axaml` - prompt placeholder TextBlock replaced with a real multi-line `TextBox` (rows 60-180px tall, accepts return, wraps), placeholder text, and a row of Send + Interrupt buttons. `KeyBindings` on the TextBox wire Ctrl+Enter -> SendPrompt and Esc -> Interrupt. Send button uses Avalonia 12's `accent` class for visual emphasis.
+- Caught an Avalonia 12 deprecation along the way: `TextBox.Watermark` is obsolete - swapped to `PlaceholderText`.
+
+**Build status:** Gui builds green, 0 warnings, 0 errors.
+
+**What manual-testing should verify next:**
+1. Prompt box appears at the bottom of the central column (replacing the placeholder text).
+2. Box is disabled until a session is focused; enabled afterward.
+3. Typing a prompt + Ctrl+Enter (or Send button) appends `> <text>` to the transcript and sends to claude.
+4. Claude responds; assistant text appears in the transcript.
+5. After at least one exchange + window close, `C:\Users\antgr\.infinicontext\index.json` has a new entry for the session.
+6. Esc (or Interrupt button) cancels an in-flight assistant response.

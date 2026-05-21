@@ -40,12 +40,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// <summary>Used by the view to surface fatal startup errors as a modal.</summary>
     public Action<string>? ShowError { get; set; }
 
+    [ObservableProperty]
+    private string _promptText = "";
+
     public IAsyncRelayCommand NewSessionCommand { get; }
+    public IAsyncRelayCommand SendPromptCommand { get; }
+    public IAsyncRelayCommand InterruptCommand { get; }
 
     /// <summary>Design-time constructor; the runtime path uses <see cref="CreateAsync"/>.</summary>
     public MainWindowViewModel()
     {
         NewSessionCommand = new AsyncRelayCommand(NewSessionAsync);
+        SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
+        InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
     }
 
     private MainWindowViewModel(SessionHost host) : this()
@@ -93,6 +100,50 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
+    private bool CanSendPrompt() => _host is not null && FocusedSession is not null && !string.IsNullOrWhiteSpace(PromptText);
+    private bool CanInterrupt() => FocusedSession is not null;
+
+    private async Task SendPromptAsync()
+    {
+        var target = FocusedSession;
+        var text = PromptText;
+        if (target is null || string.IsNullOrWhiteSpace(text)) return;
+
+        // Echo the user's prompt into the transcript so they see what they sent. Claude's own
+        // event stream doesn't echo user messages back (per design-doc s4.2), and the renderer
+        // only emits fragments for events FROM claude.
+        target.Context.Transcript.Append($"\n> {text}\n");
+        PromptText = "";
+
+        try
+        {
+            await target.Context.Session.SendUserMessageAsync(text).ConfigureAwait(true);
+            StatusText = $"Sent to {target.ShortId}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Send failed: {ex.Message}";
+            target.Context.Transcript.Append($"\n[send failed: {ex.Message}]\n");
+        }
+    }
+
+    private async Task InterruptAsync()
+    {
+        var target = FocusedSession;
+        if (target is null) return;
+        try
+        {
+            await target.Context.Session.InterruptAsync().ConfigureAwait(true);
+            StatusText = $"Interrupt sent to {target.ShortId}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Interrupt failed: {ex.Message}";
+        }
+    }
+
+    partial void OnPromptTextChanged(string value) => SendPromptCommand.NotifyCanExecuteChanged();
+
     private void OnSessionClosed(Guid id)
     {
         void Apply()
@@ -116,6 +167,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         if (oldValue is not null) oldValue.IsFocused = false;
         if (newValue is not null) newValue.IsFocused = true;
+        SendPromptCommand.NotifyCanExecuteChanged();
+        InterruptCommand.NotifyCanExecuteChanged();
     }
 
     public async ValueTask DisposeAsync()
