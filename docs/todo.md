@@ -2,7 +2,7 @@
 
 Snapshot date: **2026-05-20** (post Stage 2B close: macOS CI dispatched and validated; absorbed the former `docs/stage2/todo.md` queue into this single file).
 
-This file is the single consolidated work queue for InfiniContext. Items 1-6 below are the "actionable today" pile with full files-to-touch / acceptance / cost detail (carried over from the manual-test-session task after auto-approval performance and `/task` home_cwd realignment landed). After item 6, sections A through I capture the broader queue absorbed from the former `docs/stage2/todo.md` on 2026-05-20: open bugs and hardening (┬зA), Stage 2A leftover items (┬зB), items deferred from Stage 2B (┬зC), Stage 3 (┬зD), Stage 4 (┬зE), light-model research follow-ups (┬зF), fixture/testing follow-ups (┬зG), and `/task review` / `/task spawn` follow-ups (┬зI). Each item is written to be picked up cold — file paths, decisions to consult, acceptance criteria, and cost estimates inline. Items are independent unless noted.
+This file is the single consolidated work queue for InfiniContext. Items 1-8 below are the "actionable today" pile with full files-to-touch / acceptance / cost detail (carried over from the manual-test-session task after auto-approval performance and `/task` home_cwd realignment landed). After item 8, sections A through I capture the broader queue absorbed from the former `docs/stage2/todo.md` on 2026-05-20: open bugs and hardening (┬зA), Stage 2A leftover items (┬зB), items deferred from Stage 2B (┬зC), Stage 3 (┬зD), Stage 4 (┬зE), light-model research follow-ups (┬зF), fixture/testing follow-ups (┬зG), and `/task review` / `/task spawn` follow-ups (┬зI). Each item is written to be picked up cold — file paths, decisions to consult, acceptance criteria, and cost estimates inline. Items are independent unless noted.
 
 When you complete an item, **delete its section from this file** (the canonical truth lives in code + decision records; this file is a queue, not a log).
 
@@ -148,6 +148,79 @@ Session 5 hit the equivalent issue for `lightModelForTasks` and fixed it via `aw
 
 **Cost:** ~2–4 hours. Mostly review work, not code.
 
+## 7. Multi-pane non-focused-session auto-rotation (extend task 0005 issue 0013 to background panes)
+
+**Status:** actionable. Bounded scope but spans Core (lock release) + CLI (rotation hook).
+
+**Motivation.** Task 0005 issue 0013 shipped auto-rotation for the **focused** session: when a task-bound focused session exits and a context-pressure nudge fired during its life, `MultiSessionHost.OnStateTransition` builds a `TaskSwitchPlan` and the outer loop in `Program.cs` respawns the session. That covers the single-pane case the operator reported. The multi-pane case is still broken: if a background (non-focused) pane's task-bound session hits hard nudge and exits, the host does nothing тАФ the pane silently dies, the task row stays `InProgress`, and the operator finds out only when they `/focus` to it. This makes long-running multi-pane workflows lose work the same way the single-pane case used to.
+
+Two things have to happen for this to work:
+1. **Auto-release the task lock on session exit** (latent bug, separately tracked at the ┬зI entry "Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`"). Without this, a replacement session can't claim the same task тАФ the dead pane's session id still holds it. The ┬зI entry already names the fix shape (`SessionManager.CloseAsync` hook + `SessionContext.OnDispose`); 0013's focused-pane path side-stepped the issue because `Program.cs`'s outer loop calls `LeaveAsync` after every iteration. Background panes have no such per-iteration cleanup.
+2. **Subscribe to every session's state transitions in `MultiSessionHost`** (not just the focused one), and on `Exited` for a task-bound pane with `RotationReason != None`, in-host create a replacement: `SessionManager.CreateAsync` with the same `FirstUserMessage`/`ActiveTaskId`, `TaskActivityCoordinator.EnterAsync` to claim the lock, then `SessionManager.CloseAsync` on the old context. Focus stays where the operator put it; the rotation is invisible if they weren't watching that pane.
+
+The existing `AutoRotationGuard` already keys by task id, so the cap from 0013 applies to background rotations without change.
+
+**Files / lines:**
+- **(1) lock release** тАФ `src/InfiniContext.Core/Sessions/SessionManager.cs::CloseAsync`: take an optional `TaskActivityCoordinator` (or a leave delegate) and call `LeaveAsync(ctx.Id, ctx.ActiveTaskId.Value)` before `ctx.DisposeAsync` if `ActiveTaskId` is set. Plumb the coordinator through `SessionManager.OpenAsync` so `Program.cs` constructs it once and passes it in. Mirror the change in `DisposeAsync`'s per-session loop. Delete the per-iteration `LeaveAsync` in `Program.cs` once auto-release covers it.
+- **(2) per-session lifecycle subscription** тАФ `src/InfiniContext.Cli/Ui/MultiSessionHost.cs`: expose a `SessionManager.SessionCreated` event (new) and subscribe in the host's constructor; for each new context, hook `ctx.Session.State.Transitioned` and detect Exited+nudge+task-binding the same way the focused path already does. Refactor the focused-only `TryStartAutoRotation` into a per-context method that takes a `SessionContext` parameter; the focused-Exited branch and the new background-Exited branch both call it. Background rotation builds a new pane via `SessionManager.CreateAsync` + coordinator `EnterAsync` (the `/task spawn` flow in `TaskSlashCommand.TrySpawnTaskSessionAsync` is the existing template) instead of going through `RequestSwitch`; old pane is closed via `SessionManager.CloseAsync`.
+
+**Decisions to consult:**
+- Task 0005 issue 0013 resolution in `.task/0005-manual-testing-review-notes/issues.md` (the focused-pane design that this extends).
+- `docs/stage2/decisions.md` D9 (one-session-per-task). Background rotation must respect it; the auto-release fix from ┬зI makes this clean.
+- The existing `TaskSlashCommand.TrySpawnTaskSessionAsync` (`src/InfiniContext.Cli/SlashCommands/TaskSlashCommand.cs`) тАФ the canonical "create new pane bound to existing task" path; background rotation can lift its construction shape verbatim.
+
+**Acceptance:**
+- New unit test in `tests/InfiniContext.Tests/Cli/Ui/MultiSessionHostTests.cs`: two task-bound panes, the **non-focused** one hits hard nudge and exits; assert the focused pane is unchanged AND a fresh pane bound to the same task id appears in `SessionManager.Active`.
+- New unit test in `tests/InfiniContext.Tests/Sessions/SessionManagerTests.cs`: `CloseAsync` on a task-bound context calls the supplied leave delegate before disposal; `CloseAsync` on a non-task-bound context does not.
+- Regression: every existing 0013 test still passes (focused-pane rotation must keep working).
+- Manual: spawn two task-bound sessions via `/task spawn`, drive one of them to hard nudge in the background (long prompt or thresholds dialed down), confirm a replacement pane appears without operator action and the original `InProgress` task row never flickers to `Idle` between the two sessions.
+
+**Cost:** ~1-1.5 hours code + tests. Roughly half is the `SessionManager.CloseAsync` plumbing and the matching test, half is the in-host rotation hook and its test. The hardest part is making the new `SessionCreated` event observable from tests without leaking SessionManager internals тАФ likely just a plain `event Action<SessionContext>` on the manager, subscribed by `MultiSessionHost` once at construction.
+
+---
+
+## 8. Rip out the `tasks/lock` MCP channel; replace with a process-local write lock
+
+**Status:** actionable. Direction confirmed with the operator (manual-testing-review issue #0011) on 2026-05-21: D9's `TaskActivityCoordinator` already enforces intra-host one-session-per-task, which makes the cross-process MCP lock channel mostly dead weight.
+
+**Motivation.** Today the `.task/` write serialization story has three layers; only two earn their keep:
+- (intra-host) `TaskActivityCoordinator` blocks two panes from running on the same task. D9. Load-bearing.
+- (cross-host) `LockRegistry` + the `tasks/lock` channel served via the approval sidecar would serialize writes between two `infinicontext.exe` processes on the same machine. Rare; not a goal of the design.
+- (agent-vs-host inside one process) The same lock channel serializes the agent's writes to `progress.md` / `index.md` / `issues.md` against host-side writes from `IssueService` (`/issue add`) and `TaskCommandHandler` (`/task review`). This is the only thing that fires routinely.
+
+The whole "MCP channel over named pipe with skill-side acquire/release" machinery exists to handle the second and third items. The second is rare; the third can be solved with a process-local `SemaphoreSlim` keyed by absolute file path. Killing the lock channel removes a meaningful pile of moving parts: pipe wire contract, MCP tool definitions, `LockRegistry` storage, skill-side acquire/release steps, lock-acquire/release tests.
+
+**Constraint to document:** "one `infinicontext.exe` per home_cwd at a time." Two host processes touching the same `.task/` folder is unsupported and may corrupt artifacts. Add a one-line note to `docs/quickstart.md` and to the `CLAUDE.md` "Persistence" section.
+
+**Files to delete (or strip down):**
+- `src/InfiniContext.Core/Mcp/Tasks/LockRegistry.cs` and any sibling lock-message types (`LockAcquireRequest` / `Response`, `LockReleaseRequest` / `Response`) under `src/InfiniContext.Core/Mcp/Tasks/`.
+- `src/InfiniContext.Core/Mcp/ApprovalChannel.cs`: strip the `tasks/lock` JSON-RPC dispatch in `RunServerAsync`, plus the `_lockRegistry.ReleaseAllOwnedBy(_pipeName)` call in `DisposeAsync`.
+- `src/InfiniContext.Core/Mcp/ApprovalSidecarHost.cs`: strip the `mcp__infinicontext__task_acquire_lock` / `task_release_lock` tool registrations and forwarders.
+- `src/InfiniContext.Core/Tasks/Skill/InfiniContextTaskSkill.cs`: strip the "call `mcp__infinicontext__task_acquire_lock` ... then call `mcp__infinicontext__task_release_lock`" steps from the skill body. Bump the skill `Version` constant so `SkillInstaller`'s version-check auto-updates installed copies on next host start.
+- `src/InfiniContext.Cli/Program.cs`: delete the `LockRegistry` construction (currently around line 138) and the parameter passing to `SessionManager.OpenAsync` and `IssueService`.
+- Tests: any `LockRegistry*Tests.cs`, lock-specific cases in `ApprovalChannel*Tests.cs` and `ApprovalSidecar*Tests.cs`, and the `mcp__infinicontext__task_*_lock` MCP tool tests if they exist. Grep `LockRegistry|task_acquire_lock|task_release_lock` to find them.
+
+**Files to add / change for the replacement:**
+- New `src/InfiniContext.Core/Tasks/TaskArtifactWriteLock.cs`: a small process-local lock keyed by absolute file path. `Task<IAsyncDisposable> AcquireAsync(string absolutePath, CancellationToken ct)` returns a disposable; the lock is a `SemaphoreSlim(1, 1)` per path, held in a `ConcurrentDictionary<string, SemaphoreSlim>`. Idle semaphores can be released opportunistically. Pure in-memory, host-scoped.
+- `src/InfiniContext.Core/Tasks/IssueService.cs` and `src/InfiniContext.Core/Tasks/TaskCommandHandler.cs` (and `TaskService` if it writes artifacts directly): wrap their `index.md` / `progress.md` / `issues.md` writes with `await using var _ = await writeLock.AcquireAsync(fullPath, ct);`. Drop the `LockRegistry` dependency. Confirm `TaskFolder.WriteArtifactAsync` is the single write funnel; if so, do the wrapping inside that method so callers don't have to think about it.
+- The skill body: agent stops calling lock tools. Just `Read` then `Edit` / `Write`. Inside one host the host's write lock serializes against the agent's writes (the agent writes via the same `TaskFolder.WriteArtifactAsync` funnel through MCP); if there are two hosts, the documented constraint applies.
+
+**Decisions to consult:**
+- D9 (`docs/stage2/decisions.md`): the underlying "one session per task" rule that makes intra-host concurrency manageable in the first place. Add a closing note in `decisions.md` that the lock channel was removed and why.
+- The lock-design notes in `.claude/tasks/20260507-tasks-and-sessions-management/decisions.md`: the original "why MCP lock channel" rationale. Drop a back-reference there too so future archaeologists find the rip-out.
+
+**Acceptance:**
+- Full test suite green after deletion + replacement (981 today; expect a small reduction once lock-specific tests are dropped).
+- New test: two host-side concurrent `IssueService.AddAsync` calls on the same `issues.md` are serialized by the new write lock (no interleaving, no corrupted markdown).
+- `docs/quickstart.md` carries the "one `infinicontext.exe` per home_cwd at a time" note.
+- `CLAUDE.md` "Persistence" section carries the same note.
+- Manual: run a `/task review` while a session is mid-edit on the same task's `progress.md`; confirm no corruption with the new write lock.
+- The `infinicontext-task` skill on a fresh user install reflects the new (lock-free) body after `SkillInstaller` runs.
+
+**Cost:** ~2-3 hours. Roughly one-third deletion, one-third the `TaskArtifactWriteLock` replacement, one-third skill bump + docs + tests. Bigger than item 7 because it touches the wire contract and the skill body, but bounded; every load-bearing piece is named above.
+
+**Source:** `.task/0005-manual-testing-review-notes/issues.md` #0011 + operator confirmation 2026-05-21.
+
 ---
 
 ## Cross-cutting context
@@ -179,6 +252,10 @@ When an item is picked up, **remove its bullet from this file** (or promote it i
 - **Smoke tests create real SQLite at `~/.infinicontext/infinicontext.db`.** Easy follow-up: set `INFINICONTEXT__TASKS__DBPATH` to a temp path in the smoke driver. Source: `20260507-tasks-and-sessions-management/progress.md` Phase 5 known caveat.
 - **Update `ApprovalSinkFactory.cs:73` warning text** - be specific about OAuth-vs-API-key gap and link `console.anthropic.com`. *May already be done in Session 4; verify.* Source: `20260507-manual-test-session/findings.md`.
 - **Out-of-process "kill host -> child cleanup" integration test.** Spawn `InfiniContext.Cli` as a child, `/n` one or two sessions, kill the host, scan for orphan PIDs. Deferred per D37 (per `docs/stage2/decisions.md`): the existing `JobObjectSupervisorTests` (Windows, same kernel path as host crash) and `PosixSignalSupervisorTests` (POSIX SIGTERM path) cover the kill primitives; the integration gap is the disposal-cascade wiring, which manager-level disposal tests cover indirectly. Files: new `tests/InfiniContext.Tests/Cli/KillHostCleanupTests.cs` (~100 LOC). Source: `20260516-phase-8`.
+- **`AskUserQuestion` tool surfaces as empty success.** When the agent calls Claude's `AskUserQuestion` tool, the host returns `[tool-result: ok]` with no payload тАФ the agent never sees the user's selection and has to fall back to a free-text confirm-with-recommended-option. Two-part fix: (1) host-side picker UI (Spectre `SelectionPrompt` / `MultiSelectionPrompt` in CLI; native dropdown in Stage 3 GUI) wired to whatever transport the tool uses; (2) until that lands, return a structured error so the agent recognises the tool as unsupported. Source: `.task/0005-manual-testing-review-notes/issues.md` #0001.
+- **`TaskCreate` / `TaskUpdate` / `TaskList` (Claude's in-conversation todo tools) currently no-op.** The agent calls these expecting Claude-side todo tracking; the host returns `[tool-result: ok]` but does nothing visible. The agent's todo state stays in its own context with no host-side reflection. Decision: implement a host-side todo tracker exposed via the MCP sidecar (so users see a "live todo strip" in the UI), OR explicitly reject the tools and steer the agent toward `.task/` artifacts. Choice depends on whether per-session in-conversation todos are valuable alongside the structured task artifacts; revisit alongside Stage 3 GUI surface design. Source: `.task/0005-manual-testing-review-notes/issues.md` #0003.
+- **Broaden the default auto-approve allowlist.** Operator reports that the auto-mode safety reviewer denies routine read-only tool calls more often than it should. Action: scrape the most recent host logs for top auto-deny tool names + commands, propose a specific expanded set of defaults for `settings.json::approval.auto.allowedTools`, and ship the wider default. No code change beyond settings + a paragraph in `docs/quickstart.md`. Source: `.task/0005-manual-testing-review-notes/issues.md` #0005.
+- **Safety-reviewer prompt tune so routine `git push` isn't auto-denied.** Today the auto-mode reviewer denies `git push origin main` as "destructive, wide blast radius" тАФ technically true for force-push, but most `git push` is non-destructive and the operator hits this every working day. Iterate the reviewer prompt template (in `src/InfiniContext.Core/LightModel/` тАФ the safety-review prompt builder) to distinguish "push to a non-protected branch" from "force-push / history rewrite / branch delete." Validate with a small probe set before rolling. Source: `.task/0005-manual-testing-review-notes/issues.md` #0007.
 
 ## B. Stage 2A leftover items (tasks and sessions)
 
@@ -217,6 +294,8 @@ When an item is picked up, **remove its bullet from this file** (or promote it i
 - **`b` key + Spectre `MultiSelectionPrompt` picker for `/broadcast`.** Plan section 6 sketched a "press `b` -> checkbox-pick -> one prompt" flow as the broadcast UI; Phase 6 shipped only the slash-command surface. Same `Console.ReadKey` dependency as `Tab`/`r`; lands with Phase 4c iff comma-prefix selection feels clunky in real use for >=4 targets.
 - **Real-spawn broadcast fan-out test.** Phase 6 tests drive `BroadcastAsync` against the in-memory `RecordingSession` and `FakeSession`. The end-to-end version (two FakeClaude processes via `SessionManager.CreateAsync`, one `/broadcast` line, both transcripts converge) was deferred; the exit-criteria smoke battery exercises the wiring at unit level.
 - **C-1 deeper restructure (stdin/stdout deadlock).** Current `DropOldest` mitigation suffices through Phase 4b. Stage 2 should consider a dedicated stdin-writer task driven by a queue if multi-session contention surfaces deadlocks. Files: `ClaudeSession.cs` (write path). Source: `20260506-poc/decisions.md` (Pending), `20260506-review-stage1-poc/context.md`.
+- **Multi-line prompt input.** Operator wants either trailing-backslash continuation (Claude Code style тАФ last char `\` swallows the newline and adds a row to the same prompt) or `Shift+Enter` to start a new line. `Shift+Enter` requires `Console.ReadKey`-based input (the same dependency as Phase 4c keybindings). Trailing-backslash continuation works on top of the existing `Console.ReadLine` loop and could ship without the Phase 4c rework тАФ recommend doing it first as a low-risk increment, then revisit `Shift+Enter` when Phase 4c lands. Files: `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` (input loop around lines 174тАУ235). Source: `.task/0005-manual-testing-review-notes/issues.md` #0002.
+- **External editor for long prompts.** Operator wants a `/edit` (or `/e`) slash command that opens a configurable external editor тАФ `$VISUAL` then `$EDITOR` then `notepad` (Windows) / `nano` (Unix) as the fallback chain тАФ writes the current draft to a temp file, blocks on the editor's exit, reads the result, and sends it as the next user message. Settings: a new `editor.command` (string, optional) under settings.schema.json. Files: new `src/InfiniContext.Cli/SlashCommands/EditCommand.cs` plus a temp-file helper; settings layer additions in `InfiniContextSettings`. Source: `.task/0005-manual-testing-review-notes/issues.md` #0009.
 
 ## D. Stage 3 (Avalonia GUI)
 
@@ -233,6 +312,7 @@ When an item is picked up, **remove its bullet from this file** (or promote it i
 - **Hand-rolled parser converters revisited.** Parser uses `JsonNode` round-trip; hand-rolled can come back if Stage 3 needs typed access to deeply nested fields (e.g. `assistant.message.content[i].input`). Source: `20260506-poc/decisions.md`.
 - **Tree-view UI.** Source: `20260507-tasks-and-sessions-management/decisions.md`, `design.md` section 6.
 - **Auto-start mode.** UI checkbox firing off agents without confirmation - footgun to design carefully. Source: same.
+- **Background-worker / sub-agent collapsible visibility.** Operator called out that CLI output for sub-agents (Task-tool spawns, in-progress workers, etc.) is verbose and hard to scan. In a GUI this should fold into collapsible per-worker rows showing status (idle / working / done / failed) with on-demand output reveal. Implicit in the existing "Collapsible tree view per session" bullet but worth tracking as an explicit GUI requirement so it isn't dropped. Source: `.task/0005-manual-testing-review-notes/issues.md` #0008.
 
 ## E. Stage 4 (release engineering)
 
@@ -278,6 +358,6 @@ When an item is picked up, **remove its bullet from this file** (or promote it i
 
 ### /task spawn
 
-- **Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`.** When a `/task spawn`-spawned (or `/n`-spawned) session is closed mid-host-lifecycle, the coordinator's task claim is NOT released. The task row stays at `InProgress` until host restart. This gap pre-exists for every non-focused multi-session path; `/task spawn` makes the gap more visible because it's now a routine flow. Files: `src/InfiniContext.Core/Sessions/SessionManager.CloseAsync` + a `SessionContext.OnDispose` hook.
+- **Wire `TaskActivityCoordinator.LeaveAsync` into `SessionManager.CloseAsync`.** When a `/task spawn`-spawned (or `/n`-spawned) session is closed mid-host-lifecycle, the coordinator's task claim is NOT released. The task row stays at `InProgress` until host restart. This gap pre-exists for every non-focused multi-session path; `/task spawn` makes the gap more visible because it's now a routine flow. Files: `src/InfiniContext.Core/Sessions/SessionManager.CloseAsync` + a `SessionContext.OnDispose` hook. (**Cross-ref:** numbered item 7 above тАФ multi-pane non-focused-session auto-rotation тАФ depends on this fix; the two should be picked up together.)
 - **End-to-end test for `/task spawn`** against real `MultiSessionHost` + `SessionManager` + `TaskActivityCoordinator`. v1 ships with only parser tests; the helper-side flow (`TrySpawnTaskSessionAsync` - local pre-check, plan build, `CreateAsync`, coordinator Enter with rollback-on-refusal) is integration-only and uncovered. Files: new `tests/InfiniContext.Tests/Cli/SlashCommands/TaskSpawnSlashCommandTests.cs` or fold into the existing `TaskCommandHandlerReviewTests` scaffold.
 
