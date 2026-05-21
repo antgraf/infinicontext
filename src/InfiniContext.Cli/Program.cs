@@ -1,6 +1,5 @@
 using InfiniContext.Cli;
 using InfiniContext.Cli.Issues;
-using InfiniContext.Cli.Mcp;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Cli.Ui;
 using InfiniContext.Core.Configuration;

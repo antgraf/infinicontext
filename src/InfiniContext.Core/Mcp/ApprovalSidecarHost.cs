@@ -1,24 +1,23 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
-using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Mcp.Tasks;
 using Serilog;
 
-namespace InfiniContext.Cli.Mcp;
+namespace InfiniContext.Core.Mcp;
 
 /// <summary>
-/// Entry point for the approval sidecar — the in-process MCP server that claude spawns when given
+/// Entry point for the approval sidecar - the in-process MCP server that claude spawns when given
 /// <c>--permission-prompt-tool mcp__infinicontext__approval_prompt</c> with our generated <c>--mcp-config</c>.
 ///
 /// The sidecar bridges JSON-RPC over its stdin/stdout (claude's view) to a named pipe back to the host
 /// (where the human actually answers approve/deny). One sidecar process per claude session.
 ///
-/// Lives in <c>InfiniContext.Cli</c> because it drives <see cref="Console.In"/>/<see cref="Console.Out"/>
-/// directly — a hosting concern, not a Core library type. The wire constants live in
-/// <see cref="ApprovalSidecarContract"/> in Core so non-CLI consumers (recorder, tests) can reference them.
+/// Promoted from <c>InfiniContext.Cli.Mcp</c> to Core in Phase 3B so both the CLI host and the
+/// Avalonia GUI head can share the same sidecar entry point - the host process re-spawns itself
+/// with <c>--mcp-approval-server &lt;pipe&gt;</c> regardless of which head is running.
 /// </summary>
-internal static class ApprovalSidecarHost
+public static class ApprovalSidecarHost
 {
     /// <summary>
     /// Runs the sidecar. Connects to the host pipe up-front; if that fails the sidecar exits before

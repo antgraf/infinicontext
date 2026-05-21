@@ -108,3 +108,18 @@ User requested to continue implementation. Landed the first slice that takes the
 3. Approval banner / inspector card per `design.md` section 6.3. Requires porting `ApprovalSinkFactory` to support GUI-routed prompts; today everything denies.
 4. Resume from `~/.infinicontext/index.json` via a "Recent" expander under the session list.
 5. Promote `.task/0004/design.md` to `docs/stage3/design.md` once the open decisions are signed off.
+
+### Phase 3B bugfix - second MainWindow after "+ New session" (2026-05-20)
+
+**Symptom (user-reported, manual test):** clicking "+ New session" correctly created a session row in the left column and showed session info in the inspector, but immediately after, a *second* MainWindow appeared on top of the first (empty, no sessions). Both windows remained open.
+
+**Root cause:** `ApprovalSidecarLauncher` (Core/Sessions/ApprovalSidecarLauncher.cs:57) uses `Environment.ProcessPath` as the sidecar executable. When the GUI is the host, `Environment.ProcessPath` is `InfiniContext.Gui.exe` - so claude re-spawns `InfiniContext.Gui.exe --mcp-approval-server <pipe>`. The CLI's `Program.cs` has an early short-circuit for this argv pattern (line 20) that runs the sidecar and returns before Avalonia bootstraps. The GUI's `Program.cs` had no such short-circuit, so the re-spawned process booted a second Avalonia app, opened a new MainWindow with an empty placeholder VM, and (worse, would have) polluted stdout (reserved for JSON-RPC) with Avalonia bring-up output.
+
+**Fix:**
+- Promoted `ApprovalSidecarHost` from `InfiniContext.Cli.Mcp` to `InfiniContext.Core.Mcp` and made it `public`. The class has no Cli-specific behaviour - it drives `Console.In` / `Console.Out` directly, which is process-bootstrap concern, not Cli concern. Both heads need the same entry point. (`InfiniContext.Cli/Mcp/` is now empty.)
+- Updated `InfiniContext.Cli/Program.cs` to drop the `using InfiniContext.Cli.Mcp;` line - the type now resolves via the pre-existing `using InfiniContext.Core.Mcp;`.
+- Added the sidecar short-circuit to `InfiniContext.Gui/Program.cs`: if `args[0] == "--mcp-approval-server"`, run `ApprovalSidecarHost.RunAsync` against the pipe in `args[1]` and return before `BuildAvaloniaApp().StartWithClassicDesktopLifetime(args)`. Same logger/settings loading shape as the CLI's path.
+
+**Verified:** Core + Gui both build green, 0 warnings, 0 errors. Cli build is blocked locally by orphan Cli processes (same env issue as before; not introduced by this change). The compile-side of the Cli build succeeded - errors are MSB3021/MSB3027 file-lock from the orphans.
+
+**Follow-up risk:** when manual-testing again, verify that the sidecar actually writes JSON-RPC on its stdout despite the GUI being `<OutputType>WinExe</OutputType>` (Windows subsystem app, no console attached by default). Theory: claude spawns the sidecar with redirected stdin/stdout/stderr pipes, which the child inherits regardless of subsystem, so `Console.Out` writes to the inherited pipe and reaches claude. If this turns out to be wrong, the fallback is to switch the GUI csproj `<OutputType>` to `Exe` (briefly flashes a console window on launch) or to delegate sidecar duties to a sibling `InfiniContext.Cli.exe` via `ApprovalSidecarLauncher.ConfigureAsync`'s `sidecarExecutable` parameter.
