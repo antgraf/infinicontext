@@ -949,3 +949,136 @@ If step 2 is missing, the ctor pre-seed didn't fire - the spawn must have produc
 - The watchdog fail-open rejection from prior flushes still applies. Bring-up failures (e.g., child stdin pipe closed before our write) still rely on the operator checking `logs/gui-*.log` for "first user message send failed".
 - The four out-of-scope items from the prior flush (mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors) remain queued.
 
+### Flush note (hard threshold, 2026-05-21)
+
+Host hit hard context-pressure threshold (~85%; reported as 137% of 1M) right after the free-session deadlock fix landed and committed. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (all committed, working tree CLEAN):**
+- Commit `cc42c1a` "Phase 3B fix: FirstUserMessage sent on session start (claude --print never emits system/init without stdin input)." - bundles Serilog instrumentation slice + bring-up-deadlock fix. Six files: `SessionRowViewModel.cs`, `MainWindowViewModel.cs`, `ClaudeSession.cs`, `FakeClaudeIntegrationTests.cs`, `progress.md`, `index.md`.
+- Commit `bada548` "Phase 3B fix: free-session deadlock (ctor-time IsReady when ActiveTaskId is null)." - companion fix; new ctor `else if` branch in `SessionRowViewModel`. Three files: `SessionRowViewModel.cs`, `progress.md`, `index.md`.
+
+**Branch state:** `main` is **2 commits ahead of `origin/main`**, not pushed (operator owns push per the shared-state-action guidance). Working tree is clean - nothing uncommitted, nothing modified.
+
+**Build/test at flush time:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes` clean.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> 981 passed / 3 POSIX-skipped / 0 failed. Exact parity with baseline.
+
+**Next session pickup:**
+1. Operator-driven: `git push` the two commits to `origin/main`. No code changes needed; just publishing.
+2. Operator smoke test of both fixes:
+   - Task-bound spawn (per-task "+" button): expect `first user message sent (N bytes)` in `logs/gui-*.log` within ~1s of spawn (no 55s silent gap), then the 10-step log sequence documented in the bring-up-deadlock entry. Send / Continue / What's next buttons enable after the pointer turn closes.
+   - Free-session spawn (folder picker): expect `IsReady=true reason=ctor-free-deferred-init` in the first ms after spawn. Send button enables as soon as the prompt text box has content. Typing the first prompt wakes claude (it will then emit `system/init` followed by assistant output).
+3. If smoke passes both: proceed to the queued polish items (mid-session approval-mode toggle, live banner countdown, "Pending approval (N)" badge, theme-portable banner colors), and/or the design.md s10 sign-off prerequisite for promoting `.task/0004/design.md` -> `docs/stage3/design.md`. `docs/stage3/plan.md` and `docs/stage3/decisions.md` are still unauthored.
+4. If smoke fails: the Serilog instrumentation now logs all five `SetIsReady` paths + per-event observations; attach `logs/gui-*.log` and triage from the anchor lines (ctor line shows pre-seed inputs; `event observed:` lines confirm event flow; `IsReady=true reason=...` confirms which path fired; `focused-session IsReady changed ... canSend=...` confirms parent-VM refresh).
+
+**Out of scope (unchanged):** watchdog timeout fail-open (deliberately rejected to keep silent bring-up failures visible); `<Compile Include>` link housekeeping (only `ApprovalSinkFactory.cs` remains link-compiled); the 55s silent exit-1 case for free sessions where the operator spawns and never types (claude self-cleanup, not a host bug, but a "spawn timed out" status banner would be polish).
+
+### Phase 3B slice 4m - live approval-banner countdown (2026-05-21)
+
+Closes the second polish item from the post-4k queue ("live per-second countdown in the approval banner"). The 4i banner showed deadline text snapshotted at the moment the banner opened ("auto-denies in ~60s") and never updated; the slot's timeout still fired server-side at the deadline, so the only thing missing was a per-second UI refresh.
+
+**Implementation (single file, `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`):**
+
+- New `DispatcherTimer _deadlineTimer` field, constructed once in the row VM's ctor via `new DispatcherTimer(DispatcherPriority.Background) { Interval = 1s }; _deadlineTimer.Tick += OnDeadlineTick`. Parameterless-priority ctor used because the three-arg `(TimeSpan, DispatcherPriority, EventHandler)` ctor auto-starts the timer - we want it stopped until a banner opens.
+- `OnPendingApprovalChanged` partial: `if (value is not null) _deadlineTimer.Start(); else _deadlineTimer.Stop();` So idle rows pay no per-second cost; the timer runs only on the row(s) with a live banner.
+- New `OnDeadlineTick(object?, EventArgs)` handler: re-evaluates `PendingApproval` (defensive against tick-vs-resolve races - if the slot cleared between the last `OnPendingApprovalChanged` and the tick, the handler stops the timer and returns), then `OnPropertyChanged(nameof(PendingDeadlineText))` to push the new "auto-denies in ~Ns" string to the bound `TextBlock`. `DispatcherPriority.Background` so the tick yields to user input + transcript redraws.
+- `Dispose` stops the timer and detaches the tick handler in a best-effort try block matching the existing teardown pattern (state transition / event observed / approval changed unsubscribes).
+- XML doc on `PendingDeadlineText` updated: removed the "static text (not a live countdown) ... follow-up" note that the prior slice's design called out as a polish gap.
+
+**Behaviour:** banner now shows a live "auto-denies in ~Ns" countdown that decrements each second; reads "deadline reached" once the slot's timeout fires (typically `Approval.TimeoutSeconds` from settings, default 60s). The slot itself still owns the actual auto-deny - the UI is purely cosmetic.
+
+**Why DispatcherTimer (not System.Timers.Timer + Dispatcher.Post):** the tick already arrives on the UI thread (DispatcherTimer dispatches via `Dispatcher.UIThread`), so the property-changed call is safe without a marshal. Background priority keeps the per-second redraw from competing with assistant-text streaming or button input. Memory cost is one `DispatcherTimer` per row - negligible at any reasonable session count.
+
+**Build/test:**
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format src/InfiniContext.Gui/InfiniContext.Gui.csproj --verify-no-changes --no-restore` clean.
+- Full solution test parity not re-verified (no test added; GUI VMs remain operator-smoke-only per the existing policy). Last green baseline was 981 passed / 3 POSIX-skipped at slice 4l.
+
+**Operator smoke:** trigger any tool call in a session whose approval mode is `ask` (or any auto-mode call that falls back to ask via the slot sink). The banner's deadline line should now decrement once per second. Stopping condition: the operator approves, denies, or the slot self-times-out - in all three cases `OnPendingApprovalChanged(null)` runs and stops the timer.
+
+**Follow-ups remaining (from the 4k flush, minus 4l + this slice):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+
+### Flush note (hard threshold, 2026-05-21 post-4m)
+
+Host hit hard context-pressure threshold (~85%; reported as 320% of 1M) immediately after slice 4m landed in working tree. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (uncommitted - three files modified this session):**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs` - slice 4m code: `DispatcherTimer _deadlineTimer` field, ctor instantiates with `DispatcherPriority.Background` + 1s interval + `OnDeadlineTick` handler (parameterless-priority ctor used because the three-arg ctor auto-starts; we want stopped). `OnPendingApprovalChanged` starts the timer on non-null transition, stops on null. `OnDeadlineTick` defensively re-checks `PendingApproval` then raises `PropertyChanged(nameof(PendingDeadlineText))`. `Dispose` stops the timer + detaches the tick handler. XML doc on `PendingDeadlineText` rewritten to remove the "static text / follow-up" claim. Compiles + formats clean.
+- `.task/0004-phase-3-ui-implementation-documentation/progress.md` - this session added two entries: (a) the prior-session's dangling flush note that was unstaged at session start (no edits from this session - it was already on disk), and (b) the slice 4m entry above this flush note. The original dangling flush note was the only uncommitted change at session start; the 4m entry + this flush note are this session's additions.
+- `.task/0004-phase-3-ui-implementation-documentation/index.md` - `progress.md` row description updated to point at the 4m entry; date stays 2026-05-21.
+
+**Branch state:** `main` is still **2 commits ahead of `origin/main`** (`cc42c1a` + `bada548` from the prior session - unchanged). Three additional working-tree modifications above sit on top, uncommitted.
+
+**Build/test at flush time:**
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format src/InfiniContext.Gui/InfiniContext.Gui.csproj --verify-no-changes --no-restore` clean (exit 0).
+- Full solution test parity NOT re-verified this session (no test added; GUI VMs remain operator-smoke-only per the existing policy). Last green baseline was 981 passed / 3 POSIX-skipped at slice 4l.
+
+**Next session pickup:**
+1. **Commit the 4m slice.** Suggested message: `"Phase 3B slice 4m: live per-second countdown in approval banner."` Three files: `SessionRowViewModel.cs` + `progress.md` + `index.md`. The progress.md commit will also fold in the dangling prior-session flush note that was uncommitted at this session's start - that's fine; the note describes prior-session state and naturally rides along on the next progress.md write.
+2. **Operator-driven push.** After 1, `main` will be 3 commits ahead of `origin/main` (`cc42c1a`, `bada548`, the new 4m commit). Push is operator-owned per the shared-state-action rule.
+3. **Operator smoke verification.** Two open verifications now stacked:
+   - 4i+4j+4k+4l GUI approval surface: operator was meant to smoke-test the four modes (ask/deny/allow/auto) and the auto-mode decision visibility per the 4k+4l entries - not yet done.
+   - 4m live countdown: trigger any tool call in a session whose approval mode is `ask` (or any auto-mode call that falls back to ask via the slot sink). The banner's deadline line should decrement once per second. Test the three exit paths: operator approve, operator deny, slot self-timeout - all three should stop the timer via `OnPendingApprovalChanged(null)`.
+4. **If smoke passes:** pick the next polish slice. Three remaining: mid-session approval-mode toggle (largest of the three - needs status-strip dropdown + `SwitchableApprovalSink.Switch`); "Pending approval (N)" badge (medium - needs cross-session aggregation in `MainWindowViewModel`); theme-portable banner colors (smallest - replace 3 hardcoded amber values with `DynamicResource` brushes). Recommend in that priority order: toggle closes a CLI parity gap; badge improves multi-session UX; theme is cosmetic.
+5. **If smoke fails on 4m:** the symptom-vs-cause split is straightforward. If the timer never starts -> `OnPendingApprovalChanged` is not being invoked (check the existing slot-changed plumbing). If it starts but never ticks -> dispatcher priority or constructor flag issue. If it ticks but the text never updates -> binding pipeline (the XAML `OneWay` binding should auto-refresh on `PropertyChanged`; if not, verify the property name string is reachable).
+
+**Doc work still gated:**
+- Promote `.task/0004-phase-3-ui-implementation-documentation/design.md` -> `docs/stage3/design.md` still gated on user sign-off of `design.md` section 10 open decisions (unchanged from prior flushes).
+- `docs/stage3/plan.md` (Phase 3B work breakdown) and `docs/stage3/decisions.md` (decision log mirroring `docs/stage2/decisions.md`) still not authored.
+
+**Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected); the 55s silent exit-1 case for free sessions where operator spawns and never types (claude self-cleanup, not a host bug, a "spawn timed out" status banner would be polish); `<Compile Include>` link housekeeping for tests (only `ApprovalSinkFactory.cs` remains link-compiled).
+
+### Phase 3B fix - TreeView session-row selection + dead-session signalling (2026-05-21)
+
+Operator reported three session-management bugs post-4m: (1) when a session is stopped due to context limit, the GUI gives no signal and operator input afterwards is invisible; (2) a manually-spawned second session under a task never becomes focused; (3) clicking between session rows in the tree never changes the transcript content.
+
+**Root cause for #2 and #3 (single bug, two symptoms):** the `TreeView.DataTemplates` block in `MainWindow.axaml` used `<TreeDataTemplate>` for `TaskNodeViewModel` (correct - it has child `Sessions` via `ItemsSource`) but `<DataTemplate>` for `SessionRowViewModel` (incorrect for nested TreeView items). In Avalonia's TreeView, only items rendered via a `TreeDataTemplate` get wrapped in their own `TreeViewItem` container. A plain `DataTemplate` renders the row content but the click bubbles up to the parent task's `TreeViewItem`, so `TreeView.SelectedItem` two-way binds back to the `TaskNodeViewModel`, not the session row underneath. `OnSelectedNodeChanged` then routes to `case TaskNodeViewModel task:` which only sets `SelectedTaskNode` and intentionally leaves `FocusedSession` untouched - which is exactly the symptom: transcript stays pinned on whatever session was last actually selected (often the first one), and the new session you just spawned (which DID set FocusedSession programmatically at SpawnSessionForTaskAsync.cs:277-279) loses focus the moment any tree click happens.
+
+**Root cause for #1:** the per-row VM (`SessionRowViewModel`) has no dead-session signalling path:
+- `IsReady` is monotonic (once true, stays true) - so `CanSendPrompt` stays true after the child exits.
+- The send-failure marker that `SendToSessionAsync`'s catch writes lands on `Context.Transcript.Append` (the flat fragment view) which isn't bound to anything visible in the GUI as of slice 4b - only the per-turn tree (`FocusedSession.Turns`) is on screen.
+- `Session.State.State` transitions to `Exited` on process exit but the row VM's existing state-change handler only updates `StatusGlyph` + `State` text - both subtle, both small.
+
+**Fix:**
+
+- `src/InfiniContext.Gui/Views/MainWindow.axaml`: changed `<DataTemplate x:DataType="vm:SessionRowViewModel">` -> `<TreeDataTemplate x:DataType="vm:SessionRowViewModel">` (and the matching closing tag). Added a comment block above the template explaining the selectability requirement so this doesn't regress.
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`:
+  - New `IsAlive` computed property: `Context.Session.State.State != SessionState.Exited`. XML-doc explains the semantics: false once the child process exits, so the host VM can gate Send/Interrupt on it.
+  - `OnStateTransition` now raises `PropertyChanged(nameof(IsAlive))` alongside the existing `State` notification. On transition to `Exited` it also pushes a visible `(session exited)` synthetic turn into the per-turn tree (via `EnsurePendingTurn` + a `TurnContentKind.System` child carrying the `from -> to / reason` payload) so the operator sees a clear marker in the transcript instead of having to read the small grey state line under the row. Dispatcher-marshalled because state transitions may fire off the UI thread.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs`:
+  - `CanSendPrompt` now requires `FocusedSession is { IsReady: true, IsAlive: true }` (was just `IsReady: true`).
+  - `CanInterrupt` requires `FocusedSession is { IsAlive: true }` (was just non-null).
+  - `OnFocusedSessionPropertyChanged` now refreshes `SendPromptCommand` + `InterruptCommand` when the focused row raises PropertyChanged for `IsReady`, `IsAlive`, or `State` (was only `IsReady`). Logging line expanded to include `prop` + `isAlive` so the next stuck-buttons diagnosis can tell at a glance which axis flipped.
+
+**What this leaves alone:**
+- `[Binding FocusedSession, Converter=IsNotNull]` on the TextBox's `IsEnabled` still allows typing into a dead session's box; only the Send/Interrupt buttons disable. Leaving the textbox enabled so the operator can compose text they intend to send to a *different* (live) session after switching focus - the gate is intentionally on the send-action, not on the typing surface.
+- The flat `TranscriptModel.Append` path is still in use for sink output (e.g. the auto-mode decision echo from `ConsoleEchoingApprovalSink` per slice 4l). That goes to a model the GUI currently doesn't render. Not regressing it here; the visible per-turn marker handles the dead-session case specifically.
+- The TaskNode row's TreeDataTemplate stays unchanged - it was already correct (it has child `Sessions`, so `ItemsSource={Binding Sessions}` is right).
+
+**Build/test:**
+- `dotnet build src/InfiniContext.Gui/InfiniContext.Gui.csproj -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format src/InfiniContext.Gui/InfiniContext.Gui.csproj --verify-no-changes --no-restore` clean (exit 0).
+- Test parity not re-verified (no test added; GUI VMs remain operator-smoke-only).
+
+**Operator smoke checklist:**
+1. Spawn two sessions under the same task. Click between them in the left tree. Transcript pane should swap between their `Turns` collections - this is the core bug #2/#3 fix.
+2. Send a prompt to the first session, switch focus to the second, send a different prompt. The two transcripts should remain distinct; switching back to the first shows its history intact.
+3. Kill a session externally (Task Manager / `kill` of the claude PID) or let one hit a context-limit fatal. Verify a `(session exited)` card appears at the bottom of the focused-session's transcript; verify the Send + Interrupt buttons disable as soon as the row's `IsAlive` flips.
+4. Spawn a fresh session in the same window after the kill - selection should work normally on it.
+
+**Bug #1 partially covered, partially out of scope:**
+- The "dead session" symptom (input invisible) is now addressed by (a) the visible Exited marker, (b) the Send button disable. Operators will see immediately when a child died.
+- Whether claude itself ever *auto-restarts* on context-limit and creates a NEW session_id under the same SessionContext (the operator's "I think a new session was started" guess) is unverified. The `ClaudeSession.StdoutLoopAsync` code only assigns `_sessionId` once (`_sessionId is null` guard), so even if claude emits a different session_id later, the host ignores it. If the operator can reproduce a context-limit auto-restart and observe the symptom, that's a separate investigation - file in `issues.md` with the log snippet.
+
+**Follow-ups remaining (carry-over from 4m flush, minus this fix):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+

@@ -103,7 +103,12 @@
                   </StackPanel>
                 </StackPanel>
               </TreeDataTemplate>
-              <DataTemplate x:DataType="vm:SessionRowViewModel">
+              <!-- TreeDataTemplate (not plain DataTemplate) is required so each session row gets
+                   wrapped in its own TreeViewItem and becomes individually selectable. With a plain
+                   DataTemplate, clicks on a child row bubble up to the parent task's TreeViewItem,
+                   and SelectedItem ends up pointing at the parent - the transcript pane never
+                   switches sessions. -->
+              <TreeDataTemplate x:DataType="vm:SessionRowViewModel">
                 <StackPanel Margin="0,2">
                   <Grid ColumnDefinitions="Auto,*">
                     <TextBlock Grid.Column="0" Text="{Binding StatusGlyph, Mode=OneWay}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
@@ -133,7 +138,7 @@
                             CommandParameter="{Binding}" />
                   </StackPanel>
                 </StackPanel>
-              </DataTemplate>
+              </TreeDataTemplate>
             </TreeView.DataTemplates>
             <TreeView.Styles>
               <Style Selector="TreeViewItem">

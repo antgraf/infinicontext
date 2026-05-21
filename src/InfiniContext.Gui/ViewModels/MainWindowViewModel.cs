@@ -290,9 +290,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     private bool CanSendPrompt() =>
         _host is not null
-        && FocusedSession is { IsReady: true }
+        && FocusedSession is { IsReady: true, IsAlive: true }
         && !string.IsNullOrWhiteSpace(PromptText);
-    private bool CanInterrupt() => FocusedSession is not null;
+    private bool CanInterrupt() => FocusedSession is { IsAlive: true };
 
     private async Task SendPromptAsync()
     {
@@ -401,13 +401,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// already marshalled to the UI thread by <see cref="ObservableObject"/>.</summary>
     private void OnFocusedSessionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(SessionRowViewModel.IsReady))
+        if (e.PropertyName == nameof(SessionRowViewModel.IsReady) ||
+            e.PropertyName == nameof(SessionRowViewModel.IsAlive) ||
+            e.PropertyName == nameof(SessionRowViewModel.State))
         {
             SendPromptCommand.NotifyCanExecuteChanged();
+            InterruptCommand.NotifyCanExecuteChanged();
             if (sender is SessionRowViewModel row)
                 _host?.Logger.Information(
-                    "gui-main: focused-session IsReady changed row={Row} isReady={IsReady} canSend={CanSend}",
-                    row.ShortId, row.IsReady, CanSendPrompt());
+                    "gui-main: focused-session changed row={Row} prop={Prop} isReady={IsReady} isAlive={IsAlive} canSend={CanSend}",
+                    row.ShortId, e.PropertyName, row.IsReady, row.IsAlive, CanSendPrompt());
         }
     }
 

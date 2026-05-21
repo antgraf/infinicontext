@@ -78,9 +78,9 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             return json.Length <= 400 ? json : json[..400] + Ellipsis;
         }
     }
-    /// <summary>Seconds remaining at the moment the banner was opened. Static text (not a live
-    /// countdown) so we don't burn a per-second timer on every row; the slot's timeout still
-    /// fires server-side. Live countdown is a polish follow-up.</summary>
+    /// <summary>Seconds remaining until the slot's server-side timeout. Re-evaluated each tick
+    /// of <see cref="_deadlineTimer"/> while a banner is open; the timer is started/stopped by
+    /// <see cref="OnPendingApprovalChanged"/> so idle rows pay no per-second cost.</summary>
     public string PendingDeadlineText
     {
         get
@@ -98,6 +98,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private readonly Action<ClaudeEvent> _onEvent;
     private readonly Action<PendingApproval?> _onApprovalChanged;
     private readonly ILogger? _logger;
+    private readonly DispatcherTimer _deadlineTimer;
     private TurnNodeViewModel? _pendingTurn;
     private bool _disposed;
 
@@ -111,6 +112,8 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         _onApprovalChanged = OnApprovalChanged;
         ApproveCommand = new RelayCommand(Approve, () => IsAwaitingApproval);
         DenyCommand = new RelayCommand(Deny, () => IsAwaitingApproval);
+        _deadlineTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+        _deadlineTimer.Tick += OnDeadlineTick;
         context.Session.State.Transitioned += _onTransition;
         context.EventObserved += _onEvent;
         context.ApprovalSlot.Changed += _onApprovalChanged;
@@ -180,6 +183,18 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         ApproveCommand.NotifyCanExecuteChanged();
         DenyCommand.NotifyCanExecuteChanged();
         StatusGlyph = ViewModels.StatusGlyph.ForSession(Context.Session.State.State, value is not null);
+        if (value is not null) _deadlineTimer.Start();
+        else _deadlineTimer.Stop();
+    }
+
+    private void OnDeadlineTick(object? sender, EventArgs e)
+    {
+        if (PendingApproval is null)
+        {
+            _deadlineTimer.Stop();
+            return;
+        }
+        OnPropertyChanged(nameof(PendingDeadlineText));
     }
 
     private void Approve()
@@ -215,7 +230,27 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private void OnStateTransition(StateTransition t)
     {
         OnPropertyChanged(nameof(State));
+        OnPropertyChanged(nameof(IsAlive));
         StatusGlyph = ViewModels.StatusGlyph.ForSession(t.To, Context.ApprovalSlot.Current is not null);
+        // Surface terminal state in the per-turn tree so the operator sees a clear marker instead
+        // of having to read the (small + grey) state line under the row. Without this, the GUI
+        // gives no in-transcript signal that the child died - operators keep typing into a dead
+        // pipe and only the (invisible) flat transcript records the send failure.
+        if (t.To == SessionState.Exited)
+        {
+            void Apply()
+            {
+                var turn = EnsurePendingTurn(initialPrompt: "(session ended)");
+                turn.Children.Add(new TurnContentItemViewModel(
+                    TurnContentKind.System,
+                    $"session exited ({t.Reason})",
+                    $"transition: {t.From} -> {t.To}\nreason: {t.Reason}"));
+                turn.IsInProgress = false;
+                _pendingTurn = null;
+            }
+            if (Dispatcher.UIThread.CheckAccess()) Apply();
+            else Dispatcher.UIThread.Post(Apply);
+        }
     }
 
     private void OnEvent(ClaudeEvent ev)
@@ -416,6 +451,12 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     public string State => Context.Session.State.State.ToString();
     public int Drift => Context.Session.UnknownEventCount;
     public string CostDisplay => Context.LastCostUsd is { } c ? $"${c:0.0000}" : EmDash;
+    /// <summary>True while the underlying claude process is still capable of receiving messages.
+    /// Flips false once the state machine reaches <c>Exited</c> - sending to a dead child silently
+    /// fails because the write goes to a closed pipe and the catch path only echoes to the flat
+    /// transcript (which the GUI doesn't display). Bound into <c>CanSendPrompt</c> on the host VM
+    /// via <see cref="OnStateTransition"/>'s PropertyChanged propagation.</summary>
+    public bool IsAlive => Context.Session.State.State != SessionState.Exited;
 
     public void Dispose()
     {
@@ -424,6 +465,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         try { Context.Session.State.Transitioned -= _onTransition; } catch { /* best-effort */ }
         try { Context.EventObserved -= _onEvent; } catch { /* best-effort */ }
         try { Context.ApprovalSlot.Changed -= _onApprovalChanged; } catch { /* best-effort */ }
+        try { _deadlineTimer.Stop(); _deadlineTimer.Tick -= OnDeadlineTick; } catch { /* best-effort */ }
         Transcript.Dispose();
     }
 }
