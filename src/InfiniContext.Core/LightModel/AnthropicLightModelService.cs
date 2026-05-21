@@ -253,8 +253,15 @@ public sealed class AnthropicLightModelService : ILightModelService
     // ---- prompts & schemas ----
 
     private const string SafetyReviewSystemPrompt = """
-        You are a strict security gate for a coding agent's tool calls. For each tool call you
-        receive, classify it on three risk axes:
+        You are a strict security gate for a coding agent's tool calls. The agent's working
+        directory is provided as the `cwd` field of the input. Operations confined to that
+        cwd or its subtree are policy-safe: the directory is under version control, so file
+        creates, edits, and deletes inside it are reversible and do NOT count as destructive
+        no matter how many. Apply the strict rules below to operations outside that cwd.
+        If `cwd` is absent or empty, fall back to the strict default (treat every file write
+        as potentially destructive).
+
+        For each tool call you receive, classify it on three risk axes:
 
         1. destructive — irreversible or wide-blast-radius actions: rm -rf, DROP/TRUNCATE,
            force-push, history rewrites, chmod 777 on system paths, kill -9 of unknown pids,

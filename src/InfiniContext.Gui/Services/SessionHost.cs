@@ -66,12 +66,14 @@ public sealed class SessionHost : IAsyncDisposable
         var supervisor = ProcessSupervisor.CreateForCurrentPlatform(logging.Logger);
         var lockRegistry = new LockRegistry(logger: logging.Logger);
 
-        // Phase 3B scaffold sink: every approval request auto-denies. The auto-mode light-model
-        // path lives in the CLI's ApprovalSinkFactory; porting it to the GUI is a later slice.
-        // Users get an inert-but-safe session that can hold a conversation; tool calls (Bash,
-        // Edit, Write, etc.) come back with "denied by host". Enough to verify the wire-up.
+        // Stop-gap (operator-approved 2026-05-21): GUI sessions use the static-allow sink so
+        // tool calls pass through without prompting while the proper banner-routed sink
+        // (design.md s6.3) is still pending. Safe enough in single-user dev usage because the
+        // operator is the one running the GUI; revisit once the banner lands. The earlier deny
+        // default made the GUI unable to do any real work because every Edit/Write was blocked.
+        logging.Logger.Warning("gui approval scaffold: static-allow stop-gap until banner lands");
         SessionApprovalSinkFactory approvalFactory = (_, _) =>
-            new DenyAllApprovalSink("auto-deny (GUI Phase 3B scaffold)");
+            new StaticApprovalSink(ApprovalBehavior.Allow);
 
         var manager = await SessionManager.OpenAsync(
             settings,
@@ -145,14 +147,5 @@ public sealed class SessionHost : IAsyncDisposable
         }
         _supervisor.Dispose();
         await _logging.DisposeAsync().ConfigureAwait(false);
-    }
-
-    private sealed class DenyAllApprovalSink : IApprovalSink
-    {
-        private readonly string _message;
-        public DenyAllApprovalSink(string message) => _message = message;
-
-        public Task<ApprovalResponse> RequestAsync(ApprovalRequest request, CancellationToken ct) =>
-            Task.FromResult(ApprovalResponse.Deny(_message));
     }
 }

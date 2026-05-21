@@ -98,7 +98,9 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                     TurnContentKind.System, "(session ready)", ""));
                 initTurn.Headline = "";
                 initTurn.IsInProgress = false;
-                initTurn.IsExpanded = true;
+                // Details starts collapsed (default). 4e auto-expanded it so the operator could
+                // see the init payload at a glance, but in practice it just made the first card
+                // look noisy; the chevron remains a one-click reveal.
                 _pendingTurn = null;
                 break;
 

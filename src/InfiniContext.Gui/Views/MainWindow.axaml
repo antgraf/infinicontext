@@ -159,9 +159,34 @@
                     ResizeBehavior="PreviousAndNext"
                     Background="{DynamicResource SystemBaseLowColor}" />
 
-      <!-- Focused session transcript -->
-      <Grid Grid.Column="2" RowDefinitions="*,Auto">
-        <ScrollViewer Grid.Row="0" Padding="12">
+      <!-- Focused session transcript. DockPanel (was Grid RowDefinitions="*,Auto") so the prompt
+           Border at the bottom is sized first and the ScrollViewer always sees a stable height;
+           the Grid layout was lagging one pass behind when the multi-line TextBox grew, which
+           prevented the operator from scrolling all the way to the most recent turn. -->
+      <DockPanel Grid.Column="2">
+        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0" Padding="8">
+          <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <TextBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                     Name="PromptBox"
+                     Text="{Binding PromptText, Mode=TwoWay}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinHeight="60" MaxHeight="180"
+                     PlaceholderText="Type a prompt. Ctrl+Enter to send, Esc to interrupt."
+                     IsEnabled="{Binding FocusedSession, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <TextBox.KeyBindings>
+                <KeyBinding Gesture="Ctrl+Enter" Command="{Binding SendPromptCommand}" />
+                <KeyBinding Gesture="Escape" Command="{Binding InterruptCommand}" />
+              </TextBox.KeyBindings>
+            </TextBox>
+            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" HorizontalAlignment="Right">
+              <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScroll, Mode=TwoWay}" VerticalAlignment="Center" FontSize="11" />
+              <Button Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
+              <Button Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent" />
+            </StackPanel>
+          </Grid>
+        </Border>
+        <ScrollViewer Name="TranscriptScroll" Padding="12,12,12,16">
           <ItemsControl ItemsSource="{Binding FocusedSession.Turns}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:TurnNodeViewModel">
@@ -231,28 +256,7 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
         </ScrollViewer>
-        <Border Grid.Row="1" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0" Padding="8">
-          <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
-            <TextBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                     Name="PromptBox"
-                     Text="{Binding PromptText, Mode=TwoWay}"
-                     AcceptsReturn="True"
-                     TextWrapping="Wrap"
-                     MinHeight="60" MaxHeight="180"
-                     PlaceholderText="Type a prompt. Ctrl+Enter to send, Esc to interrupt."
-                     IsEnabled="{Binding FocusedSession, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <TextBox.KeyBindings>
-                <KeyBinding Gesture="Ctrl+Enter" Command="{Binding SendPromptCommand}" />
-                <KeyBinding Gesture="Escape" Command="{Binding InterruptCommand}" />
-              </TextBox.KeyBindings>
-            </TextBox>
-            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" HorizontalAlignment="Right">
-              <Button Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
-              <Button Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent" />
-            </StackPanel>
-          </Grid>
-        </Border>
-      </Grid>
+      </DockPanel>
 
       <!-- Inspector -->
       <Border Grid.Column="3" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1,0,0,0" Padding="12">

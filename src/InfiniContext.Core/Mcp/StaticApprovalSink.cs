@@ -1,14 +1,17 @@
-using InfiniContext.Core.Mcp;
-
-namespace InfiniContext.Cli;
+namespace InfiniContext.Core.Mcp;
 
 /// <summary>
 /// Constant-decision sink used by the <c>deny</c> and <c>allow</c> approval modes. Returns the
 /// configured <see cref="ApprovalBehavior"/> for every request without prompting or calling out.
-/// <c>allow</c> is intentionally available only via CLI flag or REPL command — see
-/// <see cref="Configuration.InfiniContextSettingsLoader"/> for why it isn't a persisted default.
+///
+/// Lives in Core (not Cli) because both the CLI and the GUI need it; promoting it avoided
+/// duplicating the type into the GUI when the GUI's scaffold approval flow was wired.
+///
+/// <c>allow</c> is intentionally available only via CLI flag, REPL command, or explicit GUI
+/// stop-gap wiring - see <see cref="Configuration.InfiniContextSettingsLoader"/> for why it
+/// isn't a persisted default.
 /// </summary>
-internal sealed class StaticApprovalSink : IApprovalSink
+public sealed class StaticApprovalSink : IApprovalSink
 {
     private readonly ApprovalBehavior _behavior;
     private readonly string _denyMessage;

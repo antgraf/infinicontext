@@ -55,6 +55,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private string _logFilePath = "(host not initialised)";
 
+    /// <summary>When true, the transcript ScrollViewer auto-scrolls to the bottom on each new
+    /// turn. View code-behind owns the actual scroll call; the VM only carries the flag so the
+    /// checkbox state survives focus changes.</summary>
+    [ObservableProperty]
+    private bool _autoScroll = true;
+
     public Func<Task<string?>>? FolderPicker { get; set; }
     public Action<string>? ShowError { get; set; }
 
