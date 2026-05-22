@@ -31,6 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\InfiniContext.Core\InfiniContext.Core.csproj" />
     <ProjectReference Include="..\..\src\InfiniContext.Cli\InfiniContext.Cli.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\InfiniContext.Gui\InfiniContext.Gui.csproj" />
     <ProjectReference Include="..\FakeClaude\FakeClaude.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

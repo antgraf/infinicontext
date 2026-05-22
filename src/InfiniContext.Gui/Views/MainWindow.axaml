@@ -43,11 +43,18 @@
   </Window.Styles>
 
   <DockPanel>
-    <!-- Status strip -->
+    <!-- Status strip. The "Agent busy" indicator is visible while the focused session has a
+         turn in flight (Sending/Streaming/Cancelling/Compacting). Send stays enabled - the
+         indicator warns the operator that their next message will queue behind the in-flight
+         turn on claude's stdin rather than running immediately. -->
     <Border DockPanel.Dock="Top" Background="{DynamicResource SystemAccentColorBrush}" Padding="12,6">
-      <Grid ColumnDefinitions="*,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto">
         <TextBlock Grid.Column="0" Text="InfiniContext" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
+        <Border Grid.Column="1" IsVisible="{Binding IsAgentBusy}"
+                Background="#33FFFFFF" CornerRadius="2" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
+          <TextBlock Text="Agent busy - next message will queue" Foreground="White" FontSize="11" />
+        </Border>
+        <TextBlock Grid.Column="2" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
       </Grid>
     </Border>
 
@@ -222,7 +229,8 @@
             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" HorizontalAlignment="Right">
               <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScroll, Mode=TwoWay}" VerticalAlignment="Center" FontSize="11" />
               <Button Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
-              <Button Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent" />
+              <Button Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent"
+                      ToolTip.Tip="{Binding SendButtonTooltip}" />
             </StackPanel>
           </Grid>
         </Border>

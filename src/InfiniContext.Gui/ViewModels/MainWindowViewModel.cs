@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using InfiniContext.Core.Sessions;
@@ -21,6 +20,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 {
     private readonly SessionHost? _host;
     private readonly GuiSettings _guiSettings;
+    private readonly IUiDispatcher _dispatcher;
+    private readonly IUiTimerFactory _timerFactory;
     private readonly TaskNodeViewModel _unattached = new(null);
 
     public ObservableCollection<TaskNodeViewModel> TaskNodes { get; } = new();
@@ -67,6 +68,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private string _promptText = "";
 
+    /// <summary>True while the focused session has a turn in flight (Sending/Streaming/
+    /// Cancelling/Compacting). The XAML uses this to surface a "Agent busy - your next
+    /// message will queue behind the in-flight turn" indicator in the status strip. Send
+    /// stays enabled while this is true; the indicator's purpose is to make stdin queuing
+    /// visible rather than letting the operator's prompt disappear silently into the buffer.</summary>
+    public bool IsAgentBusy => FocusedSession is { IsAgentTurnInFlight: true };
+
+    /// <summary>Tooltip shown on the Send button. Surfaces queueing behaviour when the agent
+    /// is in the middle of a turn; otherwise advertises the keyboard shortcut.</summary>
+    public string SendButtonTooltip => IsAgentBusy
+        ? "Agent is busy - Send will queue your message behind the in-flight turn. Press Esc to interrupt the current turn."
+        : "Send (Ctrl+Enter)";
+
     public IAsyncRelayCommand NewTaskCommand { get; }
     public IAsyncRelayCommand<TaskNodeViewModel?> SpawnSessionForTaskCommand { get; }
     public IAsyncRelayCommand SendPromptCommand { get; }
@@ -79,12 +93,27 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// <summary>Canned prompt fired by the question button on a session row's action bar.</summary>
     public const string WhatsNextPromptText = "What's next for the task?";
 
-    public MainWindowViewModel() : this(new GuiSettings())
+    /// <summary>Design-time / placeholder ctor used by <c>App.OnFrameworkInitializationCompleted</c>
+    /// while <see cref="CreateAsync"/> is still running. Defaults to the Avalonia-backed dispatcher
+    /// + timer factory since this path always runs inside a real Avalonia app. Tests should use
+    /// the explicit-dispatcher ctor below.</summary>
+    public MainWindowViewModel() : this(AvaloniaUiDispatcher.Instance, AvaloniaUiTimerFactory.Instance, new GuiSettings())
     {
     }
 
-    private MainWindowViewModel(GuiSettings guiSettings)
+    /// <summary>Test-friendly ctor: takes the dispatcher + timer factory explicitly. No
+    /// <see cref="SessionHost"/> attached, so spawn-related commands fail gracefully via the
+    /// existing null-guards; tests exercising <see cref="FocusedSession"/> can construct a row
+    /// VM directly and set it.</summary>
+    public MainWindowViewModel(IUiDispatcher dispatcher, IUiTimerFactory timerFactory)
+        : this(dispatcher, timerFactory, new GuiSettings())
     {
+    }
+
+    private MainWindowViewModel(IUiDispatcher dispatcher, IUiTimerFactory timerFactory, GuiSettings guiSettings)
+    {
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _timerFactory = timerFactory ?? throw new ArgumentNullException(nameof(timerFactory));
         _guiSettings = guiSettings;
         _leftColumnWidth = new GridLength(guiSettings.LeftColumnWidth);
         NewTaskCommand = new AsyncRelayCommand(NewTaskAsync);
@@ -97,18 +126,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         // keeps the tree clean for users who only work via task-bound sessions.
     }
 
-    private MainWindowViewModel(SessionHost host, GuiSettings guiSettings) : this(guiSettings)
+    private MainWindowViewModel(SessionHost host, IUiDispatcher dispatcher, IUiTimerFactory timerFactory, GuiSettings guiSettings)
+        : this(dispatcher, timerFactory, guiSettings)
     {
         _host = host;
         LogFilePath = host.LogFilePath;
         host.SessionClosed += OnSessionClosed;
     }
 
-    public static async Task<MainWindowViewModel> CreateAsync()
+    public static async Task<MainWindowViewModel> CreateAsync(IUiDispatcher dispatcher, IUiTimerFactory timerFactory)
     {
         var host = await SessionHost.StartAsync().ConfigureAwait(false);
         var guiSettings = await GuiSettings.LoadAsync(logger: host.Logger).ConfigureAwait(false);
-        var vm = new MainWindowViewModel(host, guiSettings);
+        var vm = new MainWindowViewModel(host, dispatcher, timerFactory, guiSettings);
         await vm.LoadTasksAsync().ConfigureAwait(false);
         return vm;
     }
@@ -141,8 +171,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 TaskNodes.Add(new TaskNodeViewModel(rec));
         }
 
-        if (Dispatcher.UIThread.CheckAccess()) Apply();
-        else Dispatcher.UIThread.Post(Apply);
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
     }
 
     private TaskNodeViewModel ResolveParentNode(int? taskId)
@@ -270,13 +300,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             // otherwise the warning stays visible long enough for the operator to notice it.
             if (firstUserMessage is not null || taskId is null) StatusText = spawning;
             var ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
-            var row = new SessionRowViewModel(ctx, _host.Logger);
+            var row = new SessionRowViewModel(ctx, _dispatcher, _timerFactory, _host.Logger);
             var parent = ResolveParentNode(ctx.ActiveTaskId);
             parent.Sessions.Add(row);
             parent.IsExpanded = true;
             FocusedSession = row;
             SelectedNode = row;
             row.IsFocused = true;
+            // Render the seed (task pointer) prompt into the transcript and the per-turn tree so
+            // the operator can SEE what was just sent to claude. Without this, the message area
+            // shows only the (session ready) marker from system/init - leaving the operator
+            // wondering what the agent is "busy" processing. The send itself happens inside
+            // ClaudeSession.StartAsync as a host-driven stdin write; that path never produces a
+            // UserEvent in the stream, so this is the only place we can surface it.
+            if (firstUserMessage is not null)
+            {
+                row.BeginUserTurn(firstUserMessage);
+                ctx.Transcript.Append($"\n> {firstUserMessage}  [seed prompt]\n");
+            }
             var driftSuffix = drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
             var warmingSuffix = firstUserMessage is not null ? " Warming up..." : "";
             StatusText = $"Spawned {row.ShortId} in {row.Cwd}.{warmingSuffix}{driftSuffix}";
@@ -289,8 +330,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     }
 
     private bool CanSendPrompt() =>
-        _host is not null
-        && FocusedSession is { IsReady: true, IsAlive: true }
+        FocusedSession is { IsReady: true, IsAlive: true }
         && !string.IsNullOrWhiteSpace(PromptText);
     private bool CanInterrupt() => FocusedSession is { IsAlive: true };
 
@@ -321,12 +361,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     private async Task SendToSessionAsync(SessionRowViewModel target, string text)
     {
+        // Snapshot before the send so we can tell the operator whether their message will run
+        // immediately or queue behind an in-flight turn (claude buffers stdin between turns).
+        var queued = target.IsAgentTurnInFlight;
         target.BeginUserTurn(text);
-        target.Context.Transcript.Append($"\n> {text}\n");
+        target.Context.Transcript.Append(queued
+            ? $"\n> {text}  [queued behind in-flight turn]\n"
+            : $"\n> {text}\n");
         try
         {
             await target.Context.Session.SendUserMessageAsync(text).ConfigureAwait(true);
-            StatusText = $"Sent to {target.ShortId}.";
+            StatusText = queued
+                ? $"Queued to {target.ShortId} - will run after the current turn."
+                : $"Sent to {target.ShortId}.";
         }
         catch (Exception ex)
         {
@@ -374,8 +421,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 TaskNodes.Remove(_unattached);
         }
 
-        if (Dispatcher.UIThread.CheckAccess()) Apply();
-        else Dispatcher.UIThread.Post(Apply);
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
     }
 
     partial void OnFocusedSessionChanged(SessionRowViewModel? oldValue, SessionRowViewModel? newValue)
@@ -392,6 +439,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
         SendPromptCommand.NotifyCanExecuteChanged();
         InterruptCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(IsAgentBusy));
+        OnPropertyChanged(nameof(SendButtonTooltip));
     }
 
     /// <summary>Refresh <see cref="SendPromptCommand"/>'s CanExecute when the focused session
@@ -411,6 +460,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 _host?.Logger.Information(
                     "gui-main: focused-session changed row={Row} prop={Prop} isReady={IsReady} isAlive={IsAlive} canSend={CanSend}",
                     row.ShortId, e.PropertyName, row.IsReady, row.IsAlive, CanSendPrompt());
+        }
+        if (e.PropertyName == nameof(SessionRowViewModel.IsAgentTurnInFlight))
+        {
+            OnPropertyChanged(nameof(IsAgentBusy));
+            OnPropertyChanged(nameof(SendButtonTooltip));
         }
     }
 

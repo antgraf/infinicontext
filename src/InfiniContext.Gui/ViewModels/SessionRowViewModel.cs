@@ -1,11 +1,11 @@
 using System.Collections.ObjectModel;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.State;
+using InfiniContext.Gui.Services;
 using Serilog;
 
 namespace InfiniContext.Gui.ViewModels;
@@ -38,27 +38,35 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// False while the session is still bringing itself up; true once communication is safe.
-    /// Flips on <c>system/init</c> for both free and task-bound sessions: by that point claude
-    /// has read the FirstUserMessage pointer from stdin (per its <c>--print --input-format
-    /// stream-json</c> behaviour - it doesn't emit init until it has consumed stdin input),
-    /// so the pointer is guaranteed ahead of any operator-typed message in claude's queue.
-    /// An older policy waited for the first <c>ResultEvent</c> on task-bound sessions, on the
-    /// theory that the pointer turn should close before the operator could interleave - but
-    /// that turn can run for minutes (read index.md, read large progress.md, do discovery), and
-    /// the operator had no agency to send guidance or canned prompts the entire time. Interrupt
-    /// stays available throughout (gated on <see cref="IsAlive"/>, not IsReady) as the escape
-    /// hatch for a runaway first turn. Free sessions also flip at ctor time when no event has
-    /// fired yet: claude defers init until stdin input, so gating on init would deadlock - the
-    /// operator couldn't type because Send is disabled. Bound to button <c>IsEnabled</c> in
-    /// the row template; the parent VM watches via <see cref="ObservableObject.PropertyChanged"/>
-    /// to refresh <c>SendPromptCommand.CanExecute</c> when the focused session warms up.
+    ///
+    /// <para><b>Free sessions</b> flip to true at construction time. Claude (<c>--print
+    /// --input-format stream-json</c>) defers <c>system/init</c> until it has read user input
+    /// from stdin, so gating on init would deadlock: Send is disabled, the operator can't type,
+    /// the spawn hangs silently until claude self-exits ~55s later. There is no pointer turn to
+    /// interleave with, so operator input is safe from the moment the session exists.</para>
+    ///
+    /// <para><b>Task-bound sessions</b> flip to true on <c>system/init</c> (or, if that event
+    /// raced ahead of subscription, at ctor time via <see cref="SessionContext.Session"/>'s
+    /// non-null <c>SessionId</c>). The earlier result-based gate kept Send disabled until the
+    /// pointer turn closed, which for real tasks (read index.md + description.md + progress.md
+    /// + initial discovery) regularly ran 30s-2min and left the operator with no agency on a
+    /// session the GUI insisted was "warming up." The new contract: Send is enabled the moment
+    /// claude is listening; if the operator fires a prompt while a turn is in flight, the UI
+    /// surfaces a queue indicator via <see cref="IsAgentTurnInFlight"/> so they know their
+    /// message is buffered on stdin and will run after the current turn. Interrupt stays
+    /// available throughout (gated on <see cref="IsAlive"/>, not IsReady).</para>
+    ///
+    /// Bound to button <c>IsEnabled</c> in the row template; the parent VM watches via
+    /// <see cref="ObservableObject.PropertyChanged"/> to refresh <c>SendPromptCommand.CanExecute</c>
+    /// when the focused session warms up.
     /// </summary>
     [ObservableProperty]
     private bool _isReady;
 
     /// <summary>True once <c>system/init</c> (or any post-init event via the catch-up branch)
-    /// has been observed. Kept as a safety-net flag for the <c>result-after-init</c> path so the
-    /// gate is idempotent across all the SetIsReady reasons.</summary>
+    /// has been observed. Tracks "has claude acknowledged the spawn yet?" for diagnostic logging
+    /// and the ctor-pre-seed race protection; readiness gating itself now derives from this
+    /// flag directly rather than waiting for a downstream <see cref="ResultEvent"/>.</summary>
     private bool _initSeen;
 
     [ObservableProperty]
@@ -100,21 +108,28 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private readonly Action<ClaudeEvent> _onEvent;
     private readonly Action<PendingApproval?> _onApprovalChanged;
     private readonly ILogger? _logger;
-    private readonly DispatcherTimer _deadlineTimer;
+    private readonly IUiDispatcher _dispatcher;
+    private readonly IUiTimer _deadlineTimer;
     private TurnNodeViewModel? _pendingTurn;
     private bool _disposed;
 
-    public SessionRowViewModel(SessionContext context, ILogger? logger = null)
+    public SessionRowViewModel(
+        SessionContext context,
+        IUiDispatcher dispatcher,
+        IUiTimerFactory timerFactory,
+        ILogger? logger = null)
     {
         Context = context ?? throw new ArgumentNullException(nameof(context));
-        Transcript = new TranscriptViewModel(context.Transcript);
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        if (timerFactory is null) throw new ArgumentNullException(nameof(timerFactory));
+        Transcript = new TranscriptViewModel(context.Transcript, dispatcher);
         _logger = logger;
         _onTransition = OnStateTransition;
         _onEvent = OnEvent;
         _onApprovalChanged = OnApprovalChanged;
         ApproveCommand = new RelayCommand(Approve, () => IsAwaitingApproval);
         DenyCommand = new RelayCommand(Deny, () => IsAwaitingApproval);
-        _deadlineTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+        _deadlineTimer = timerFactory.Create(TimeSpan.FromSeconds(1));
         _deadlineTimer.Tick += OnDeadlineTick;
         context.Session.State.Transitioned += _onTransition;
         context.EventObserved += _onEvent;
@@ -125,11 +140,9 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         // Race protection (companion to the catch-up in ApplyEvent): if events have already
         // flowed before we got to subscribe, Session.SessionId is non-null (it's assigned the
         // moment claude's first event carries a session_id - see ClaudeSession.StdoutLoopAsync).
-        // A non-null sessionId at ctor time therefore proves system/init has fired, which - per
-        // claude --print's stdin-first contract - proves the FirstUserMessage pointer has been
-        // consumed. Safe to flip IsReady for both free and task-bound sessions.
+        // A non-null sessionId at ctor time proves system/init has fired, which is the gate
+        // for both free and task-bound sessions under the new contract.
         var sessionIdAtCtor = context.Session.SessionId;
-        var lastNumTurnsAtCtor = context.LastNumTurns;
         if (sessionIdAtCtor is not null)
         {
             _initSeen = true;
@@ -138,21 +151,16 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         else if (context.ActiveTaskId is null)
         {
             // Free-session deadlock break: claude --print --input-format stream-json does not
-            // emit system/init until it has read a user message from stdin (see the bring-up
-            // deadlock fix in ClaudeSession.StartAsync). For task-bound sessions the host writes
-            // the FirstUserMessage pointer to satisfy that requirement; free sessions have no
-            // pointer, so the only thing that can kick claude awake is the operator's first
-            // typed prompt. If we gate IsReady on init, Send stays disabled, the operator
-            // can't type, and the spawn hangs silently until claude self-exits ~55s later.
-            // Flip IsReady immediately - there is no pointer turn to interleave with, so
-            // operator input is safe from the moment the session exists. _initSeen stays false
-            // here: the catch-up in ApplyEvent will flip it (or the SystemInitEvent arm will)
-            // when init eventually arrives; this branch is only about button enablement.
+            // emit system/init until it has read a user message from stdin. Free sessions have
+            // no pointer, so the only thing that can kick claude awake is the operator's first
+            // typed prompt. Flip IsReady immediately so Send is enabled and the operator can
+            // type. _initSeen stays false here; the catch-up in ApplyEvent or the
+            // SystemInitEvent arm will flip it when init eventually arrives.
             SetIsReady("ctor-free-deferred-init");
         }
         _logger?.Information(
-            "gui-row[{Row}] ctor: activeTaskId={TaskId} sessionId={SessionId} lastNumTurns={LastNumTurns} initSeen={InitSeen} isReady={IsReady}",
-            ShortId, Context.ActiveTaskId, sessionIdAtCtor, lastNumTurnsAtCtor, _initSeen, IsReady);
+            "gui-row[{Row}] ctor: activeTaskId={TaskId} sessionId={SessionId} initSeen={InitSeen} isReady={IsReady}",
+            ShortId, Context.ActiveTaskId, sessionIdAtCtor, _initSeen, IsReady);
     }
 
     private void SetIsReady(string reason)
@@ -162,10 +170,17 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         _logger?.Information("gui-row[{Row}] IsReady=true reason={Reason}", ShortId, reason);
     }
 
+    partial void OnIsReadyChanged(bool value)
+    {
+        // No derived property to refresh: IsAgentTurnInFlight tracks the state machine, not
+        // IsReady. Kept as a hook for symmetry with OnPendingApprovalChanged - future derived
+        // properties wire in here.
+    }
+
     private void OnApprovalChanged(PendingApproval? pending)
     {
-        if (Dispatcher.UIThread.CheckAccess()) PendingApproval = pending;
-        else Dispatcher.UIThread.Post(() => PendingApproval = pending);
+        if (_dispatcher.CheckAccess()) PendingApproval = pending;
+        else _dispatcher.Post(() => PendingApproval = pending);
     }
 
     partial void OnPendingApprovalChanged(PendingApproval? value)
@@ -206,14 +221,14 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     public void BeginUserTurn(string promptText)
     {
         var turn = new TurnNodeViewModel(promptText);
-        if (Dispatcher.UIThread.CheckAccess())
+        if (_dispatcher.CheckAccess())
         {
             Turns.Add(turn);
             _pendingTurn = turn;
         }
         else
         {
-            Dispatcher.UIThread.Post(() =>
+            _dispatcher.Post(() =>
             {
                 Turns.Add(turn);
                 _pendingTurn = turn;
@@ -223,16 +238,22 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 
     private void OnStateTransition(StateTransition t)
     {
-        OnPropertyChanged(nameof(State));
-        OnPropertyChanged(nameof(IsAlive));
-        StatusGlyph = ViewModels.StatusGlyph.ForSession(t.To, Context.ApprovalSlot.Current is not null);
-        // Surface terminal state in the per-turn tree so the operator sees a clear marker instead
-        // of having to read the (small + grey) state line under the row. Without this, the GUI
-        // gives no in-transcript signal that the child died - operators keep typing into a dead
-        // pipe and only the (invisible) flat transcript records the send failure.
-        if (t.To == SessionState.Exited)
+        // Marshal to the UI thread. The state machine fires Transitioned synchronously while
+        // holding its lock on whatever thread invoked Apply() - typically the stdout-loop
+        // reader. Raising PropertyChanged + assigning the ObservableProperty StatusGlyph from
+        // a non-UI thread runs through Avalonia's binding subscribers, which can throw if a
+        // bound view is reading on the UI thread. That exception then bubbles back out of
+        // _state.Apply and used to kill the stdout loop silently (the "Agent busy never
+        // changes after the first assistant event" symptom in task 0008).
+        void Apply()
         {
-            void Apply()
+            OnPropertyChanged(nameof(State));
+            OnPropertyChanged(nameof(IsAlive));
+            OnPropertyChanged(nameof(IsAgentTurnInFlight));
+            StatusGlyph = ViewModels.StatusGlyph.ForSession(t.To, Context.ApprovalSlot.Current is not null);
+            // Surface terminal state in the per-turn tree so the operator sees a clear marker
+            // instead of having to read the (small + grey) state line under the row.
+            if (t.To == SessionState.Exited)
             {
                 var turn = EnsurePendingTurn(initialPrompt: "(session ended)");
                 turn.Children.Add(new TurnContentItemViewModel(
@@ -242,15 +263,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 turn.IsInProgress = false;
                 _pendingTurn = null;
             }
-            if (Dispatcher.UIThread.CheckAccess()) Apply();
-            else Dispatcher.UIThread.Post(Apply);
         }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
     }
 
     private void OnEvent(ClaudeEvent ev)
     {
-        if (Dispatcher.UIThread.CheckAccess()) ApplyEvent(ev);
-        else Dispatcher.UIThread.Post(() => ApplyEvent(ev));
+        if (_dispatcher.CheckAccess()) ApplyEvent(ev);
+        else _dispatcher.Post(() => ApplyEvent(ev));
     }
 
     private void ApplyEvent(ClaudeEvent ev)
@@ -263,14 +284,17 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         // BEFORE this row VM has a chance to subscribe to Context.EventObserved, so the very
         // first SystemInitEvent can be dispatched-and-dropped if the reader's background loop
         // beats the GUI's row-VM construction. Without this guard _initSeen would stay false
-        // forever and IsReady would never flip even on subsequent ResultEvents - the exact
-        // symptom of "buttons stay disabled forever". Claude emits system/init before any
-        // other event and the events channel preserves FIFO, so observing ANY non-init event
-        // proves init has already happened: treat that as proof and catch up.
+        // forever and IsReady would never flip on subsequent events - the original "buttons
+        // stay disabled forever" symptom. Claude emits system/init before any other event and
+        // the events channel preserves FIFO, so observing ANY non-init event proves init has
+        // already happened: treat that as proof and catch up.
         if (!_initSeen && ev is not SystemInitEvent)
         {
             _initSeen = true;
             _logger?.Information("gui-row[{Row}] catch-up: _initSeen flipped on first non-init event type={Type}", ShortId, ev.Type);
+            // Under the new contract both free and task-bound sessions become ready as soon as
+            // claude is listening. If the catch-up arm fires, claude is already past init - so
+            // it's safe to flip IsReady regardless of ActiveTaskId.
             SetIsReady("catch-up");
         }
 
@@ -283,20 +307,19 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                     $"system/init model={init.Model ?? "?"} cwd={init.Cwd ?? "?"}",
                     $"claude_code_version={init.ClaudeCodeVersion ?? "?"}\npermissionMode={init.PermissionMode ?? "?"}"));
                 // "(session ready)" is technical chatter, not an assistant reply - park it in
-                // Details and leave the Agent body empty so the card reads as a status note.
+                // Details. Only blank the headline when it's the synthetic "(session start)"
+                // placeholder; a real seed prompt (e.g. task pointer opened the turn before init
+                // arrived) must stay visible so the operator can see what was sent.
                 initTurn.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.System, "(session ready)", ""));
-                initTurn.Headline = "";
+                if (TurnNodeViewModel.SyntheticHeadlines.Contains(initTurn.Headline)) initTurn.Headline = "";
                 initTurn.IsInProgress = false;
-                // Details starts collapsed (default). 4e auto-expanded it so the operator could
-                // see the init payload at a glance, but in practice it just made the first card
-                // look noisy; the chevron remains a one-click reveal.
-                _pendingTurn = null;
+                // Keep _pendingTurn live when there's a real seed prompt so the agent's response
+                // attaches as children of that turn (matches the operator-sent flow). Only close
+                // the turn out when it was a standalone synthetic status card.
+                if (string.IsNullOrEmpty(initTurn.Headline)) _pendingTurn = null;
                 _initSeen = true;
                 _logger?.Information("gui-row[{Row}] init: observed system/init activeTaskId={TaskId}", ShortId, Context.ActiveTaskId);
-                // system/init is emitted only after claude has read stdin (FirstUserMessage), so
-                // the pointer is guaranteed ahead of any operator-typed message in claude's queue.
-                // Safe to flip for both free and task-bound sessions.
                 SetIsReady("init");
                 break;
 
@@ -314,11 +337,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 _logger?.Information(
                     "gui-row[{Row}] result observed: numTurns={NumTurns} costUsd={Cost} initSeen={InitSeen} isReady={IsReady}",
                     ShortId, res.NumTurns, res.TotalCostUsd, _initSeen, IsReady);
-                // Belt-and-braces safety net: in normal operation init/catch-up/ctor-pre-seed
-                // have already flipped IsReady by now, but if anything reaches a ResultEvent
-                // without it (e.g. parser/reader anomaly that swallowed init), this idempotent
-                // flip unsticks the gate so the operator never sees a dead-permanently session.
-                if (_initSeen && !IsReady) SetIsReady("result-after-init");
+                // Defensive: if init was somehow missed (e.g. a parser anomaly that swallowed
+                // it) and only the catch-up branch didn't fire either, a ResultEvent still
+                // proves claude is responsive - flip IsReady as a last-resort gate.
+                if (!IsReady) SetIsReady("result-fallback");
                 break;
 
             case SystemCompactEvent:
@@ -454,6 +476,18 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     /// transcript (which the GUI doesn't display). Bound into <c>CanSendPrompt</c> on the host VM
     /// via <see cref="OnStateTransition"/>'s PropertyChanged propagation.</summary>
     public bool IsAlive => Context.Session.State.State != SessionState.Exited;
+
+    /// <summary>True whenever the session's state machine is in a turn-in-flight state
+    /// (<c>Sending</c>, <c>Streaming</c>, <c>Cancelling</c>, or <c>Compacting</c>). Drives the
+    /// "Agent busy - your message will queue behind the in-flight turn" indicator on the host
+    /// VM. The Send button stays enabled while this is true; a prompt fired during a turn-in-
+    /// flight buffers on claude's stdin and runs once the current turn closes, which is what
+    /// the queue-warning indicator surfaces visually.</summary>
+    public bool IsAgentTurnInFlight =>
+        IsAlive && Context.Session.State.State is SessionState.Sending
+            or SessionState.Streaming
+            or SessionState.Cancelling
+            or SessionState.Compacting;
 
     public void Dispose()
     {

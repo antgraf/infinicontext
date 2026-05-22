@@ -279,7 +279,14 @@ public sealed class ClaudeSession : IClaudeSession
         {
             await foreach (var ev in _parser.ParseAsync(stdout).ConfigureAwait(false))
             {
-                _state.Apply(ev);
+                // Per-event resilience: a single bad event must not silently kill the entire
+                // stdout loop. Prior to this, an exception in any of these steps (Apply, the
+                // version-check, LogReceivedEvent, the event observer, or the channel writer)
+                // propagated out, the foreach terminated, and the finally awaited proc exit -
+                // so the operator saw a state-transition log, then dead silence for minutes.
+                // The "Agent busy never advances" symptom in task 0008 was exactly this.
+                try { _state.Apply(ev); }
+                catch (Exception ex) { _logger.Warning(ex, "stdout-loop: state.Apply threw for type={Type} subtype={Subtype}", ev.Type, ev.Subtype); }
 
                 if (_sessionId is null && ev.SessionId is { } sid)
                 {
@@ -291,9 +298,14 @@ public sealed class ClaudeSession : IClaudeSession
                     _logger.Information("session_id assigned");
                 }
 
-                if (ev is SystemInitEvent init) CheckClaudeVersion(init);
+                if (ev is SystemInitEvent init)
+                {
+                    try { CheckClaudeVersion(init); }
+                    catch (Exception ex) { _logger.Warning(ex, "stdout-loop: CheckClaudeVersion threw"); }
+                }
 
-                _sessionLogger.LogReceivedEvent(ev);
+                try { _sessionLogger.LogReceivedEvent(ev); }
+                catch (Exception ex) { _logger.Warning(ex, "stdout-loop: LogReceivedEvent threw for type={Type}", ev.Type); }
 
                 if (_eventObserver is not null)
                 {
@@ -301,11 +313,13 @@ public sealed class ClaudeSession : IClaudeSession
                     catch (Exception ex) { _logger.Warning(ex, "event observer threw"); }
                 }
 
-                await _events.Writer.WriteAsync(ev).ConfigureAwait(false);
+                try { await _events.Writer.WriteAsync(ev).ConfigureAwait(false); }
+                catch (Exception ex) { _logger.Warning(ex, "stdout-loop: events.Writer.WriteAsync threw for type={Type}", ev.Type); }
             }
         }
         catch (OperationCanceledException) { /* shutting down */ }
         catch (IOException) { /* stdout closed under us */ }
+        catch (Exception ex) { _logger.Error(ex, "stdout-loop: unhandled exception; loop terminating"); }
         finally
         {
             int? exitCode = null;

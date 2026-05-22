@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using InfiniContext.Gui.Services;
 using InfiniContext.Gui.ViewModels;
 using InfiniContext.Gui.Views;
 
@@ -28,7 +29,9 @@ public partial class App : Application
             {
                 try
                 {
-                    _mainVm = await MainWindowViewModel.CreateAsync();
+                    _mainVm = await MainWindowViewModel.CreateAsync(
+                        AvaloniaUiDispatcher.Instance,
+                        AvaloniaUiTimerFactory.Instance);
                     window.DataContext = _mainVm;
                 }
                 catch (Exception ex)

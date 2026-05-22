@@ -327,6 +327,71 @@ public class FakeClaudeIntegrationTests
     }
 
     [Fact]
+    public async Task StdoutLoop_survives_Transitioned_subscriber_that_throws()
+    {
+        // Regression test for task 0008 root cause: a Transitioned subscriber on the state
+        // machine ran synchronously inside _state.Apply (under the state lock, on the stdout-
+        // loop reader thread). If that subscriber threw (e.g. SessionRowViewModel raising
+        // PropertyChanged from the wrong thread and Avalonia's binding subscribers throwing
+        // InvalidOperationException), the exception propagated out of _state.Apply, the
+        // stdout-loop foreach terminated, and the loop entered its finally - which awaited
+        // proc.WaitForExitAsync(). The operator saw "state X -> Y" logged, then nothing,
+        // then a process-exit log when they finally closed the GUI minutes later.
+        //
+        // Fix in ClaudeSession.StdoutLoopAsync: wrap _state.Apply in try/catch (plus the same
+        // around LogReceivedEvent, version check, and the channel writer). This test injects
+        // a throwing Transitioned handler and asserts the full event sequence still drains
+        // through the events channel.
+        await using var session = new ClaudeSession(new ClaudeSessionOptions
+        {
+            Cwd = TestPaths.RepoRoot,
+            ClaudeExecutable = FakeClaudeRunner.ExecutablePath,
+            ExtraArgs = new[] { "--replay", TestPaths.Fixture("simple-prompt") },
+        });
+
+        var throwCount = 0;
+        session.State.Transitioned += t =>
+        {
+            // Only throw on Apply-driven transitions (those carry an EventThatCaused - the
+            // parsed ClaudeEvent that triggered the state change). Host-driven transitions
+            // (BeginSend, Cancel, HandleProcessExit) have EventThatCaused == null; throwing on
+            // those would surface back into SendUserMessageAsync / DisposeAsync where
+            // production callers expect failures to propagate, which is unrelated to the
+            // stdout-loop resilience we're testing here.
+            if (t.EventThatCaused is null) return;
+            Interlocked.Increment(ref throwCount);
+            throw new InvalidOperationException($"simulated cross-thread binding failure #{throwCount}");
+        };
+
+        await session.StartAsync();
+        await session.SendUserMessageAsync("hi");
+
+        var eventTypes = new List<string>();
+        using (var cts = new CancellationTokenSource(TestTimeout))
+        {
+            while (await session.Events.WaitToReadAsync(cts.Token))
+            {
+                while (session.Events.TryRead(out var ev))
+                    eventTypes.Add(FormatType(ev));
+            }
+        }
+
+        await session.WaitForExitAsync().WaitAsync(TestTimeout);
+
+        // The full simple-prompt event trace must still flow even though every state transition
+        // threw inside Apply. If the loop had terminated on the first throw (the original bug),
+        // we'd only see system/hook_response (which fires before any state transition).
+        eventTypes.Should().Equal(
+            "system/hook_response",
+            "system/init",
+            "assistant",
+            "rate_limit_event",
+            "result/success");
+        throwCount.Should().BeGreaterThan(1,
+            "multiple state transitions occurred and each threw - the loop tolerated all of them.");
+    }
+
+    [Fact]
     public async Task ContextPressureMonitor_observes_result_and_injector_writes_soft_nudge_to_stdin()
     {
         // Phase 8: end-to-end wiring. The session feeds events to a real ContextPressureMonitor

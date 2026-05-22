@@ -1180,3 +1180,144 @@ Host hit hard context-pressure threshold (~85%; reported as 510% of 1M) immediat
 
 **Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected to keep silent bring-up failures visible); the 55s silent exit-1 case for free sessions where operator spawns and never types (claude self-cleanup, not a host bug, a "spawn timed out" status banner would be polish); `<Compile Include>` link housekeeping for tests (only `ApprovalSinkFactory.cs` remains link-compiled). Promote `.task/0004/design.md` -> `docs/stage3/design.md` still gated on user sign-off of `design.md` section 10 open decisions. `docs/stage3/plan.md` and `docs/stage3/decisions.md` still not authored.
 
+### Resume + commit (2026-05-21)
+
+Resumed from the prior session's hard-threshold flush. Working tree at session start matched the flush note exactly: three uncommitted files (`SessionRowViewModel.cs` readiness-gate relaxation + `progress.md` + `index.md`), `main` even with `origin/main` at `3ca1c77`. No code changes this session; only landed the deferred commit.
+
+- Commit `16a67e7` "Phase 3B fix: readiness gate flips on system/init for task-bound sessions (was first ResultEvent -- too strict for long initial turns)." Three files as expected. Em-dash in the suggested message rendered as ASCII `--` to dodge the encoding hazard the prior slices have repeatedly hit on this machine - the commit subject is now pure ASCII (the prior session's flush note had `╤В╨Р╨д` Cyrillic mojibake in the suggested string).
+- Working tree clean after commit. `main` now **1 commit ahead of `origin/main`** (push remains operator-owned per shared-state rule).
+- Build/test not re-run this session - the prior flush's green status (`dotnet build` 0/0, `dotnet format --verify-no-changes` clean, `dotnet test --no-build` 981 passed / 3 POSIX-skipped) carries forward unchanged because nothing on disk changed between the prior flush's capture and this commit.
+
+### Flush note (soft threshold, 2026-05-21 post-resume-commit)
+
+Host signalled soft threshold (~69% / 60% trigger) right after the resume-commit landed. Exiting cleanly per the skill's soft-threshold contract; no clarifying questions, no new work.
+
+**Branch state:** `main` at `16a67e7`, **1 commit ahead of `origin/main`**. Working tree clean - no uncommitted files.
+
+**Next session pickup (carries forward from the prior flush, minus the now-landed commit):**
+1. **Operator-driven push.** `git push` the readiness-gate relaxation commit (`16a67e7`) to `origin/main`. No code work needed; just publishing.
+2. **Operator smoke verification** of the readiness-gate relaxation (checklist preserved verbatim in the entry above this flush note):
+   - Task-bound spawn: expect `IsReady=true reason=init` (or `reason=ctor-pre-seed` for very fast spawns) in `logs/gui-*.log` within ~1-2s of spawn; Send / Continue / What's next enable as soon as the prompt text box has content - no "Warming up..." stall.
+   - Free-session spawn: expect `IsReady=true reason=ctor-free-deferred-init` (unchanged from prior baseline).
+   - Follow-up send during an in-flight first turn: queued behind the pointer turn; no interleaving.
+   - Interrupt during first turn: cancels the in-flight turn (gated only on `IsAlive`).
+3. **If smoke passes:** pick the next polish slice from the carry-over queue (priority order):
+   - Mid-session approval-mode toggle (largest; status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)` - closes CLI parity gap with `/approval`).
+   - "Pending approval (N)" badge in the status strip for off-screen multi-session backlog (medium).
+   - Theme-portable approval banner colors (smallest; replace 3 hardcoded amber-on-yellow values with `DynamicResource` brushes).
+   - Plus the doc work: promote `.task/0004/design.md` -> `docs/stage3/design.md` on operator sign-off of `design.md` section 10 decisions; author `docs/stage3/plan.md` + `docs/stage3/decisions.md`.
+4. **If smoke fails:** Serilog instrumentation still active. Five `SetIsReady` reason strings now: `ctor-pre-seed` (was conditional, now unconditional when `sessionId is not null`), `ctor-free-deferred-init` (unchanged), `catch-up` (renamed from `catch-up-free`, now unconditional), `init` (renamed from `init-free`, now unconditional), `result-after-init` (kept as safety-net belt-and-braces). Anchor lines unchanged from the prior diag entry: `ctor: ...`, `event observed: ...`, `IsReady=true reason=...`, `focused-session changed ... canSend=...`.
+5. **Separate diagnosis still open** (carried from the prior flush): the 7-minute silent-streaming case in `gui-20260521-181535.log` - state transition `Sending -> Streaming (assistant)` parsed but no `rx: assistant ...` debug line appeared and no further events reached the row VM. Possible claude 2.1.147 schema drift or debug-logging filter quirk. The readiness-gate fix landed in `16a67e7` unblocks the operator regardless of what the agent is doing during the long turn, so this is no longer a blocker - but worth investigating before declaring Phase 3B done.
+
+**Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected); the 55s silent exit-1 case for free sessions where operator spawns and never types (claude self-cleanup, not a host bug; a "spawn timed out" status banner would be polish); `<Compile Include>` link housekeeping for tests (only `ApprovalSinkFactory.cs` remains link-compiled).
+
+### Flush note (hard threshold, 2026-05-21 post-resume-commit)
+
+Host escalated to hard threshold (~85% / 136% of 1M tokens) immediately after the soft-flush entry above was written. No work performed between soft and hard - the soft-flush entry already captures the full state. Exiting per the skill contract.
+
+**State at hard flush (delta from soft flush above: none):**
+- Commit `16a67e7` "Phase 3B fix: readiness gate flips on system/init for task-bound sessions (was first ResultEvent -- too strict for long initial turns)." in. `main` is **1 commit ahead of `origin/main`**.
+- Working tree: two `.task/` edits uncommitted - `progress.md` (this entry + the soft-flush entry above + the resume-commit entry above that) and `index.md` (description retargeted at the new latest entry). No source-file changes this session.
+- Build/test parity unchanged from the prior flush's green status: `dotnet build` 0/0, `dotnet format --verify-no-changes` clean, `dotnet test --no-build` 981 passed / 3 POSIX-skipped / 0 failed.
+
+**Next session pickup (carries forward unchanged from the soft-flush entry above):**
+1. Operator-driven `git push` of `16a67e7`.
+2. Operator smoke verification of the readiness-gate relaxation (task-bound + free spawn checklists in the soft-flush entry).
+3. Optionally commit the two `.task/` progress + index edits this session left uncommitted - the substantive content is the resume-commit + soft-flush + this hard-flush entries, all describing already-completed actions.
+4. If smoke passes: pick the next polish slice (mid-session approval-mode toggle / "Pending approval (N)" badge / theme-portable banner colors); or address the deferred doc work (promote `.task/0004/design.md` to `docs/stage3/design.md` on operator sign-off; author `docs/stage3/plan.md` + `decisions.md`).
+5. If smoke fails: Serilog instrumentation anchor lines per the soft-flush entry.
+
+### Smoke result + testability design (2026-05-21 post-hard-flush)
+
+Operator smoke verdict on the readiness-gate relaxation: **regression, not fix.** Buttons enable on `system/init` but the session is not operational - operator can fire Send while the pointer turn is still streaming, the prompt queues silently on stdin behind the in-flight turn, and the GUI gives zero signal that anything happened. The relaxation removed an implicit coverage axis (in-flight pointer turn) from the gate without adding an explicit UI surface for the same state.
+
+Operator request: **stop guessing at gate Booleans; make the GUI testable first so the next change is verified against a contract, not against operator memory.** Hand-driving regressions through manual smoke is the recurring cost.
+
+New artifact: `design-gui-testability.md`. Scopes the minimum scaffolding (two new abstractions: `IUiDispatcher`, `IUiTimer` + `IUiTimerFactory`) + the initial regression-catching test matrix. Key observations:
+
+- **Substitution surface is already good.** `IClaudeSession` is already an interface; `SessionContext` is constructible from public ctor; all Core deps (`TranscriptModel`, `PendingApprovalSlot`, `SessionStateMachine`, `ContextPressureMonitor`, `ILightModelService`, `TaskStore`, `TaskService`) are pure C# or already interfaces. **Only Avalonia coupling is `Dispatcher.UIThread` (~7 sites) and `DispatcherTimer` (1 site, the banner countdown).**
+- **Scaffolding cost is small.** ~140 lines for the two abstractions + their Avalonia + sync test impls; ~30 lines of ctor-wiring across 4 files. After that, VM tests run in the existing xUnit + FluentAssertions stack in `InfiniContext.Tests` (recommend new `Gui/` subfolder matching `Cli/` convention).
+- **The test matrix forces the operator-facing contract onto paper.** Asserts go against `SendPromptCommand.CanExecute(null)` and public properties (`IsReady`, `IsAlive`, `PendingApproval`, `Turns.Last().Headline`), NOT against private fields (`_initSeen`, `_isReady`). Implementation is free to refactor; contract stays locked.
+- **Out of scope:** view-level coverage (XAML data-template selection, binding errors, dispatcher priority quirks) - needs Avalonia.Headless, separate larger investment. Operator smoke continues owning view-level verification.
+
+Sequencing per design doc:
+1. Land `IUiDispatcher` (mechanical refactor, no behavior change).
+2. Land `IUiTimer`/`IUiTimerFactory` (same).
+3. Write the readiness-gate test matrix (Section 5.1 in the design doc) - **highest value**, locks down the very regressions we have been shipping.
+4. Use the matrix to decide the operator-facing send contract (init-based gate + "queued" indicator, OR result-based gate + "agent busy" indicator, OR composite gate). Whichever wins, the matrix asserts it.
+5. Backfill CanExecute / pointer-injection / turn-tree / approval-banner / dead-session tests in priority order (Sections 5.2-5.6).
+
+**Open decisions for operator** (Section 8 of `design-gui-testability.md`):
+1. Test project layout: `tests/InfiniContext.Tests/Gui/` (recommended) vs separate csproj.
+2. `IUiDispatcher` shape: 3 methods (`CheckAccess`/`Post`/`InvokeAsync` - recommended) vs single `Marshal(Action)` + InvokeAsync.
+3. `IUiTimer` shape: match DispatcherTimer (recommended) vs simpler `Schedule(TimeSpan, Action)`.
+4. Where the real `AvaloniaUiDispatcher` is constructed: `App.OnFrameworkInitializationCompleted` (recommended) vs `SessionHost.StartAsync` vs static singleton (anti-pattern).
+5. Whether to extend test coverage to App/Program bootstrap (recommended: no).
+6. **THE big decision (Section 12):** what is the correct operator-facing readiness contract? Roll back to result-based gate + "Agent processing pointer turn" status-strip indicator + disabled-button tooltip (my recommendation - turns the operator misread "buttons disabled forever - bug" into "buttons disabled - agent busy") vs keep init-based gate + "queued behind in-flight turn" marker on Send. **Either is testable; the matrix locks whichever the operator picks.**
+
+**No code changes this entry.** New artifact only. Working tree state at end of entry: same three `.task/` files modified (now with new design row in `index.md` + design artifact created + this entry in `progress.md`).
+
+**Next session pickup:**
+1. Operator reviews `design-gui-testability.md` and answers the 6 open decisions (especially #6 - the readiness contract is the load-bearing one).
+2. On sign-off: implement steps 1-2 from the sequencing (IUiDispatcher + IUiTimer abstractions) - mechanical, no behavior change.
+3. Then write Section 5.1 test matrix per the operator's contract choice. **This is where the next readiness-gate change actually gets validated** - the matrix is the deliverable that prevents another guess-and-check cycle.
+4. Operator-driven `git push` of `16a67e7` is still pending (separate from the testability work).
+5. The smoke-failed readiness-gate relaxation can either be rolled back as part of the test-matrix step (if operator picks result-based) or kept and gated differently (if operator picks init-based + queued indicator). Don't change the gate before the matrix is written - the matrix encodes the decision.
+
+### Phase 3B slice 5a - testability scaffold + readiness-gate revert + Section 5.1/5.2 matrix (2026-05-21)
+
+Operator approved: section 8 questions all "as recommended" (1: `tests/InfiniContext.Tests/Gui/` inline; 2: 3-method `IUiDispatcher`; 3: DispatcherTimer-shape `IUiTimer`; 4: `App.OnFrameworkInitializationCompleted` constructs the real impls and threads them via ctor args; 5: no App/Program coverage; 6: `IUiDispatcher` exposed via constructor injection, not singleton). Section 12: revert to result-based gate for task-bound sessions, free sessions ready at ctor, add "Agent processing pointer turn" status-strip indicator + Send button tooltip.
+
+**Two new abstractions in `src/InfiniContext.Gui/Services/`:**
+- `IUiDispatcher` (3 methods: `CheckAccess` / `Post` / `InvokeAsync`). Real impl `AvaloniaUiDispatcher` forwards to `Dispatcher.UIThread`. Constructed once at `App.OnFrameworkInitializationCompleted` and passed to `MainWindowViewModel.CreateAsync(dispatcher, factory)`. Sync test impl `SynchronousUiDispatcher` in `tests/InfiniContext.Tests/Gui/` returns true from CheckAccess and runs Post/InvokeAsync inline.
+- `IUiTimer` + `IUiTimerFactory` (matches `DispatcherTimer` surface: `Interval` / `IsEnabled` / `Start` / `Stop` / `Tick`). Real impl `AvaloniaUiTimer` wraps `DispatcherTimer` with the parameterless-priority ctor (the 3-arg ctor auto-starts, which we don't want). Test impl `TestUiTimer` exposes `FireTick()` for synchronous Tick invocation; `TestUiTimerFactory.Created` tracks every timer constructed so tests can assert against banner-countdown lifecycle.
+
+**Wired through VMs (no behaviour change for the production path; tests now substitute):**
+- `TranscriptViewModel` ctor: `(TranscriptModel, IUiDispatcher)`. `Dispatcher.UIThread.CheckAccess()` / `Post(...)` тЖТ `_dispatcher.CheckAccess()` / `Post(...)`. Avalonia.Threading using-statement dropped.
+- `SessionRowViewModel` ctor: `(SessionContext, IUiDispatcher, IUiTimerFactory, ILogger?)`. The 7 dispatcher sites (`OnApprovalChanged` / `BeginUserTurn` / `OnStateTransition.Apply` / `OnEvent`) now go through `_dispatcher`. `DispatcherTimer _deadlineTimer` field тЖТ `IUiTimer _deadlineTimer`, constructed via `timerFactory.Create(TimeSpan.FromSeconds(1))`.
+- `MainWindowViewModel` ctor: three flavours - parameterless (defaults to Avalonia singletons; design-time / placeholder use); `(IUiDispatcher, IUiTimerFactory)` (test entry point); private `(IUiDispatcher, IUiTimerFactory, GuiSettings)` (shared init). `CreateAsync(IUiDispatcher dispatcher, IUiTimerFactory timerFactory)` is the production entry. Dispatcher sites in `LoadTasksAsync`, `OnSessionClosed` replaced with `_dispatcher.*`. The `_host is not null` precondition was dropped from `CanSendPrompt` - it was redundant with `FocusedSession is not null` for the production path and incorrect for tests that build a host-less VM.
+- `App.OnFrameworkInitializationCompleted`: passes `AvaloniaUiDispatcher.Instance` + `AvaloniaUiTimerFactory.Instance` into `CreateAsync`. App.axaml.cs still uses `Dispatcher.UIThread.InvokeAsync` directly for its own bootstrap glue - per design Section 4.4, bootstrap glue is explicitly NOT abstracted (operator smoke owns view-level + lifecycle verification).
+
+**Readiness-gate revert (Section 12):**
+- Constructor pre-seed: when `sessionId is not null`, `_initSeen = true` always; `SetIsReady("ctor-pre-seed")` only fires when `ActiveTaskId is null` (free session, no pointer to wait on) OR `LastNumTurns is not null` (task-bound but pointer turn has already closed - the full-race case the prior slice's `LastNumTurns` pre-seed addressed). The init-relaxed unconditional flip is gone.
+- `ApplyEvent` catch-up: `_initSeen = true` always, but `SetIsReady("catch-up-free")` only when `ActiveTaskId is null`. Reason string renamed back to `catch-up-free` (was `catch-up`).
+- `SystemInitEvent` arm: `_initSeen = true` always, but `SetIsReady("init-free")` only when `ActiveTaskId is null`. Reason string renamed back to `init-free` (was `init`).
+- `ResultEvent` arm: unchanged structurally - `SetIsReady("result-after-init")` fires when `_initSeen && !IsReady`. For task-bound sessions this is now the primary path to IsReady=true (was: belt-and-braces safety net).
+- New computed property `IsProcessingPointerTurn = ActiveTaskId is not null && _initSeen && !IsReady && IsAlive`. The operator-facing "agent busy" window. PropertyChanged raised at every input-change site: `OnIsReadyChanged` partial, `OnStateTransition`, `ApplyEvent` catch-up, `SystemInitEvent` arm.
+
+**"Agent busy" indicator (Section 12 recommendation):**
+- `MainWindowViewModel.IsAgentBusy` = `FocusedSession is { IsProcessingPointerTurn: true }`. PropertyChanged raised in `OnFocusedSessionChanged` and in `OnFocusedSessionPropertyChanged` when the row VM raises `IsProcessingPointerTurn`.
+- `MainWindowViewModel.SendButtonTooltip` returns "Agent is processing the task pointer turn. Send will enable when the turn completes. Press Esc to interrupt the current turn." when `IsAgentBusy`, otherwise "Send (Ctrl+Enter)".
+- `MainWindow.axaml`: status strip now has a third Grid column with a `Border` whose `IsVisible="{Binding IsAgentBusy}"` carries a translucent badge "Agent processing pointer turn..." between the title and the StatusText. Send button gains `ToolTip.Tip="{Binding SendButtonTooltip}"`.
+- Net effect: when an operator spawns a task-bound session and the pointer turn is streaming, the status strip surfaces the "agent busy" badge AND the disabled Send button's tooltip explains why on hover. The "buttons disabled - bug" misread becomes "buttons disabled - agent busy".
+
+**Tests added (`tests/InfiniContext.Tests/Gui/`):**
+- `SynchronousUiDispatcher.cs` / `TestUiTimer.cs` / `FakeClaudeSession.cs` / `SessionContextFactory.cs` - infrastructure.
+- `SessionRowViewModelTests.cs` (13 tests) - the Section 5.1 readiness-gate matrix. Free-session ready-at-ctor cases (no event, sessionId-pre-seeded, init observed); task-bound not-ready cases (no event, sessionId without LastNumTurns); task-bound ready cases (sessionId+LastNumTurns at ctor, init+result via events, assistant catch-up + result); liveness (`HandleProcessExit` flips IsAlive false, IsReady stays true monotonically); PropertyChanged propagation (IsReady change raises IsProcessingPointerTurn; init event raises IsProcessingPointerTurn).
+- `MainWindowViewModelTests.cs` (10 tests) - Section 5.2 CanExecute contract. Empty prompt / no focus / not-ready / dead session / task-bound mid-pointer / task-bound ready / free immediate; IsAgentBusy flip on init; SendButtonTooltip wording in both states.
+- **The critical regression-catching test:** `CanSendPrompt_false_when_taskbound_not_ready` asserts that with init observed but no result, `SendPromptCommand.CanExecute(null)` is false AND `IsAgentBusy` is true. That single assertion is what would have caught the init-relaxed bug; it is now locked in.
+
+**`InfiniContext.Tests.csproj` changes:** added `<ProjectReference Include="..\..\src\InfiniContext.Gui\InfiniContext.Gui.csproj" />` (was: ReferenceOutputAssembly=false on Cli, no Gui ref). Gui tests link the real Gui DLL, no link-compile gymnastics needed.
+
+**Build/test:**
+- `dotnet build InfiniContext.slnx -c Release` -> green, 0 warnings, 0 errors.
+- `dotnet format InfiniContext.slnx --verify-no-changes --no-restore` -> exit 0.
+- `dotnet test InfiniContext.slnx -c Release --no-build` -> **1004 passed / 3 POSIX-skipped / 0 failed**, up from 981 baseline by exactly the 23 new GUI tests.
+
+**One small fix uncovered by the matrix:** the `_host is not null` guard in `CanSendPrompt` was dead in production (FocusedSession can't be set without a host) and incorrect for tests. Dropped. `CanInterrupt` was already correctly host-agnostic.
+
+**Followups remaining (unchanged from prior flush, minus the readiness-gate revert which is now landed):**
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+- The 7-minute silent-streaming case in `gui-20260521-181535.log` - separate diagnosis. Possible claude 2.1.147 schema drift or debug-logging filter quirk. Not load-bearing now that the readiness gate gives the operator agency.
+- Sections 5.3-5.6 of `design-gui-testability.md` (pointer injection, turn-tree assembly, approval-banner flow, dead-session marker). Section 5.1+5.2 land in this slice; the rest are queued for when their corresponding bugs surface.
+
+**Operator smoke verification (next):** spawn a task-bound session. Expected:
+1. Status strip shows the "Agent processing pointer turn..." badge while the first turn streams.
+2. Hovering the disabled Send button shows the new tooltip explaining the disabled state.
+3. Send / Continue / What's next enable once the pointer turn closes (the first `ResultEvent`).
+4. Operator's typed prompts after that point process normally - no silent stdin-queue behaviour.
+5. Esc interrupts at any time (gated on `IsAlive` only).
+
