@@ -1321,3 +1321,54 @@ Operator approved: section 8 questions all "as recommended" (1: `tests/InfiniCon
 4. Operator's typed prompts after that point process normally - no silent stdin-queue behaviour.
 5. Esc interrupts at any time (gated on `IsAlive` only).
 
+### Readiness-gate slice 5a revert reversed by task 0008 (2026-05-21)
+
+Operator smoke on the slice 5a result-based gate failed: real task pointer turns run 30s-2min (skill reads `index.md` / `description.md` / `progress.md` + likely `Grep`s), and hard-disabling Send for that window leaves the operator with zero agency. The disabled-button-plus-tooltip-and-badge design from section 12 of `design-gui-testability.md` (the recommended path) did surface "agent busy" visually, but the operator's actual ask was "let me type while it runs and queue the prompt" - which the result-based contract structurally cannot deliver.
+
+Forked into a dedicated task **0008 (session-warm-up-investigation-and-fix)** because the diagnostic loop expanded to cover three independent bugs: the gate contract itself, the seed-prompt card never being rendered (claude doesn't echo the host's first-user-message back as a UserEvent), and a silent stdout-loop crash where `OnStateTransition` ran on the reader thread and threw cross-thread on Avalonia binding subscribers. Task 0008 closed with commit `6c1ab13` shipping:
+
+- **Init-based readiness gate** (reverses slice 5a; the section-12 recommendation is overturned and the doc is now amended to reflect that).
+- **`SessionRowViewModel.IsAgentTurnInFlight`** - state-machine-driven (`Sending`/`Streaming`/`Cancelling`/`Compacting` + `IsAlive`) - drives a status-strip badge "Agent busy - your message will queue behind the in-flight turn" via `MainWindowViewModel.IsAgentBusy`. Send stays *enabled*; the indicator surfaces the queue rather than the gate hiding it.
+- **Seed-prompt card** rendered immediately after `CreateSessionAsync` returns via `BeginUserTurn(firstUserMessage)` + `Transcript.Append("> {seed} [seed prompt]")`. The `SystemInitEvent` arm preserves a real seed headline (only blanks synthetic placeholders) and keeps `_pendingTurn` live so assistant content attaches as children.
+- **Stdout-loop resilience**: `OnStateTransition` now marshals through `IUiDispatcher`; `StdoutLoopAsync` wraps each per-event step (`state.Apply`, `CheckClaudeVersion`, `LogReceivedEvent`, event observer, channel writer) in its own try/catch with a warning log, plus a top-level Exception catch.
+- **Two regression tests** added: `OnStateTransition_marshals_to_UI_thread_when_called_off_thread` (uses a new `TrackingUiDispatcher.CheckAccessReturns = false` helper) and `StdoutLoop_survives_Transitioned_subscriber_that_throws` (replays the `simple-prompt` fixture with a throwing Transitioned subscriber and asserts the full event trace still drains). 1007 total tests passing.
+
+Net effect on the 0004 deliverables:
+- `design-gui-testability.md` section 12 amended this entry's session to record the init-based outcome and the contract the test matrix now locks. The recommendation prose was overturned; the "test matrix is the durable contract" framing stands.
+- The 23 readiness-gate / CanExecute tests added in slice 5a remain valid - the contract they assert is the one that shipped. No test changes needed beyond the two 0008 added.
+
+### Slice 5a slice-entry is now stale on the gate contract specifically
+
+The slice 5a entry above (`### Phase 3B slice 5a - testability scaffold + readiness-gate revert + Section 5.1/5.2 matrix`) describes the result-based revert. That revert was itself reverted in commit `6c1ab13`. The testability scaffolding (`IUiDispatcher`/`IUiTimer`/`IUiTimerFactory` + 23 tests + sync test impls) is unchanged and remains the correct description of the shipped code; only the four gate-related code edits (constructor pre-seed, catch-up, SystemInitEvent arm, ResultEvent arm) and the `IsProcessingPointerTurn` derived property were superseded by 0008's `IsAgentTurnInFlight`. The entry is retained as audit trail; this entry is the authoritative current state for the readiness contract.
+
+### Phase 3B status snapshot
+
+What's landed: testability scaffold (sections 1-3 of `design-gui-testability.md`), Section 5.1+5.2 of the matrix (23 tests; covers readiness gate + CanExecute), the init-based + IsAgentTurnInFlight contract (commit `6c1ab13`), stdout-loop defense-in-depth, seed-prompt rendering. Sections 5.3-5.6 (pointer injection, turn-tree assembly, approval-banner flow, dead-session marker) remain queued; design doc captures the shapes but they're authored on demand when bugs surface.
+
+What's still open (carry-forward, unchanged across the last several flushes):
+- Mid-session approval-mode toggle in the GUI (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`).
+- "Pending approval (N)" badge in the status strip for off-screen multi-session backlog.
+- Theme-portable approval banner colors (amber-on-yellow palette hardcoded).
+- `<Compile Include>` link housekeeping: only `ApprovalSinkFactory.cs` remains link-compiled.
+- The 7-minute silent-streaming case in `gui-20260521-181535.log` - separate diagnosis. Possible claude 2.1.147 schema drift or debug-logging filter quirk. Not load-bearing now that the readiness gate gives the operator agency and the stdout-loop is resilient.
+- Doc work still gated: promote `.task/0004/design.md` -> `docs/stage3/design.md` on operator sign-off of `design.md` section 10 decisions; author `docs/stage3/plan.md` + `docs/stage3/decisions.md`.
+
+### Flush note (hard threshold, 2026-05-21 post-0008-reconciliation)
+
+Host hit hard context-pressure threshold (~85%; 351% of 1M) immediately after the 0008-reconciliation entries above landed in working tree. Flushing per the skill contract; no clarifying questions, no new work.
+
+**State on disk (uncommitted - three `.task/0004/` files modified this session, NO source-code changes):**
+- `.task/0004-phase-3-ui-implementation-documentation/design-gui-testability.md` - section 12 rewritten from "Open question for operator" (recommended result-based gate) to "Readiness-gate contract (resolved)". Records the operator-pushback outcome: init-based gate + state-machine-driven `IsAgentTurnInFlight` indicator. Documents which test cases lock the contract.
+- `.task/0004-phase-3-ui-implementation-documentation/progress.md` - new entry "Readiness-gate slice 5a revert reversed by task 0008 (2026-05-21)" + "Slice 5a slice-entry is now stale on the gate contract specifically" + "Phase 3B status snapshot" (the three entries directly above this flush note). Captures: (a) the three bugs task 0008 actually fixed in commit `6c1ab13` (gate contract, seed-prompt card never rendered, OnStateTransition cross-thread crash killing stdout loop); (b) explicit note that the slice 5a entry's gate-related code description is now historical only; (c) Phase 3B carry-forward queue.
+- `.task/0004-phase-3-ui-implementation-documentation/index.md` - rewritten via Write tool (Edit failed on Cyrillic-mojibake em-dash byte in the prior progress.md row description - the same encoding hazard documented across slices 4c/4d/4i/4h). Now pure ASCII, points at the 0008-reconciliation entry.
+
+**Branch state:** `main` at `6c1ab13` (task 0008's "GUI session warm-up" fix - already committed and pushed; `main` is *up to date with `origin/main`*). The three working-tree `.task/0004/` modifications above are uncommitted. No commits this session.
+
+**Build/test status:** NOT re-run this session. No source code touched - only the three task-folder markdown files. The last green baseline (1007 passed / 3 POSIX-skipped) from task 0008's commit `6c1ab13` carries forward unchanged.
+
+**Next session pickup:**
+1. **Commit the three doc-reconciliation files.** Suggested message: `"Task 0004: reconcile with 0008 outcome (init-based readiness gate + IsAgentTurnInFlight)."` All three files are 0004 artifacts; commit is a documentation reconciliation, no source change. Operator-driven push afterwards.
+2. **No outstanding work in task 0004 that the operator hasn't already deferred.** Phase 3B status snapshot (preserved above this flush note) lists the four polish items still queued (mid-session approval-mode toggle, "Pending approval (N)" badge, theme-portable banner colors, `<Compile Include>` link housekeeping), the diagnostic gap (7-minute silent-streaming case), and the gated doc promotions (`.task/0004/design.md` -> `docs/stage3/design.md` on section-10 sign-off; `docs/stage3/plan.md` + `decisions.md` authoring).
+3. If operator wants to pick up the next polish slice, the recommended next is the **mid-session approval-mode toggle** (largest of the polish items; closes the CLI parity gap with `/approval`; plumbing via `SwitchableApprovalSink.Switch(newInner)` is already in place from slice 4j).
+
+**Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected); the 55s silent exit-1 case for free sessions where the operator spawns and never types (claude self-cleanup, not a host bug); Sections 5.3-5.6 of `design-gui-testability.md` test matrix (authored on demand when their corresponding bugs surface).

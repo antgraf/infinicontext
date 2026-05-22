@@ -231,10 +231,22 @@ If/when we adopt Avalonia.Headless for view-level coverage (out of scope here), 
 
 Total scaffolding: under 200 lines of GUI changes + a test project subfolder. Cheap compared to the recurring cost of operator-driven regression hunts.
 
-## 12. Open question for operator
+## 12. Readiness-gate contract (resolved)
 
-Before any code lands: **should the readiness-gate be left at the current init-based relaxation, rolled back to result-based, or replaced with a composite ("init AND state==Idle")?** The answer determines what the first test matrix asserts - and the matrix is what catches the next regression.
+**Outcome:** init-based gate + state-machine-driven "Agent busy - your message will queue" indicator. Operator pushback path was taken after the slice 5a result-based revert failed smoke - the pointer turn for a real task runs 30s-2min while the `infinicontext-task` skill reads `index.md` / `description.md` / `progress.md`, and gating Send for that window leaves the operator with zero agency. Shipped in commit `6c1ab13` (task 0008).
 
-My recommendation: roll back to the result-based gate for task-bound sessions (the slice-4l behaviour pre-relaxation) **but** add a visible "Agent processing pointer turn" indicator in the status strip + a tooltip on the disabled Send button explaining why, so the operator's "buttons disabled forever - bug" misread becomes "buttons disabled - agent busy". Then write the test matrix in 5.1 to lock that contract in. If operator pushback says "no, I want to type while the pointer turn runs," we flip to the init-based gate with a status-strip "queued behind in-flight turn" marker and the matrix asserts *that* contract.
+**The contract the test matrix locks in:**
 
-Either way, the test matrix is the artifact that prevents the next person (or me, on a fresh session) from flipping the Boolean a third time without thinking about the operator contract.
+- `IsReady` flips on `system/init` for both free and task-bound sessions (the `ctor-pre-seed` / `init` / `catch-up` / `result-fallback` paths in `SessionRowViewModel.SetIsReady`). Once true, monotonic for the session's lifetime.
+- `IsAgentTurnInFlight` (new, on `SessionRowViewModel`) is true whenever `IsAlive` AND `SessionState` is `Sending`, `Streaming`, `Cancelling`, or `Compacting`. It is a state-machine derivation, not a Boolean field; PropertyChanged fires on every state transition.
+- `MainWindowViewModel.IsAgentBusy` mirrors the focused row's `IsAgentTurnInFlight` and drives the status-strip badge "Agent busy - your message will queue behind the in-flight turn". `SendButtonTooltip` swaps between the busy and idle copy.
+- Send stays **enabled** while `IsAgentTurnInFlight` is true - a prompt fired during a turn-in-flight buffers on claude's stdin and runs once the current turn closes. The indicator surfaces the queue behaviour visually so the operator knows what their click did.
+- Interrupt is independent (`IsAlive` only), same as before.
+
+**What this rejected from the earlier recommendation:** the result-based gate hard-disabled Send during the pointer turn. That removed implicit agency and produced the "buttons disabled forever - bug" misread the recommendation itself flagged. The fix kept the diagnostic intent (operator should know the agent is busy) but moved it from a *disabled-button signal* to an *enabled-button-plus-visible-queue-marker* signal. Same information, but the operator can act on it.
+
+**Why init and not composite (init AND state==Idle):** a composite would re-introduce the disable-during-turn problem the slice 5a smoke flagged. The init-based gate trusts the state machine to surface "in-flight" separately rather than folding it into IsReady.
+
+**What the test matrix now asserts (Section 5.1 + 5.2):** IsReady flips on init (free + task-bound, both event-observed and ctor-pre-seeded paths); IsAgentTurnInFlight tracks the state machine across Sending/Streaming/Cancelling/Compacting/Idle transitions; CanExecute on `SendPromptCommand` requires `IsReady && IsAlive` and NOT `!IsAgentTurnInFlight` (Send stays enabled during turns); IsAgentBusy on the host VM flips with focused-row IsAgentTurnInFlight; SendButtonTooltip swaps copy. The 23 tests added in slice 5a + the two regression tests added in task 0008 (`OnStateTransition_marshals_to_UI_thread_when_called_off_thread`, `StdoutLoop_survives_Transitioned_subscriber_that_throws`) cover this contract.
+
+**The artifact that prevents the next regression:** the test matrix itself. If anyone ever flips back to result-based gating or removes IsAgentTurnInFlight, the `CanSendPrompt_true_while_taskbound_turn_in_flight` and `IsAgentBusy_true_when_focused_row_in_flight` cases fail loudly. The matrix is the durable contract; this section is just the prose explanation of what it asserts.
