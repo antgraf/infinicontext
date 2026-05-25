@@ -1372,3 +1372,29 @@ Host hit hard context-pressure threshold (~85%; 351% of 1M) immediately after th
 3. If operator wants to pick up the next polish slice, the recommended next is the **mid-session approval-mode toggle** (largest of the polish items; closes the CLI parity gap with `/approval`; plumbing via `SwitchableApprovalSink.Switch(newInner)` is already in place from slice 4j).
 
 **Out of scope (unchanged across flushes):** watchdog timeout fail-open (deliberately rejected); the 55s silent exit-1 case for free sessions where the operator spawns and never types (claude self-cleanup, not a host bug); Sections 5.3-5.6 of `design-gui-testability.md` test matrix (authored on demand when their corresponding bugs surface).
+
+## 2026-05-22
+
+### Status query + soft-flush handoff
+
+Resumed task 0004 from `8727317` (doc-reconciliation already committed; working tree clean). Operator's session-row Continue/What's next button fired the canned `"What's next for the task?"` prompt; answered with the carry-forward queue snapshot (mid-session approval-mode toggle recommended next; "Pending approval (N)" badge / theme-portable banner colors / link housekeeping behind it; 7-minute silent-streaming diagnostic still open but not blocking; gated doc work waits on section-10 sign-off).
+
+No code touched this session. Host signalled soft threshold (~69%) immediately after the answer; exiting cleanly for fresh-session handoff per the skill contract.
+
+**Branch state:** `main` at `8727317`, working tree clean, no pending commits. Build/test parity carried forward from `6c1ab13` (1007 passed / 3 POSIX-skipped).
+
+**Next session pickup:** the recommended slice is unchanged - the **mid-session approval-mode toggle** (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`; plumbing in place from slice 4j). Operator may instead pick the smaller polish items, the silent-streaming diagnostic, or address the gated doc work (`.task/0004/design.md` -> `docs/stage3/design.md` on section-10 sign-off; author `docs/stage3/plan.md` + `decisions.md`).
+
+### Flush note (hard threshold, 2026-05-22)
+
+Host escalated to hard threshold (~110% of 1M) immediately after the soft-flush entry above was written. No work performed between soft and hard - the soft-flush entry already captures the full state. Exiting per the skill contract.
+
+**State at hard flush (delta from soft flush above: none):**
+- Branch: `main` at `8727317`, even with `origin/main` per the session-start git status.
+- Working tree: two `.task/0004/` markdown edits uncommitted (this `progress.md` plus `index.md` row pointing at the 2026-05-22 entry). No source-file changes this session.
+- Build/test parity carried forward from `6c1ab13` (1007 passed / 3 POSIX-skipped). Not re-run this session - nothing under `src/` or `tests/` was touched.
+
+**Next session pickup (unchanged from soft flush):**
+1. Optionally commit the two uncommitted `.task/0004/` markdown edits (this session's handoff record).
+2. Pick the recommended next slice: **mid-session approval-mode toggle** (status-strip dropdown + `SwitchableApprovalSink.Switch(newInner)`; plumbing in place from slice 4j).
+3. Or one of: "Pending approval (N)" badge, theme-portable banner colors, `<Compile Include>` link housekeeping, the 7-minute silent-streaming diagnostic, the gated doc work.

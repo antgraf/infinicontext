@@ -139,3 +139,7 @@ Final status:
 
 Task closed. Remaining follow-up (out of scope for this task):
 - Amend `design-gui-testability.md` section 12 to reflect the operator-pushback path was taken.
+
+## 2026-05-24
+
+- Migrated the "Amend `design-gui-testability.md` section 12" follow-up to `docs/todo.md` Section A (Bugs and hardening) so it lives on the single consolidated work queue rather than buried in this closed task's log.

@@ -25,6 +25,9 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly SessionManager _sessionManager;
     private readonly TaskStore? _taskStore;
     private readonly TaskService? _taskService;
+    private readonly LightModelServiceFactory _lightModelFactory;
+    private readonly TimeSpan _approvalTimeout;
+    private readonly ModeHolder _modeHolder;
     private int _disposed;
 
     public InfiniContextSettings Settings { get; }
@@ -36,6 +39,16 @@ public sealed class SessionHost : IAsyncDisposable
     public event Action<SessionContext>? SessionCreated;
     public event Action<Guid>? SessionClosed;
 
+    /// <summary>Host-wide effective approval mode (D12 - one effective mode across all sessions).
+    /// Updated at startup from <c>settings.Approval.Mode</c>, then pinned to the post-fallback
+    /// mode returned by <see cref="SwitchApprovalMode"/> or by Auto's light-model construct path.</summary>
+    public ApprovalMode CurrentApprovalMode => _modeHolder.Mode;
+
+    /// <summary>Fired after <see cref="SwitchApprovalMode"/> resolves to a new effective mode, so
+    /// the VM can sync its observable property when the effective mode differs from what was
+    /// requested (e.g. Auto -&gt; Ask on light-model construct failure).</summary>
+    public event Action<ApprovalMode>? ApprovalModeChanged;
+
     private SessionHost(
         InfiniContextSettings settings,
         LoggingHandle logging,
@@ -43,7 +56,10 @@ public sealed class SessionHost : IAsyncDisposable
         LockRegistry lockRegistry,
         SessionManager sessionManager,
         TaskStore? taskStore,
-        TaskService? taskService)
+        TaskService? taskService,
+        LightModelServiceFactory lightModelFactory,
+        TimeSpan approvalTimeout,
+        ModeHolder modeHolder)
     {
         Settings = settings;
         _logging = logging;
@@ -52,6 +68,19 @@ public sealed class SessionHost : IAsyncDisposable
         _sessionManager = sessionManager;
         _taskStore = taskStore;
         _taskService = taskService;
+        _lightModelFactory = lightModelFactory;
+        _approvalTimeout = approvalTimeout;
+        _modeHolder = modeHolder;
+    }
+
+    /// <summary>Mutable shared holder for the host-wide effective approval mode. Both the
+    /// per-session sink factory (closure in <see cref="StartAsync"/>) and <see cref="SwitchApprovalMode"/>
+    /// read/write through the same instance so a mid-session toggle is observed by any subsequent
+    /// session-create call without re-wiring the manager.</summary>
+    private sealed class ModeHolder
+    {
+        public ApprovalMode Mode;
+        public ModeHolder(ApprovalMode initial) { Mode = initial; }
     }
 
     /// <summary>
@@ -86,10 +115,21 @@ public sealed class SessionHost : IAsyncDisposable
         // writeTranscriptBanner=false on the slot sink: the GUI's banner UI carries the same
         // information visually, so CLI-style "[approval] tool=..." lines stay out of the
         // transcript model.
+        //
+        // Mid-session toggle (status-strip ComboBox): the host-wide effective mode (D12) lives in
+        // a shared ModeHolder that both the per-session sink factory below AND SessionHost itself
+        // point at. Session-create reads it; SwitchApprovalMode mutates it. Auto -> Ask fallback
+        // pins the post-fallback value so the next session-create observes the resolved mode.
         var approvalTimeout = TimeSpan.FromSeconds(settings.Approval.TimeoutSeconds);
         var lightModelFactory = new LightModelServiceFactory(settings, logging.Logger, supervisor);
+        var initialMode = settings.Approval.Mode;
+        var modeHolder = new ModeHolder(initialMode);
         SessionApprovalSinkFactory approvalFactory = (slot, transcript, cwd) =>
-            BuildApprovalSink(settings, slot, transcript, cwd, approvalTimeout, lightModelFactory, logging.Logger);
+        {
+            var inner = BuildApprovalSink(modeHolder.Mode, settings, slot, transcript, cwd, approvalTimeout, lightModelFactory, logging.Logger, out var effective);
+            modeHolder.Mode = effective;
+            return inner;
+        };
 
         var manager = await SessionManager.OpenAsync(
             settings,
@@ -118,21 +158,60 @@ public sealed class SessionHost : IAsyncDisposable
             logging.Logger.Warning(ex, "tasks: subsystem unavailable; GUI tree will show sessions under (unattached) only");
         }
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService);
+        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder);
+    }
+
+    /// <summary>
+    /// Switch the host-wide approval mode and hot-swap every active session's
+    /// <see cref="SwitchableApprovalSink"/> to a fresh inner sink built for <paramref name="requested"/>.
+    /// Returns the effective mode (which may differ when Auto's light-model construct fails and
+    /// falls back to Ask). Mirrors the CLI's <c>/approval</c> path: D12 says one effective mode
+    /// across all sessions, so this iterates <see cref="SessionManager.Active"/> in lockstep.
+    /// </summary>
+    public ApprovalMode SwitchApprovalMode(ApprovalMode requested)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(SessionHost));
+
+        ApprovalMode effective = requested;
+        var active = _sessionManager.Active;
+        foreach (var ctx in active)
+        {
+            var newInner = BuildApprovalSink(
+                requested,
+                Settings,
+                ctx.ApprovalSlot,
+                ctx.Transcript,
+                ctx.Cwd ?? string.Empty,
+                _approvalTimeout,
+                _lightModelFactory,
+                _logging.Logger,
+                out effective);
+            ctx.ApprovalSink.Switch(newInner);
+        }
+
+        _modeHolder.Mode = effective;
+        _logging.Logger.Information("gui-approval: mode switched requested={Requested} effective={Effective} sessions={Count}",
+            requested, effective, active.Count);
+        ApprovalModeChanged?.Invoke(effective);
+        return effective;
     }
 
     private static IApprovalSink BuildApprovalSink(
+        ApprovalMode mode,
         InfiniContextSettings settings,
         PendingApprovalSlot slot,
         TranscriptModel transcript,
         string cwd,
         TimeSpan askTimeout,
         LightModelServiceFactory lightModelFactory,
-        ILogger logger)
+        ILogger logger,
+        out ApprovalMode effectiveMode)
     {
+        effectiveMode = mode;
         var slotSink = new SlotApprovalSink(slot, transcript, timeout: askTimeout, writeTranscriptBanner: false);
         IApprovalSink inner;
-        switch (settings.Approval.Mode)
+        switch (mode)
         {
             case ApprovalMode.Ask:
                 // Ask returns bare: the banner UI in the focused pane carries closure visually,
@@ -159,7 +238,8 @@ public sealed class SessionHost : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    logger.Error(ex, "gui-approval: mode=auto; failed to construct light model вЂ” falling back to ask for cwd={Cwd}", cwd);
+                    logger.Error(ex, "gui-approval: mode=auto; failed to construct light model - falling back to ask for cwd={Cwd}", cwd);
+                    effectiveMode = ApprovalMode.Ask;
                     return slotSink;
                 }
                 logger.Information(
@@ -169,7 +249,7 @@ public sealed class SessionHost : IAsyncDisposable
                 break;
 
             default:
-                throw new ArgumentOutOfRangeException(nameof(settings), settings.Approval.Mode, "unknown approval mode");
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown approval mode");
         }
 
         // Wrap non-ask sinks so every decision is echoed into the originating session's transcript.

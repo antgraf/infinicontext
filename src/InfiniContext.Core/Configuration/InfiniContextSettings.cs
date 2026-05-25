@@ -280,6 +280,32 @@ public sealed record TasksOptions
     public int HardThresholdPct { get; init; } = 85;
 
     /// <summary>
+    /// Task 0012 finding #2: tighter soft threshold (in percent) for models with a large context
+    /// window (>= <see cref="LargeContextWindowTokens"/>). 1M-token windows have many more
+    /// absolute tokens at the same percentage as a 200k window, so a 60% soft nudge on 1M is
+    /// far too late - the agent has burned 600k tokens before the nudge. Default 45 keeps the
+    /// flush window short enough that the agent can still produce a useful summary.
+    /// </summary>
+    public int SoftThresholdPctLargeContext { get; init; } = 45;
+
+    /// <summary>
+    /// Task 0012 finding #2: tighter hard threshold for large-context models. See
+    /// <see cref="SoftThresholdPctLargeContext"/>. Default 65 keeps the operator's "you should
+    /// have flushed by now" headroom proportionally similar to the small-context 85.
+    /// </summary>
+    public int HardThresholdPctLargeContext { get; init; } = 65;
+
+    /// <summary>
+    /// Task 0012 finding #2: the cutoff (in tokens) above which a model is treated as
+    /// "large context" and uses <see cref="SoftThresholdPctLargeContext"/> /
+    /// <see cref="HardThresholdPctLargeContext"/> instead of the default
+    /// <see cref="SoftThresholdPct"/> / <see cref="HardThresholdPct"/>. Default 1,000,000
+    /// matches Anthropic's 1M-beta context window. Set to 0 to disable the large-context
+    /// override (every model uses the default pair).
+    /// </summary>
+    public int LargeContextWindowTokens { get; init; } = 1_000_000;
+
+    /// <summary>
     /// Stage 2A Phase 8: fallback context-window map keyed by model id. Used only when claude's
     /// own <c>result.modelUsage[&lt;model&gt;].contextWindow</c> field is missing. Defaults
     /// cover the current Anthropic line; users can override per-model in
@@ -293,6 +319,24 @@ public sealed record TasksOptions
             ["claude-opus-4-7[1m]"] = 1_000_000,
             ["claude-haiku-4-5"] = 200_000,
         };
+
+    /// <summary>
+    /// Task 0012 finding #2: pick the soft/hard threshold pair appropriate for the resolved
+    /// model. Returns the large-context pair when the model's window meets or exceeds
+    /// <see cref="LargeContextWindowTokens"/> and the cutoff is positive; otherwise the default
+    /// pair. Pure function over the settings record.
+    /// </summary>
+    public (int Soft, int Hard) ResolveThresholds(string? modelId)
+    {
+        if (LargeContextWindowTokens > 0
+            && modelId is not null
+            && ModelContextWindows.TryGetValue(modelId, out var window)
+            && window >= LargeContextWindowTokens)
+        {
+            return (SoftThresholdPctLargeContext, HardThresholdPctLargeContext);
+        }
+        return (SoftThresholdPct, HardThresholdPct);
+    }
 
     /// <summary>
     /// Resolve <see cref="DbPath"/> against the per-user default. Pure function — does no I/O.

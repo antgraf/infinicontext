@@ -13,8 +13,20 @@ namespace InfiniContext.Core.State;
 ///   Sending   → Streaming    on first assistant / user / stream_event
 ///   Streaming → Compacting   on system/compact (then back to Streaming on next non-compact event)
 ///   *         → Cancelling   via Cancel() (only from Sending/Streaming/Compacting)
-///   Sending|Streaming|Cancelling|Compacting → Idle on result event
+///   Sending|Streaming|Cancelling|Compacting → Idle    on result event WHEN PendingSendCount drops to 0
+///   Sending|Streaming|Cancelling|Compacting тЖТ Sending on result event WHEN PendingSendCount remains > 0
 ///   *         → Exited       via HandleProcessExit()
+///
+/// <para><b>Per-turn boundaries with buffered sends (task 0011 RC4).</b>
+/// <see cref="BeginSend"/> increments <see cref="PendingSendCount"/> on every call (not just on
+/// the Idle-to-Sending transition), and the <c>ResultEvent</c> handler decrements it. While more
+/// sends remain pending, the post-Result transition lands in <see cref="SessionState.Sending"/>
+/// rather than <see cref="SessionState.Idle"/>, signalling that claude has started draining the
+/// next buffered prompt. Without this, a buffered second send produced no state-machine signal
+/// at all: the second <c>BeginSend</c> from non-Idle was a no-op, and the first <c>ResultEvent</c>
+/// took the machine to Idle where nothing would move it back. Consumers (the GUI's
+/// <c>IsAgentTurnInFlight</c>, future TUI / Web UIs) can now subscribe to <see cref="Transitioned"/>
+/// alone and see one clean Idle-to-Sending-to-Streaming-to-Idle cycle per claude turn.</para>
 /// </summary>
 public sealed class SessionStateMachine
 {
@@ -41,6 +53,16 @@ public sealed class SessionStateMachine
     /// <summary>Mirror of the parser's drift counter — incremented as the state machine sees <see cref="UnknownEvent"/> or <see cref="UnknownBlock"/>.</summary>
     public int UnknownEventCount { get; private set; }
 
+    /// <summary>Number of sends initiated via <see cref="BeginSend"/> whose <c>ResultEvent</c>
+    /// has not yet arrived. Incremented on every <see cref="BeginSend"/> call (not just on the
+    /// Idle to Sending transition), decremented on every <c>ResultEvent</c>. A value greater
+    /// than one means at least one send is buffered on claude's stdin behind a streaming turn.
+    /// The <c>ResultEvent</c> handler uses this to decide whether the post-result transition is
+    /// to <see cref="SessionState.Idle"/> (count drops to 0 - claude is done) or back to
+    /// <see cref="SessionState.Sending"/> (count remains positive - claude is starting the next
+    /// buffered turn). Task 0011 RC4.</summary>
+    public int PendingSendCount { get; private set; }
+
     public event Action<StateTransition>? Transitioned;
     public event Action<ToolStackChange>? ToolStackChanged;
 
@@ -48,6 +70,15 @@ public sealed class SessionStateMachine
     {
         lock (_sync)
         {
+            // Once the process is gone, sends are dropped silently (the writer in
+            // ClaudeSession.SendUserMessageAsync throws first, but defend-in-depth here so the
+            // count can never desync from observable transitions).
+            if (State == SessionState.Exited) return;
+            // Always count the send: even from non-Idle states, this call corresponds to a real
+            // stdin write that claude will eventually drain. The state transition itself only
+            // fires from Idle (the prior contract); the count carries the per-turn boundary
+            // signal that the state alone cannot. See class doc-comment RC4.
+            PendingSendCount++;
             if (State == SessionState.Idle)
             {
                 Transition(SessionState.Sending, "BeginSend", null);
@@ -96,7 +127,24 @@ public sealed class SessionStateMachine
                 if (State is SessionState.Sending or SessionState.Streaming
                           or SessionState.Cancelling or SessionState.Compacting)
                 {
-                    Transition(SessionState.Idle, $"result/{result.Subtype ?? "<null>"}", ev);
+                    // Decrement before the transition so the new state reflects the *remaining*
+                    // queue depth. Clamp at 0 in case of a Result with no matching BeginSend
+                    // (defensive against parser anomalies / future claude behaviour we haven't
+                    // seen yet).
+                    if (PendingSendCount > 0) PendingSendCount--;
+                    if (PendingSendCount > 0)
+                    {
+                        // Buffered sends remain: claude has finished the current turn and is
+                        // about to drain the next stdin message. Cycle back to Sending so the
+                        // next AssistantEvent's MaybeStartStreaming arm flips us into Streaming
+                        // naturally - that produces a clean per-turn cycle for every buffered
+                        // send instead of stranding the state machine in Idle. RC4.
+                        Transition(SessionState.Sending, $"result/{result.Subtype ?? "<null>"} (queued sends remain: {PendingSendCount})", ev);
+                    }
+                    else
+                    {
+                        Transition(SessionState.Idle, $"result/{result.Subtype ?? "<null>"}", ev);
+                    }
                 }
                 break;
 

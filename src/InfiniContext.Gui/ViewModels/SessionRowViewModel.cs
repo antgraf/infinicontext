@@ -110,7 +110,18 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private readonly ILogger? _logger;
     private readonly IUiDispatcher _dispatcher;
     private readonly IUiTimer _deadlineTimer;
-    private TurnNodeViewModel? _pendingTurn;
+
+    /// <summary>The turn whose <c>ResultEvent</c> we are currently awaiting. Assistant and
+    /// user (tool-result) events attach to this turn's tree. Promoted from
+    /// <see cref="_queuedTurns"/> when the preceding turn's <c>ResultEvent</c> arrives, or
+    /// null between turns when nothing is buffered.</summary>
+    private TurnNodeViewModel? _inFlightTurn;
+
+    /// <summary>Operator turns buffered behind an in-flight turn. Claude processes stdin in
+    /// FIFO order, so each new operator send while <see cref="_inFlightTurn"/> is non-null
+    /// goes here, marked <see cref="TurnNodeViewModel.IsQueued"/>, and is dequeued (and
+    /// un-marked) when the next <c>ResultEvent</c> closes the prior in-flight turn.</summary>
+    private readonly Queue<TurnNodeViewModel> _queuedTurns = new();
     private bool _disposed;
 
     public SessionRowViewModel(
@@ -218,22 +229,35 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         Context.ApprovalSlot.Resolve(ApprovalBehavior.Deny, message: "user denied via GUI banner");
     }
 
+    /// <summary>Add a new operator turn to the visible transcript. If no turn is currently
+    /// in flight, the new turn becomes the in-flight turn (its <c>ResultEvent</c> will close
+    /// it). Otherwise the turn is enqueued and marked <see cref="TurnNodeViewModel.IsQueued"/>
+    /// until the preceding turn closes - the operator sees their message immediately, but the
+    /// agent's response only attaches after claude finishes the earlier turn (matching
+    /// claude's strict FIFO stdin draining).
+    ///
+    /// <para>The previous implementation overwrote a single <c>_pendingTurn</c> field, which
+    /// orphaned the in-flight turn whenever the operator sent during streaming -- the
+    /// orphaned card stayed at "thinking..." forever and the in-flight turn's <c>ResultEvent</c>
+    /// was misattributed to the operator's new turn. Task 0011 root cause RC2/RC3.</para></summary>
     public void BeginUserTurn(string promptText)
     {
         var turn = new TurnNodeViewModel(promptText);
-        if (_dispatcher.CheckAccess())
+        void Apply()
         {
             Turns.Add(turn);
-            _pendingTurn = turn;
-        }
-        else
-        {
-            _dispatcher.Post(() =>
+            if (_inFlightTurn is null)
             {
-                Turns.Add(turn);
-                _pendingTurn = turn;
-            });
+                _inFlightTurn = turn;
+            }
+            else
+            {
+                turn.IsQueued = true;
+                _queuedTurns.Enqueue(turn);
+            }
         }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
     }
 
     private void OnStateTransition(StateTransition t)
@@ -255,13 +279,25 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             // instead of having to read the (small + grey) state line under the row.
             if (t.To == SessionState.Exited)
             {
-                var turn = EnsurePendingTurn(initialPrompt: "(session ended)");
+                var turn = EnsureInFlightTurn(initialPrompt: "(session ended)");
                 turn.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.System,
                     $"session exited ({t.Reason})",
                     $"transition: {t.From} -> {t.To}\nreason: {t.Reason}"));
                 turn.IsInProgress = false;
-                _pendingTurn = null;
+                // Process exit invalidates any queued turns: claude won't drain them, so flush
+                // and mark each as closed (no spinner, no IsQueued badge) so the operator can
+                // see what was never sent rather than the queue silently vanishing.
+                _inFlightTurn = null;
+                while (_queuedTurns.TryDequeue(out var queued))
+                {
+                    queued.IsQueued = false;
+                    queued.IsInProgress = false;
+                    queued.Children.Add(new TurnContentItemViewModel(
+                        TurnContentKind.System,
+                        "(not sent - session exited before turn started)",
+                        ""));
+                }
             }
         }
         if (_dispatcher.CheckAccess()) Apply();
@@ -301,42 +337,45 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         switch (ev)
         {
             case SystemInitEvent init:
-                var initTurn = EnsurePendingTurn(initialPrompt: "(session start)");
+                var initTurn = EnsureInFlightTurn(initialPrompt: "(session start)");
                 initTurn.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.System,
                     $"system/init model={init.Model ?? "?"} cwd={init.Cwd ?? "?"}",
                     $"claude_code_version={init.ClaudeCodeVersion ?? "?"}\npermissionMode={init.PermissionMode ?? "?"}"));
-                // "(session ready)" is technical chatter, not an assistant reply - park it in
-                // Details. Only blank the headline when it's the synthetic "(session start)"
-                // placeholder; a real seed prompt (e.g. task pointer opened the turn before init
-                // arrived) must stay visible so the operator can see what was sent.
                 initTurn.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.System, "(session ready)", ""));
-                if (TurnNodeViewModel.SyntheticHeadlines.Contains(initTurn.Headline)) initTurn.Headline = "";
-                initTurn.IsInProgress = false;
-                // Keep _pendingTurn live when there's a real seed prompt so the agent's response
-                // attaches as children of that turn (matches the operator-sent flow). Only close
-                // the turn out when it was a standalone synthetic status card.
-                if (string.IsNullOrEmpty(initTurn.Headline)) _pendingTurn = null;
+                // Only close out a synthetic "(session start)" placeholder card. A turn opened
+                // by BeginUserTurn for a real seed prompt (task pointer) must stay in flight so
+                // claude's response attaches as its children and the ResultEvent eventually
+                // closes it. Branching on HasOperatorMessage replaces the prior
+                // SyntheticHeadlines check, which incorrectly matched the ctor-default
+                // "thinking..." headline of any new turn and prematurely closed real seed-prompt
+                // turns - the "stuck thinking..." card under task-bound sessions (task 0011).
+                if (!initTurn.HasOperatorMessage)
+                {
+                    initTurn.Headline = "";
+                    initTurn.IsInProgress = false;
+                    _inFlightTurn = null;
+                }
                 _initSeen = true;
                 _logger?.Information("gui-row[{Row}] init: observed system/init activeTaskId={TaskId}", ShortId, Context.ActiveTaskId);
                 SetIsReady("init");
                 break;
 
             case AssistantEvent asst:
-                var turn = EnsurePendingTurn(initialPrompt: "(claude-initiated)");
+                var turn = EnsureInFlightTurn(initialPrompt: "(claude-initiated)");
                 AppendAssistantContent(turn, asst);
                 break;
 
             case UserEvent userEv:
-                if (_pendingTurn is { } current) AttachToolResults(current, userEv);
+                if (_inFlightTurn is { } current) AttachToolResults(current, userEv);
                 break;
 
             case ResultEvent res:
-                ClosePendingTurnWith(res.Result, res);
+                CloseInFlightTurnWith(res.Result, res);
                 _logger?.Information(
-                    "gui-row[{Row}] result observed: numTurns={NumTurns} costUsd={Cost} initSeen={InitSeen} isReady={IsReady}",
-                    ShortId, res.NumTurns, res.TotalCostUsd, _initSeen, IsReady);
+                    "gui-row[{Row}] result observed: numTurns={NumTurns} costUsd={Cost} initSeen={InitSeen} isReady={IsReady} queued={Queued}",
+                    ShortId, res.NumTurns, res.TotalCostUsd, _initSeen, IsReady, _queuedTurns.Count);
                 // Defensive: if init was somehow missed (e.g. a parser anomaly that swallowed
                 // it) and only the catch-up branch didn't fire either, a ResultEvent still
                 // proves claude is responsive - flip IsReady as a last-resort gate.
@@ -350,14 +389,14 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             case SystemStatusEvent:
             case SystemHookResponseEvent:
             case SystemPluginInstallEvent:
-                _pendingTurn?.Children.Add(new TurnContentItemViewModel(
+                _inFlightTurn?.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.System,
                     $"{ev.Type}/{ev.Subtype ?? "?"}",
                     ev.Raw.ToJsonString()));
                 break;
 
             case UnknownEvent unk:
-                _pendingTurn?.Children.Add(new TurnContentItemViewModel(
+                _inFlightTurn?.Children.Add(new TurnContentItemViewModel(
                     TurnContentKind.UnknownEvent,
                     $"unknown_event: {unk.Discriminator}",
                     unk.Raw.ToJsonString()));
@@ -365,12 +404,17 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private TurnNodeViewModel EnsurePendingTurn(string initialPrompt)
+    /// <summary>Return the current in-flight turn, creating a synthetic-prompt one if there
+    /// is none. The synthetic prompt is used by callers that need a target for orphan events
+    /// (system/init before any send, claude-initiated assistant emissions, terminal-state
+    /// markers). Real operator turns always come in via <see cref="BeginUserTurn"/> and so
+    /// never trigger the synthetic path.</summary>
+    private TurnNodeViewModel EnsureInFlightTurn(string initialPrompt)
     {
-        if (_pendingTurn is { } existing) return existing;
+        if (_inFlightTurn is { } existing) return existing;
         var turn = new TurnNodeViewModel(initialPrompt);
         Turns.Add(turn);
-        _pendingTurn = turn;
+        _inFlightTurn = turn;
         return turn;
     }
 
@@ -442,9 +486,14 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void ClosePendingTurnWith(string? finalText, ResultEvent? result = null)
+    /// <summary>Close the current in-flight turn (final headline, footer summary) and, if any
+    /// operator turn was queued behind it, promote that one to in-flight. This is the single
+    /// place where turn-boundary attribution happens for <c>ResultEvent</c>: previously the
+    /// caller of <c>BeginUserTurn</c> could clobber the in-flight pointer mid-turn, causing
+    /// the orphan-and-misattribute bug (task 0011).</summary>
+    private void CloseInFlightTurnWith(string? finalText, ResultEvent? result = null)
     {
-        if (_pendingTurn is not { } turn) return;
+        if (_inFlightTurn is not { } turn) return;
         if (!string.IsNullOrEmpty(finalText) && turn.Headline == "thinking...") turn.Headline = finalText!;
         turn.IsInProgress = false;
         if (result is not null)
@@ -455,7 +504,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             if (result.DurationMs is long d) parts.Add($"{d}ms");
             if (parts.Count > 0) turn.FooterSummary = string.Join(Separator, parts);
         }
-        _pendingTurn = null;
+        if (_queuedTurns.TryDequeue(out var next))
+        {
+            next.IsQueued = false;
+            _inFlightTurn = next;
+        }
+        else
+        {
+            _inFlightTurn = null;
+        }
     }
 
     private static string SummarizeInput(string? json)

@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.Tasks;
 using InfiniContext.Gui.Services;
@@ -35,6 +36,23 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public double LeftColumnMinWidth => GuiSettings.Defaults.LeftColumnMin;
     public double LeftColumnMaxWidth => GuiSettings.Defaults.LeftColumnMax;
 
+    /// <summary>Window outer width in DIPs. Two-way bound to <c>Window.Width</c> so a resize
+    /// updates this immediately; on close <see cref="SaveLayoutAsync"/> flushes the value to
+    /// <c>gui-settings.json</c>. Initialised from the loaded <see cref="GuiSettings"/> on the
+    /// host-attached ctor, defaulting to <c>GuiSettings.Defaults.WindowWidth</c> otherwise.</summary>
+    [ObservableProperty]
+    private double _windowWidth = GuiSettings.Defaults.WindowWidth;
+
+    /// <summary>Window outer height in DIPs. See <see cref="WindowWidth"/>.</summary>
+    [ObservableProperty]
+    private double _windowHeight = GuiSettings.Defaults.WindowHeight;
+
+    /// <summary>True if the window is currently maximized. Two-way bound through a code-behind
+    /// hook (Avalonia's <c>Window.WindowState</c> is an enum; the VM stores a bool for JSON
+    /// portability across Avalonia versions - the code-behind maps to/from <c>WindowState</c>).</summary>
+    [ObservableProperty]
+    private bool _windowMaximized;
+
     /// <summary>Whichever tree item the operator clicked - <see cref="TaskNodeViewModel"/> or
     /// <see cref="SessionRowViewModel"/>. Two-way bound from <c>TreeView.SelectedItem</c>.</summary>
     [ObservableProperty]
@@ -65,8 +83,32 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public Func<Task<string?>>? FolderPicker { get; set; }
     public Action<string>? ShowError { get; set; }
 
+    /// <summary>Callback the View provides so the VM can pop the "+ New task" modal without
+    /// referencing Avalonia Window types directly. Returns null when the operator cancels.</summary>
+    public Func<Task<Views.NewTaskRequest?>>? NewTaskPrompt { get; set; }
+
     [ObservableProperty]
     private string _promptText = "";
+
+    /// <summary>Host-wide effective approval mode (D12). Two-way bound to the status-strip
+    /// ComboBox. Setter routes through <see cref="SessionHost.SwitchApprovalMode"/> to hot-swap
+    /// every active session's <see cref="Core.Mcp.SwitchableApprovalSink"/> in lockstep. When the
+    /// host falls back (e.g. Auto -&gt; Ask on light-model construct failure), the
+    /// <see cref="SessionHost.ApprovalModeChanged"/> event syncs the VM property back to the
+    /// effective mode. The <see cref="_suppressApprovalModeSwitch"/> guard prevents the
+    /// event-driven sync from re-entering the switch path.</summary>
+    [ObservableProperty]
+    private ApprovalMode _currentApprovalMode = ApprovalMode.Ask;
+
+    private bool _suppressApprovalModeSwitch;
+
+    /// <summary>Static list backing the status-strip ComboBox. Order matches the
+    /// <see cref="ApprovalMode"/> enum (Ask, Deny, Allow, Auto), which is also the order the
+    /// CLI's <c>/approval</c> help lists them in.</summary>
+    public IReadOnlyList<ApprovalMode> ApprovalModes { get; } = new[]
+    {
+        ApprovalMode.Ask, ApprovalMode.Deny, ApprovalMode.Allow, ApprovalMode.Auto,
+    };
 
     /// <summary>True while the focused session has a turn in flight (Sending/Streaming/
     /// Cancelling/Compacting). The XAML uses this to surface a "Agent busy - your next
@@ -116,6 +158,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         _timerFactory = timerFactory ?? throw new ArgumentNullException(nameof(timerFactory));
         _guiSettings = guiSettings;
         _leftColumnWidth = new GridLength(guiSettings.LeftColumnWidth);
+        _windowWidth = guiSettings.WindowWidth;
+        _windowHeight = guiSettings.WindowHeight;
+        _windowMaximized = guiSettings.WindowMaximized;
         NewTaskCommand = new AsyncRelayCommand(NewTaskAsync);
         SpawnSessionForTaskCommand = new AsyncRelayCommand<TaskNodeViewModel?>(SpawnSessionForTaskAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
@@ -131,7 +176,51 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
         _host = host;
         LogFilePath = host.LogFilePath;
+        // Seed the VM property from the host's effective mode without triggering the
+        // OnCurrentApprovalModeChanged partial's switch call (the host's state already matches).
+        _suppressApprovalModeSwitch = true;
+        CurrentApprovalMode = host.CurrentApprovalMode;
+        _suppressApprovalModeSwitch = false;
         host.SessionClosed += OnSessionClosed;
+        host.ApprovalModeChanged += OnHostApprovalModeChanged;
+    }
+
+    private void OnHostApprovalModeChanged(ApprovalMode effective)
+    {
+        void Apply()
+        {
+            if (CurrentApprovalMode == effective) return;
+            _suppressApprovalModeSwitch = true;
+            CurrentApprovalMode = effective;
+            _suppressApprovalModeSwitch = false;
+        }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
+    }
+
+    partial void OnCurrentApprovalModeChanged(ApprovalMode value)
+    {
+        if (_suppressApprovalModeSwitch || _host is null) return;
+        try
+        {
+            var effective = _host.SwitchApprovalMode(value);
+            if (effective != value)
+            {
+                StatusText = $"Approval mode requested {value.ToString().ToLowerInvariant()} but using {effective.ToString().ToLowerInvariant()} (see log for details).";
+                _suppressApprovalModeSwitch = true;
+                CurrentApprovalMode = effective;
+                _suppressApprovalModeSwitch = false;
+            }
+            else
+            {
+                StatusText = $"Approval mode: {effective.ToString().ToLowerInvariant()}.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Approval mode switch failed: {ex.Message}";
+            _host.Logger.Error(ex, "gui-main: SwitchApprovalMode({Mode}) failed", value);
+        }
     }
 
     public static async Task<MainWindowViewModel> CreateAsync(IUiDispatcher dispatcher, IUiTimerFactory timerFactory)
@@ -149,6 +238,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public async Task SaveLayoutAsync()
     {
         _guiSettings.LeftColumnWidth = LeftColumnWidth.IsAbsolute ? LeftColumnWidth.Value : GuiSettings.Defaults.LeftColumnWidth;
+        // Window size is only meaningful when the window is in Normal state. If the user closed
+        // while maximized, persist the previously-recorded normal size (which the code-behind
+        // captures into the VM on WindowState transitions) so re-launch + un-maximize restores
+        // the same size, not the screen dimensions.
+        _guiSettings.WindowWidth = WindowWidth;
+        _guiSettings.WindowHeight = WindowHeight;
+        _guiSettings.WindowMaximized = WindowMaximized;
         try
         {
             await _guiSettings.SaveAsync().ConfigureAwait(false);
@@ -212,14 +308,64 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
-    /// <summary>"+ New task" top-bar button. Stub for now - the full flow needs a modal that
-    /// captures title + home_cwd, then writes via <c>TaskStore.AllocateIdAsync</c> +
-    /// <c>TaskFolder.ScaffoldAsync</c>. Tracked as a follow-up; this stub just surfaces the gap
-    /// so the button is wired before the dialog lands.</summary>
-    private Task NewTaskAsync()
+    /// <summary>"+ New task" top-bar button. Opens the <see cref="Views.NewTaskDialog"/>
+    /// (provided by the View via <see cref="NewTaskPrompt"/>) to capture a home folder + free-form
+    /// description, then calls <see cref="Core.Tasks.TaskService.CreateAsync"/> which generates the
+    /// title via the light model, scaffolds the folder, and writes the row. Refreshes the
+    /// <see cref="TaskNodes"/> on success so the new task appears at the top of the tree.</summary>
+    private async Task NewTaskAsync()
     {
-        StatusText = "+ New task: dialog not wired yet (stub).";
-        return Task.CompletedTask;
+        if (_host is null)
+        {
+            ShowError?.Invoke("Host is not initialised - settings load failed at startup.");
+            return;
+        }
+        if (_host.TaskService is not { } svc)
+        {
+            ShowError?.Invoke("Task subsystem unavailable (DB ahead of code / locked file). See log for details.");
+            return;
+        }
+        if (NewTaskPrompt is null)
+        {
+            ShowError?.Invoke("New-task dialog is not wired to the view (internal error).");
+            return;
+        }
+
+        Views.NewTaskRequest? req;
+        try
+        {
+            req = await NewTaskPrompt().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"New task dialog failed: {ex.Message}";
+            return;
+        }
+        if (req is null)
+        {
+            StatusText = "New task cancelled.";
+            return;
+        }
+
+        StatusText = $"Creating task in {req.HomeCwd}...";
+        try
+        {
+            var record = await svc.CreateAsync(req.HomeCwd, req.Description).ConfigureAwait(true);
+            void Apply()
+            {
+                // Prepend so the new task appears at the top of the tree, matching LoadTasksAsync's
+                // "newest first" ordering.
+                TaskNodes.Insert(0, new TaskNodeViewModel(record));
+            }
+            if (_dispatcher.CheckAccess()) Apply();
+            else _dispatcher.Post(Apply);
+            StatusText = $"Created task {record.Id:D4}: {record.Title}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Create failed: {ex.Message}";
+            ShowError?.Invoke($"Failed to create task:\n\n{ex}");
+        }
     }
 
     /// <summary>Spawn a new session under <paramref name="task"/>. Bound to the per-task "+"
@@ -475,6 +621,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         foreach (var node in TaskNodes)
             foreach (var s in node.Sessions) s.Dispose();
         TaskNodes.Clear();
-        if (_host is not null) await _host.DisposeAsync().ConfigureAwait(false);
+        if (_host is not null)
+        {
+            _host.SessionClosed -= OnSessionClosed;
+            _host.ApprovalModeChanged -= OnHostApprovalModeChanged;
+            await _host.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

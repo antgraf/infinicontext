@@ -1,0 +1,3 @@
+# Session workflow architecture debugging and fixes
+
+Figure out [finally!] the session workflow . Needs deep architecture expertise to finally fix re-occuring bugs and drift after any change in gui app. Review the issue broadly, not trying to fix the exact symptom. Improve the overal state. Creating a session in gui for a task created a standard message from Operator :  Working on task... , Then thinking block with several tool calls to read task md files. However, this block was never resolved from thinking title. Next message is operators prompt. So, there are two possibilities: 1. message state was not just updated for some reason; 2. operarator s prompt was allowed earlier than agent was ready, breaking the flow. Explore.

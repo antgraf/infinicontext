@@ -10,7 +10,8 @@
         x:DataType="vm:MainWindowViewModel"
         Title="InfiniContext"
         MinWidth="720" MinHeight="480"
-        Width="1100" Height="700">
+        Width="{Binding WindowWidth, Mode=TwoWay}"
+        Height="{Binding WindowHeight, Mode=TwoWay}">
   <Design.DataContext>
     <vm:MainWindowViewModel />
   </Design.DataContext>
@@ -43,18 +44,29 @@
   </Window.Styles>
 
   <DockPanel>
-    <!-- Status strip. The "Agent busy" indicator is visible while the focused session has a
-         turn in flight (Sending/Streaming/Cancelling/Compacting). Send stays enabled - the
-         indicator warns the operator that their next message will queue behind the in-flight
-         turn on claude's stdin rather than running immediately. -->
+    <!-- Status strip. Includes:
+         - Title (left).
+         - "Approval" ComboBox (host-wide effective mode, D12). Picking a value calls
+           SessionHost.SwitchApprovalMode, which iterates SessionManager.Active and hot-swaps
+           every session's SwitchableApprovalSink inner. Auto -> Ask fallback on light-model
+           construct failure syncs back via SessionHost.ApprovalModeChanged.
+         - "Agent busy" indicator (visible while the focused session has a turn in flight).
+         - StatusText (right). -->
     <Border DockPanel.Dock="Top" Background="{DynamicResource SystemAccentColorBrush}" Padding="12,6">
-      <Grid ColumnDefinitions="*,Auto,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
         <TextBlock Grid.Column="0" Text="InfiniContext" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
-        <Border Grid.Column="1" IsVisible="{Binding IsAgentBusy}"
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0" VerticalAlignment="Center">
+          <TextBlock Text="Approval" Foreground="White" Opacity="0.85" FontSize="11" VerticalAlignment="Center" />
+          <ComboBox ItemsSource="{Binding ApprovalModes}"
+                    SelectedItem="{Binding CurrentApprovalMode, Mode=TwoWay}"
+                    MinWidth="92" FontSize="11"
+                    ToolTip.Tip="Tool-approval mode for every active session. Ask = banner per call; Deny = auto-reject; Allow = auto-approve (use sparingly); Auto = light-model safety review." />
+        </StackPanel>
+        <Border Grid.Column="2" IsVisible="{Binding IsAgentBusy}"
                 Background="#33FFFFFF" CornerRadius="2" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
           <TextBlock Text="Agent busy - next message will queue" Foreground="White" FontSize="11" />
         </Border>
-        <TextBlock Grid.Column="2" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="3" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
       </Grid>
     </Border>
 
@@ -148,8 +160,18 @@
               </TreeDataTemplate>
             </TreeView.DataTemplates>
             <TreeView.Styles>
+              <!-- TreeViewItem.IsExpanded is TwoWay-bound (via reflection, NOT compiled bindings)
+                   to the data context's IsExpanded property. TaskNodeViewModel defaults that to
+                   true so task rows start unfolded; SessionRowViewModel has no IsExpanded so the
+                   FallbackValue=False keeps session rows in default state (they are leaves
+                   anyway, no children to expand). Reflection binding is required because compiled
+                   bindings resolve against the window's x:DataType (MainWindowViewModel) and
+                   would fail the type-check inside this Style scope. The previous slice 4a
+                   "IsExpanded=True" static setter was a continuous Style assignment that
+                   reapplied on container updates and overrode operator collapse clicks - task
+                   0012 finding #9. -->
               <Style Selector="TreeViewItem">
-                <Setter Property="IsExpanded" Value="True" />
+                <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay, FallbackValue=False}" />
               </Style>
               <!-- Compact action buttons: borderless square chips that don't dominate the row. -->
               <Style Selector="Button.rowAction">

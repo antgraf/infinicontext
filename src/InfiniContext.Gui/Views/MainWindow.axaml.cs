@@ -17,6 +17,19 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         Closed += OnClosed;
+        // WindowState two-way mapping (Avalonia's enum <-> VM bool). PropertyChanged fires on
+        // every state transition; we update the VM, and the VM's persisted value is flushed by
+        // SaveLayoutAsync on close. The reverse direction (VM bool seeded from gui-settings.json
+        // on launch) is applied in OnDataContextChanged once the deferred VM lands.
+        PropertyChanged += OnWindowPropertyChanged;
+    }
+
+    private void OnWindowPropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property != WindowStateProperty || _boundVm is null) return;
+        var maximized = WindowState == WindowState.Maximized;
+        if (_boundVm.WindowMaximized != maximized)
+            _boundVm.WindowMaximized = maximized;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -34,6 +47,12 @@ public partial class MainWindow : Window
 
         _boundVm.PropertyChanged += OnVmPropertyChanged;
         WatchSession(_boundVm.FocusedSession);
+
+        // Apply persisted maximized state. Width/Height are already two-way bound and applied
+        // by the binding system before Show; only the WindowState enum needs a one-shot apply
+        // because the VM stores a bool (Normal vs Maximized only - we don't restore Minimized).
+        if (_boundVm.WindowMaximized && WindowState != WindowState.Maximized)
+            WindowState = WindowState.Maximized;
 
         // Wire OS folder picker (Avalonia StorageProvider is window-bound, hence the late wire).
         _boundVm.FolderPicker = async () =>
@@ -53,6 +72,14 @@ public partial class MainWindow : Window
             // Phase 3B: surface to status text. Modal dialog wiring is a polish item; for now the
             // status strip line + log file capture every error.
             _boundVm.StatusText = msg.Split('\n')[0];
+        };
+
+        // "+ New task" dialog launcher. The VM stays free of Avalonia Window references; the
+        // View hosts the dialog and returns the operator's choice.
+        _boundVm.NewTaskPrompt = async () =>
+        {
+            var dialog = new NewTaskDialog();
+            return await dialog.ShowAsync(this);
         };
     }
 
@@ -103,5 +130,6 @@ public partial class MainWindow : Window
     {
         if (_boundVm is not null) _boundVm.PropertyChanged -= OnVmPropertyChanged;
         WatchSession(null);
+        PropertyChanged -= OnWindowPropertyChanged;
     }
 }

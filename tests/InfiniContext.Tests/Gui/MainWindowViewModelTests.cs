@@ -1,4 +1,5 @@
 using FluentAssertions;
+using InfiniContext.Core.Configuration;
 using InfiniContext.Gui.ViewModels;
 
 namespace InfiniContext.Tests.Gui;
@@ -160,5 +161,42 @@ public class MainWindowViewModelTests
         vm.FocusedSession = BuildRow(f);
 
         vm.SendButtonTooltip.Should().Contain("Ctrl+Enter");
+    }
+
+    [Fact]
+    public void ApprovalModes_lists_all_four_modes_in_enum_order()
+    {
+        // The status-strip ComboBox binds to this list; order matches the ApprovalMode enum so
+        // operators see Ask first (the safe default) and Auto last (newest / most subtle).
+        var vm = BuildMainVm();
+
+        vm.ApprovalModes.Should().Equal(
+            ApprovalMode.Ask, ApprovalMode.Deny, ApprovalMode.Allow, ApprovalMode.Auto);
+    }
+
+    [Fact]
+    public void CurrentApprovalMode_setter_raises_PropertyChanged()
+    {
+        // Without a host the setter is a no-op for the switch call, but PropertyChanged must
+        // still fire so the ComboBox round-trips.
+        var vm = BuildMainVm();
+        var fired = new List<string?>();
+        vm.PropertyChanged += (_, e) => fired.Add(e.PropertyName);
+
+        vm.CurrentApprovalMode = ApprovalMode.Allow;
+
+        fired.Should().Contain(nameof(MainWindowViewModel.CurrentApprovalMode));
+        vm.CurrentApprovalMode.Should().Be(ApprovalMode.Allow);
+    }
+
+    [Fact]
+    public void CurrentApprovalMode_starts_at_ask_default_for_hostless_vm()
+    {
+        // The host-attached ctor seeds from SessionHost.CurrentApprovalMode; this test pins the
+        // hostless default so the ComboBox has a sensible initial selection in design preview /
+        // tests / placeholder VM swap.
+        var vm = BuildMainVm();
+
+        vm.CurrentApprovalMode.Should().Be(ApprovalMode.Ask);
     }
 }

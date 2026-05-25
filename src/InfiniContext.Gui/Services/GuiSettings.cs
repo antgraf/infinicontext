@@ -31,11 +31,29 @@ public sealed class GuiSettings
     /// on load so a corrupt file can't render the column zero-pixels-wide.</summary>
     public double LeftColumnWidth { get; set; } = Defaults.LeftColumnWidth;
 
+    /// <summary>Window width in DIPs. Clamped to a sane range on load so a corrupt file
+    /// can't open the window off-screen.</summary>
+    public double WindowWidth { get; set; } = Defaults.WindowWidth;
+
+    /// <summary>Window height in DIPs. Clamped to a sane range on load.</summary>
+    public double WindowHeight { get; set; } = Defaults.WindowHeight;
+
+    /// <summary>True if the window was maximized at last close; the next launch restores that
+    /// state. Stored as a bool rather than the full Avalonia <c>WindowState</c> enum so the JSON
+    /// stays portable across Avalonia versions.</summary>
+    public bool WindowMaximized { get; set; } = false;
+
     public static class Defaults
     {
         public const double LeftColumnWidth = 340;
         public const double LeftColumnMin = 220;
         public const double LeftColumnMax = 800;
+        public const double WindowWidth = 1100;
+        public const double WindowHeight = 700;
+        public const double WindowMinWidth = 720;
+        public const double WindowMinHeight = 480;
+        public const double WindowMaxWidth = 7680;   // 8K horizontal - generous upper bound.
+        public const double WindowMaxHeight = 4320;  // 8K vertical.
     }
 
     /// <summary>Default resolution path: <c>~/.infinicontext/gui-settings.json</c>. Pure function.</summary>
@@ -106,5 +124,15 @@ public sealed class GuiSettings
             LeftColumnWidth = Defaults.LeftColumnWidth;
         if (LeftColumnWidth < Defaults.LeftColumnMin) LeftColumnWidth = Defaults.LeftColumnMin;
         if (LeftColumnWidth > Defaults.LeftColumnMax) LeftColumnWidth = Defaults.LeftColumnMax;
+
+        if (double.IsNaN(WindowWidth) || double.IsInfinity(WindowWidth))
+            WindowWidth = Defaults.WindowWidth;
+        if (WindowWidth < Defaults.WindowMinWidth) WindowWidth = Defaults.WindowMinWidth;
+        if (WindowWidth > Defaults.WindowMaxWidth) WindowWidth = Defaults.WindowMaxWidth;
+
+        if (double.IsNaN(WindowHeight) || double.IsInfinity(WindowHeight))
+            WindowHeight = Defaults.WindowHeight;
+        if (WindowHeight < Defaults.WindowMinHeight) WindowHeight = Defaults.WindowMinHeight;
+        if (WindowHeight > Defaults.WindowMaxHeight) WindowHeight = Defaults.WindowMaxHeight;
     }
 }

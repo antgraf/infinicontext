@@ -183,6 +183,17 @@ public static class InfiniContextSettingsLoader
             errors.Add($"tasks.hardThresholdPct must be in (0, 100), got {s.Tasks.HardThresholdPct}.");
         if (s.Tasks.SoftThresholdPct >= s.Tasks.HardThresholdPct)
             errors.Add($"tasks.softThresholdPct ({s.Tasks.SoftThresholdPct}) must be strictly less than tasks.hardThresholdPct ({s.Tasks.HardThresholdPct}).");
+
+        // Task 0012 finding #2: large-context threshold pair has the same constraints.
+        if (s.Tasks.SoftThresholdPctLargeContext is <= 0 or >= 100)
+            errors.Add($"tasks.softThresholdPctLargeContext must be in (0, 100), got {s.Tasks.SoftThresholdPctLargeContext}.");
+        if (s.Tasks.HardThresholdPctLargeContext is <= 0 or >= 100)
+            errors.Add($"tasks.hardThresholdPctLargeContext must be in (0, 100), got {s.Tasks.HardThresholdPctLargeContext}.");
+        if (s.Tasks.SoftThresholdPctLargeContext >= s.Tasks.HardThresholdPctLargeContext)
+            errors.Add($"tasks.softThresholdPctLargeContext ({s.Tasks.SoftThresholdPctLargeContext}) must be strictly less than tasks.hardThresholdPctLargeContext ({s.Tasks.HardThresholdPctLargeContext}).");
+        if (s.Tasks.LargeContextWindowTokens < 0)
+            errors.Add($"tasks.largeContextWindowTokens must be >= 0, got {s.Tasks.LargeContextWindowTokens}.");
+
         foreach (var (model, window) in s.Tasks.ModelContextWindows)
         {
             if (string.IsNullOrWhiteSpace(model))

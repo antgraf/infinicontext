@@ -160,9 +160,14 @@ public sealed class SessionManager : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(request);
         ThrowIfDisposed();
 
+        // Task 0012 finding #2: pick the threshold pair based on the resolved model's window.
+        // 1M-context models flush at 45/65 (faster) so the agent has runway to summarise before
+        // claude's own auto-compact wipes context; 200k-context models stay at 60/85.
+        var effectiveModel = request.Model ?? _settings.Session.Model;
+        var (softPct, hardPct) = _settings.Tasks.ResolveThresholds(effectiveModel);
         var pressure = new ContextPressureMonitor(
-            _settings.Tasks.SoftThresholdPct,
-            _settings.Tasks.HardThresholdPct,
+            softPct,
+            hardPct,
             _settings.Tasks.ModelContextWindows,
             _logger);
 

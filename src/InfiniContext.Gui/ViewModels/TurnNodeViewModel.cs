@@ -53,6 +53,15 @@ public sealed partial class TurnNodeViewModel : ObservableObject
     [ObservableProperty]
     private string _footerSummary = "";
 
+    /// <summary>True while this turn is buffered behind an earlier in-flight turn. Claude
+    /// processes stdin messages strictly in order, so an operator send made while another
+    /// turn is streaming is queued, not concurrent. The row VM clears this flag when the
+    /// turn is promoted from <c>_queuedTurns</c> into <c>_inFlightTurn</c> (i.e. when the
+    /// preceding turn's <c>ResultEvent</c> arrives). XAML can bind to this to render a
+    /// "queued" badge.</summary>
+    [ObservableProperty]
+    private bool _isQueued;
+
     public string OperatorLabel => "Operator";
     public string AgentLabel => "Agent";
 
