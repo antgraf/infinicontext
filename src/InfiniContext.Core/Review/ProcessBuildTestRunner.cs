@@ -12,7 +12,7 @@ namespace InfiniContext.Core.Review;
 /// <para>
 /// Solution path and configuration are configurable so the runner doesn't have to assume the
 /// project's solution name. Defaults match the InfiniContext repo: <c>InfiniContext.slnx</c>,
-/// <c>Release</c>. Per-invocation timeouts default to 10 minutes for build and 15 for test тАФ
+/// <c>Release</c>. Per-invocation timeouts default to 10 minutes for build and 15 for test --
 /// long, because the alternative on a slow CI host is a false "gate failed" demotion that
 /// reverts good edits.
 /// </para>

@@ -5,8 +5,8 @@ namespace InfiniContext.Core.Review;
 /// <summary>
 /// Renders a <see cref="ReviewReport"/> to the markdown artifact written under the task folder
 /// as <c>review-&lt;timestamp&gt;.md</c>. The structure matches the design's "Report artifact"
-/// section: header тЖТ Applied тЖТ Rejected тЖТ Awaiting тЖТ Raw reviewer outputs. Every Rejected
-/// finding surfaces its <see cref="ConsolidatedFinding.RejectionReason"/> verbatim тАФ that's the
+/// section: header -> Applied -> Rejected -> Awaiting -> Raw reviewer outputs. Every Rejected
+/// finding surfaces its <see cref="ConsolidatedFinding.RejectionReason"/> verbatim -- that's the
 /// user's hard requirement.
 /// </summary>
 public static class ReportRenderer
@@ -128,7 +128,7 @@ public static class ReportRenderer
         // it sneaks through validation (shouldn't), we surface a clear "missing" marker so the
         // user can spot it.
         var reason = string.IsNullOrWhiteSpace(f.RejectionReason)
-            ? "_(missing тАФ schema violation, should not happen)_"
+            ? "_(missing -- schema violation, should not happen)_"
             : f.RejectionReason;
         sb.Append("- **Rejection reason:** ").AppendLine(reason);
         AppendConfidence(sb, f, dispositionConfidenceLabel: "Coordinator confidence in rejection");
@@ -199,7 +199,7 @@ public static class ReportRenderer
 
         if (fix.Kind == FixKind.Manual)
         {
-            sb.AppendLine("  _manual тАФ host cannot auto-apply_");
+            sb.AppendLine("  _manual -- host cannot auto-apply_");
             return;
         }
 

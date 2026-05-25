@@ -12,7 +12,7 @@ namespace InfiniContext.Core.Review;
 /// than the Haiku-class light-model default.
 ///
 /// <para>
-/// Reuses <see cref="CliLightModelChild"/> as the wire-layer тАФ the spawn/turn-drive/dispose
+/// Reuses <see cref="CliLightModelChild"/> as the wire-layer -- the spawn/turn-drive/dispose
 /// loop is identical; the only meaningful difference between a light-model invocation and a
 /// reviewer invocation is which <c>--model</c> id flows through, so duplicating the spawn loop
 /// would be pure churn. The architectural distinction the user called out ("agents must not be
@@ -69,7 +69,7 @@ public sealed class CliReviewerAgentService : IReviewerAgentService
     /// <summary>
     /// Translate the public <see cref="ReviewerAgentOptions"/> into the
     /// <see cref="LightModelOptions"/> shape that <see cref="CliLightModelChild"/> consumes.
-    /// Exposed as <c>internal</c> for tests тАФ verifying the translation is much cheaper than
+    /// Exposed as <c>internal</c> for tests -- verifying the translation is much cheaper than
     /// spawning a real child.
     /// </summary>
     internal static LightModelOptions BuildLightModelOptions(ReviewerAgentOptions opts) => new()

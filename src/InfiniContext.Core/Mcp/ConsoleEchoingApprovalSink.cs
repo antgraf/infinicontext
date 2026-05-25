@@ -17,8 +17,8 @@ namespace InfiniContext.Core.Mcp;
 ///
 /// <para>Format:</para>
 /// <list type="bullet">
-///   <item>Allow: <c>[approval] &lt;Tool&gt; в†’ ALLOW (Nms)</c></item>
-///   <item>Deny:  <c>[approval] &lt;Tool&gt; в†’ DENY (Nms): &lt;reason&gt;</c></item>
+///   <item>Allow: <c>[approval] &lt;Tool&gt; &#x2192; ALLOW (Nms)</c></item>
+///   <item>Deny:  <c>[approval] &lt;Tool&gt; &#x2192; DENY (Nms): &lt;reason&gt;</c></item>
 /// </list>
 /// </summary>
 public sealed class ConsoleEchoingApprovalSink : IApprovalSink
@@ -45,8 +45,8 @@ public sealed class ConsoleEchoingApprovalSink : IApprovalSink
         finally { sw.Stop(); }
 
         var line = response.Behavior == ApprovalBehavior.Allow
-            ? $"[approval] {request.ToolName} в†’ ALLOW ({sw.ElapsedMilliseconds}ms)"
-            : $"[approval] {request.ToolName} в†’ DENY ({sw.ElapsedMilliseconds}ms): {response.Message ?? "(no reason)"}";
+            ? $"[approval] {request.ToolName} \u2192 ALLOW ({sw.ElapsedMilliseconds}ms)"
+            : $"[approval] {request.ToolName} \u2192 DENY ({sw.ElapsedMilliseconds}ms): {response.Message ?? "(no reason)"}";
         _emit(line);
         return response;
     }

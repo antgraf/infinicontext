@@ -45,7 +45,7 @@ internal static class ScopeGlobExpander
                 continue;
             }
 
-            // One Matcher per token keeps results scoped тАФ different tokens may have unrelated
+            // One Matcher per token keeps results scoped -- different tokens may have unrelated
             // includes; we don't want them to bleed into each other's match set.
             var matcher = new Matcher(comparison);
             matcher.AddInclude(token.Replace('\\', '/'));

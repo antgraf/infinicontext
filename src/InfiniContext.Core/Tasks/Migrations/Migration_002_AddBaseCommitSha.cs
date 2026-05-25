@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 namespace InfiniContext.Core.Tasks.Migrations;
 
 /// <summary>
-/// Add <c>tasks.base_commit_sha</c> тАФ the git HEAD captured at task-creation time.
+/// Add <c>tasks.base_commit_sha</c> -- the git HEAD captured at task-creation time.
 /// Nullable: tasks created before this migration, and tasks created outside a git repo,
 /// have NULL. The <c>/task review</c> command falls back to <c>git merge-base main HEAD</c>
 /// when the column is null.

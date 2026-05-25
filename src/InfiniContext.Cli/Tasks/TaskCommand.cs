@@ -270,7 +270,7 @@ internal abstract record TaskCommand
     }
 
     /// <summary>
-    /// Parse <c>/task review [&lt;id&gt;] [--scope &lt;glob&gt;] [--yes]</c>. The id is optional тАФ
+    /// Parse <c>/task review [&lt;id&gt;] [--scope &lt;glob&gt;] [--yes]</c>. The id is optional --
     /// the handler defaults it to the focused session's active task when omitted.
     /// </summary>
     private static bool ParseReview(IReadOnlyList<string> tokens, int i, out TaskCommand command, out string? error)

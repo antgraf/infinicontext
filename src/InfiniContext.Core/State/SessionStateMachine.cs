@@ -14,7 +14,7 @@ namespace InfiniContext.Core.State;
 ///   Streaming → Compacting   on system/compact (then back to Streaming on next non-compact event)
 ///   *         → Cancelling   via Cancel() (only from Sending/Streaming/Compacting)
 ///   Sending|Streaming|Cancelling|Compacting → Idle    on result event WHEN PendingSendCount drops to 0
-///   Sending|Streaming|Cancelling|Compacting тЖТ Sending on result event WHEN PendingSendCount remains > 0
+///   Sending|Streaming|Cancelling|Compacting -> Sending on result event WHEN PendingSendCount remains > 0
 ///   *         → Exited       via HandleProcessExit()
 ///
 /// <para><b>Per-turn boundaries with buffered sends (task 0011 RC4).</b>

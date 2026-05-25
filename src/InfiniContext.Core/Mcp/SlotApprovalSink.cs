@@ -5,7 +5,7 @@ namespace InfiniContext.Core.Mcp;
 
 /// <summary>
 /// Approval sink for the <c>Ask</c> mode (Stage 2B Phase 5). Routes each request into the
-/// session's <see cref="PendingApprovalSlot"/> instead of reading <c>Console.In</c> directly вЂ” the
+/// session's <see cref="PendingApprovalSlot"/> instead of reading <c>Console.In</c> directly -- the
 /// host UI is the only thing that owns stdin (CLI) or input dispatch (GUI), and it routes the
 /// user's verdict to the focused session's slot. This is what removes the W-16 race entirely (the
 /// legacy <c>ConsoleApprovalSink</c> with its <c>Task.Run(Console.In.ReadLine)</c> is deleted, not
@@ -17,7 +17,7 @@ namespace InfiniContext.Core.Mcp;
 /// behavior (each call writes a <c>[approval] tool=…</c> banner + verdict line to the session's
 /// <see cref="TranscriptModel"/>, which the focused pane renders live and off-screen sessions
 /// accumulate). GUI callers pass <paramref name="writeTranscriptBanner"/>=<c>false</c> so the
-/// transcript stays clean of CLI-style markers вЂ” the GUI surfaces the same information through a
+/// transcript stays clean of CLI-style markers -- the GUI surfaces the same information through a
 /// real banner UI bound to <see cref="PendingApprovalSlot.Changed"/>.
 /// </para>
 /// </summary>

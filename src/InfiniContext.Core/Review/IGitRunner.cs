@@ -2,7 +2,7 @@ namespace InfiniContext.Core.Review;
 
 /// <summary>
 /// Thin abstraction over the <c>git</c> CLI. Production code uses <see cref="ProcessGitRunner"/>;
-/// tests substitute a fake. Methods return <c>null</c> (or empty) on any failure тАФ callers handle
+/// tests substitute a fake. Methods return <c>null</c> (or empty) on any failure -- callers handle
 /// missing-git / not-a-repo / unreachable-ref as recoverable conditions, not exceptions.
 /// </summary>
 public interface IGitRunner

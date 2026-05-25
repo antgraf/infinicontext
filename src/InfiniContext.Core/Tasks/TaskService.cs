@@ -76,7 +76,7 @@ public sealed class TaskService
         await folder.WriteScaffoldedDescriptionAsync(BuildInitialDescription(title, description), ct).ConfigureAwait(false);
 
         // Best-effort: capture git HEAD so /task review has a reproducible diff base. Failure
-        // (no git, not a repo, etc.) is tolerated тАФ review falls back to merge-base when null.
+        // (no git, not a repo, etc.) is tolerated -- review falls back to merge-base when null.
         var baseSha = await GitHead.TryResolveAsync(homeCwd, ct).ConfigureAwait(false);
 
         var nowMs = _clock().ToUnixTimeMilliseconds();

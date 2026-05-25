@@ -2,7 +2,7 @@ namespace InfiniContext.Core.Review;
 
 /// <summary>
 /// Configuration for one <see cref="IReviewerAgentService"/> invocation. Single-shot by
-/// design тАФ long-lived/reusable channels are explicitly out of v1 scope (each invocation gets a
+/// design -- long-lived/reusable channels are explicitly out of v1 scope (each invocation gets a
 /// fresh process to isolate reviewers from each other).
 /// </summary>
 public sealed record ReviewerAgentOptions
@@ -10,7 +10,7 @@ public sealed record ReviewerAgentOptions
     /// <summary>
     /// Anthropic model id to spawn. Defaults to a Sonnet-class id; users override via
     /// <c>settings.review.reviewerModel</c>. The light-model default (Haiku-class) is
-    /// deliberately not the default here тАФ the user's design requires reasoning, not
+    /// deliberately not the default here -- the user's design requires reasoning, not
     /// classification.
     /// </summary>
     public string Model { get; init; } = "claude-sonnet-4-6";
@@ -28,7 +28,7 @@ public sealed record ReviewerAgentOptions
 
     /// <summary>
     /// Hard cap on output tokens (<c>CLAUDE_CODE_MAX_OUTPUT_TOKENS</c>). Reviewers emit JSON
-    /// finding lists тАФ much larger than the light-model 128-token cap. 32K is generous; the
+    /// finding lists -- much larger than the light-model 128-token cap. 32K is generous; the
     /// coordinator may need more.
     /// </summary>
     public int MaxOutputTokens { get; init; } = 32_768;
@@ -41,7 +41,7 @@ public sealed record ReviewerAgentOptions
 
     /// <summary>
     /// Wall-clock budget for one <see cref="IReviewerAgentService.RunOneShotAsync"/> call.
-    /// 600s matches the design's <c>review.invocationTimeoutSeconds</c> default тАФ reviewers
+    /// 600s matches the design's <c>review.invocationTimeoutSeconds</c> default -- reviewers
     /// reading a few-hundred-line packet should finish well inside this.
     /// </summary>
     public int InvocationTimeoutSeconds { get; init; } = 600;

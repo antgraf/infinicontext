@@ -4,13 +4,13 @@ namespace InfiniContext.Core.Review;
 /// Spawns a one-shot full-model <c>claude</c> child to run a single review turn. Distinct from
 /// <see cref="LightModel.ILightModelService"/>: the user's design says reviewers must use the
 /// user's main reasoning model (Sonnet/Opus class), not the Haiku-class light model. The
-/// coordinator passes each reviewer a self-contained prompt with all needed context inlined тАФ
+/// coordinator passes each reviewer a self-contained prompt with all needed context inlined --
 /// the agent runs with no tools, no MCP, no slash-commands, in an isolated managed cwd.
 ///
 /// <para>
 /// The host spawns five concurrent <see cref="RunOneShotAsync"/> calls (one per reviewer role)
 /// plus a sixth for the coordinator. Each invocation gets a fresh process; no long-lived sharing
-/// between calls тАФ keeps the failure blast radius to one reviewer and avoids context leakage.
+/// between calls -- keeps the failure blast radius to one reviewer and avoids context leakage.
 /// </para>
 /// </summary>
 public interface IReviewerAgentService

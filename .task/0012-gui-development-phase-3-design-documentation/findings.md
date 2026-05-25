@@ -26,3 +26,6 @@ Need to introduce a way to archive or "complete" tasks. Tree view should have tw
 
 ## 9. Task tree view improvements
 Currrently there is no way to collapse / uncollapse tree nodes. Need this ability.
+
+## 10. Incorrect symbols in CLI auto-mode output [SHIPPED 2026-05-24 - 62 mojibake sequences across 28 files swept; see progress.md]
+CLI auto-mode verdict lines render mojibake. Example: `[approval] Edit ╨▓тФ╝' ALLOW (2440ms)`. The three chars between `Edit` and `ALLOW` (`╨▓`, `тФ╝`, `'`) are a CP1251 misread of UTF-8 bytes `E2 86 92` = U+2192 RIGHTWARDS ARROW (`тЖТ`). Same root cause as the GUI fix in slice 4c: C# source files without a UTF-8 BOM are parsed by the C# compiler under the system's ANSI locale (win-1251), so any non-ASCII literal in source gets corrupted at compile time. Fix shape: scan `src/InfiniContext.Cli/` for non-ASCII literals (arrow symbols, em-dashes, etc.), replace with `char.ConvertFromUtf32(0xNNNN)` runtime construction OR add a UTF-8 BOM to the affected source files. The arrow used in `ConsoleEchoingApprovalSink`'s verdict formatter is the obvious starting point.

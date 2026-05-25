@@ -193,13 +193,13 @@ public sealed class ClaudeSession : IClaudeSession
         _stderrTask = Task.Run(() => StderrLoopAsync(proc.StandardError), CancellationToken.None);
 
         // claude `--print --input-format stream-json` does NOT emit system/init until it reads
-        // at least one user message from stdin (verified against claude 2.1.143 тАФ a free session
+        // at least one user message from stdin (verified against claude 2.1.143 -- a free session
         // with no stdin sits silent until the operator types something, and a task-bound session
         // with a FirstUserMessage gated on system/init would deadlock forever waiting for an
         // event that never arrives). Send the pointer immediately after the loops are wired so
         // claude has something to consume; the resulting system/init then flows through the
         // stdout reader as normal. Fire-and-forget so StartAsync stays non-blocking for the
-        // caller (SessionManager.CreateAsync) тАФ SendFirstUserMessageAsync logs failures rather
+        // caller (SessionManager.CreateAsync) -- SendFirstUserMessageAsync logs failures rather
         // than throwing.
         if (!string.IsNullOrEmpty(_options.FirstUserMessage))
         {

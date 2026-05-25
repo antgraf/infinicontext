@@ -26,7 +26,7 @@ public enum ReviewerRole
 /// via <see cref="Fill"/> and passes the (system, user) pair to <see cref="IReviewerAgentService.RunOneShotAsync"/>.
 ///
 /// <para>
-/// v1 prompts are best-guess тАФ expect 2-3 rounds of iteration during dogfooding (step 12 of the
+/// v1 prompts are best-guess -- expect 2-3 rounds of iteration during dogfooding (step 12 of the
 /// review-feature-design's code-touch plan). The shape (role definition + JSON schema +
 /// data-only user payload) is the stable contract; the words inside are tuning territory.
 /// </para>
@@ -82,7 +82,7 @@ public static class ReviewerPrompts
     /// <summary>
     /// Substitute <c>{slot_name}</c> markers in <paramref name="template"/> with values from
     /// <paramref name="slots"/>. Slot names are alphanumeric + underscore. Markers without a
-    /// matching key throw <see cref="InvalidOperationException"/> тАФ the orchestrator should
+    /// matching key throw <see cref="InvalidOperationException"/> -- the orchestrator should
     /// pass every slot the template references. Extra keys in <paramref name="slots"/> that the
     /// template doesn't reference are silently ignored (so callers can pass a uniform packet
     /// without per-role pruning).
@@ -119,7 +119,7 @@ public static class ReviewerPrompts
     // ---------- SYSTEM prompts ----------
 
     private const string CommonOutputContract = """
-        Output ONLY a single JSON document тАФ no preamble, no postamble, no code fences. The schema is:
+        Output ONLY a single JSON document -- no preamble, no postamble, no code fences. The schema is:
 
         {
           "reviewer": "<your role>",
@@ -129,7 +129,7 @@ public static class ReviewerPrompts
               "severity": "critical | warning | suggestion",
               "title": "<short title>",
               "summary": "<1-3 sentences>",
-              "why": "<rationale тАФ why this matters>",
+              "why": "<rationale -- why this matters>",
               "file": "<relative path, or null>",
               "line_start": <int or null>,
               "line_end": <int or null>,
@@ -151,7 +151,7 @@ public static class ReviewerPrompts
         - confidence reflects how sure you are the finding is real (not how severe).
         - suggested_fix.kind=edit requires non-empty old_text + new_text; old_text must match the source byte-for-byte (the host will refuse to auto-apply if it diverges).
         - suggested_fix.kind=manual when the fix needs human judgment (the host will route to "needs user").
-        - If you have no findings, return findings: [] тАФ do not invent issues.
+        - If you have no findings, return findings: [] -- do not invent issues.
         """;
 
     private const string SystemCompleteness = $$"""
@@ -164,7 +164,7 @@ public static class ReviewerPrompts
         - progress.md "open follow-ups" or "postponed" items that the user expected to land but didn't.
         - Half-finished features (interface declared but no impl; test stubbed but no assertions).
 
-        You do NOT critique code style, architecture, tests, or security тАФ those are other reviewers' jobs.
+        You do NOT critique code style, architecture, tests, or security -- those are other reviewers' jobs.
 
         {{CommonOutputContract}}
         """;
@@ -172,13 +172,13 @@ public static class ReviewerPrompts
     private const string SystemArchitecture = $$"""
         You are the Architecture reviewer in a multi-agent task review fleet.
 
-        Your job: judge whether the changes are consistent with the project's recorded conventions. Read CLAUDE.md and docs/decisions.md (D-numbered decisions) carefully тАФ those encode constraints not visible from the code. You care about:
+        Your job: judge whether the changes are consistent with the project's recorded conventions. Read CLAUDE.md and docs/decisions.md (D-numbered decisions) carefully -- those encode constraints not visible from the code. You care about:
         - Patterns that diverge from rest of the project (e.g. a new abstraction where similar code uses a direct call, or vice versa).
         - Layering violations (e.g. CLI types reaching into Core internals; Core types depending on CLI).
         - Decisions (D-numbers) the changes appear to violate or contradict.
         - Abstractions added before they're needed (a single caller behind an interface), or NOT added when there are 3+ similar callers.
 
-        You do NOT critique correctness, tests, or security тАФ those are other reviewers' jobs.
+        You do NOT critique correctness, tests, or security -- those are other reviewers' jobs.
 
         {{CommonOutputContract}}
         """;
@@ -245,12 +245,12 @@ public static class ReviewerPrompts
              * file is set
              * the fix is local (a few lines in a few files, not a whole-module rewrite)
              * the fix does NOT delete tests or weaken safety checks without an explicit replacement
-           - "auto_reject" when you conclude the reviewer is plainly wrong (false positive). REQUIRED: set "rejection_reason" to a non-empty, specific explanation. ANY severity can be auto_reject тАФ the gate is your confidence, not the reviewer's severity choice.
+           - "auto_reject" when you conclude the reviewer is plainly wrong (false positive). REQUIRED: set "rejection_reason" to a non-empty, specific explanation. ANY severity can be auto_reject -- the gate is your confidence, not the reviewer's severity choice.
            - "needs_user" otherwise. This is the default.
 
         Severity is ORTHOGONAL to disposition. A critical finding with high confidence and a concrete fix is a valid auto_apply. A critical finding the reviewer was plainly wrong about is a valid auto_reject (with a rejection_reason).
 
-        Output ONLY a single JSON document тАФ no preamble, no postamble, no code fences:
+        Output ONLY a single JSON document -- no preamble, no postamble, no code fences:
 
         {
           "findings": [
@@ -269,7 +269,7 @@ public static class ReviewerPrompts
               "disposition": "auto_apply | auto_reject | needs_user",
               "disposition_confidence": 0.0,
               "rejection_reason": "<required when disposition=auto_reject, else null>",
-              "consolidator_note": "<freeform тАФ why this severity / disposition>"
+              "consolidator_note": "<freeform -- why this severity / disposition>"
             }
           ],
           "summary": "<overall summary across all reviewers>"

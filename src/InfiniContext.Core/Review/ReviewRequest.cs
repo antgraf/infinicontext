@@ -9,7 +9,7 @@ namespace InfiniContext.Core.Review;
 /// </summary>
 /// <param name="TaskId">Task being reviewed.</param>
 /// <param name="TaskTitle">Task title (for prompt context + report header).</param>
-/// <param name="RepoRoot">Task's <c>home_cwd</c> тАФ the repo root the executor will edit.</param>
+/// <param name="RepoRoot">Task's <c>home_cwd</c> -- the repo root the executor will edit.</param>
 /// <param name="Scope">Pre-resolved review scope: file list + excerpts + exclusions.</param>
 /// <param name="DescriptionMd">Contents of <c>description.md</c> from the task folder (empty if missing).</param>
 /// <param name="ProgressMd">Contents of <c>progress.md</c> (empty if missing).</param>

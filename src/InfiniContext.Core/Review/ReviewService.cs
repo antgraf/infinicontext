@@ -11,7 +11,7 @@ namespace InfiniContext.Core.Review;
 /// <see cref="ReviewReport.Awaiting"/> buckets the user sees.
 ///
 /// <para>
-/// Data gathering тАФ loading task records, resolving scope, reading CLAUDE.md/decisions.md тАФ is
+/// Data gathering -- loading task records, resolving scope, reading CLAUDE.md/decisions.md -- is
 /// the CLI handler's job (step 9 of the design's code-touch plan). This service depends only on
 /// what's passed in via <see cref="ReviewRequest"/>, so it can be unit-tested with a fake
 /// <see cref="IReviewerAgentService"/> and no on-disk task scaffolding.
@@ -405,7 +405,7 @@ public sealed class ReviewService
         return $"{scope.Description}\n\nCoordinator summary: {consolidatedSummary}";
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "тАж";
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";
 
     private sealed record ReviewerCallResult(ReviewerRole Role, ReviewerOutput? Parsed, string? Error, string? RawText);
     private sealed record CoordinatorCallResult(ConsolidatedReport? Parsed, string? RawText);

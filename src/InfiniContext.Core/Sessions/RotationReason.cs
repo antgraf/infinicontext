@@ -21,7 +21,7 @@ public enum RotationReason
     /// <summary>
     /// <c>ContextPressureMonitor.HardCrossed</c> fired. The agent was told to flush now and
     /// stop. If the session exits, the host must rotate to a fresh session bound to the same
-    /// task тАФ otherwise structured task compaction silently halts.
+    /// task -- otherwise structured task compaction silently halts.
     /// </summary>
     Hard = 2,
 }

@@ -80,7 +80,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         }
 
         // Per-file backups so we can revert if the gate fails. Key is the absolute path on disk;
-        // value is the original bytes (or null when the file didn't exist before the apply тАФ in
+        // value is the original bytes (or null when the file didn't exist before the apply -- in
         // which case revert = delete).
         var backups = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
         var applied = new List<ConsolidatedFinding>();

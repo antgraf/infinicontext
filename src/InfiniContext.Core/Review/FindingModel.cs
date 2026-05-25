@@ -33,7 +33,7 @@ public enum FixKind
     Edit,
     /// <summary>Overwrite the entire target file with <see cref="SuggestedFix.NewText"/>.</summary>
     ReplaceFile,
-    /// <summary>Fix needs human judgment тАФ host cannot auto-apply.</summary>
+    /// <summary>Fix needs human judgment -- host cannot auto-apply.</summary>
     Manual,
 }
 
@@ -125,7 +125,7 @@ public sealed record ReviewReport(
     IReadOnlyDictionary<string, string> RawReviewerOutputs);
 
 /// <summary>
-/// JSON parsing helpers shared across the review subsystem. Parser is tolerant тАФ unknown enum
+/// JSON parsing helpers shared across the review subsystem. Parser is tolerant -- unknown enum
 /// values fall back to safe defaults, missing optional fields stay null. The reviewer/coordinator
 /// agents sometimes wrap their JSON in prose or fences; <see cref="ExtractJson"/> handles that.
 /// </summary>
@@ -203,7 +203,7 @@ public static class FindingJson
 
     /// <summary>
     /// Parse a single reviewer's JSON output. Returns <c>null</c> when the input cannot be
-    /// extracted or deserialized тАФ callers turn that into a <see cref="Disposition.NeedsUser"/>
+    /// extracted or deserialized -- callers turn that into a <see cref="Disposition.NeedsUser"/>
     /// finding with the raw text preserved.
     /// </summary>
     public static ReviewerOutput? TryParseReviewerOutput(string agentText)

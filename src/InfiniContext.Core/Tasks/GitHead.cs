@@ -41,7 +41,7 @@ public static class GitHead
             using var proc = Process.Start(psi);
             if (proc is null) return null;
 
-            // Five-second budget тАФ rev-parse is fast; if it isn't, git is wedged and we want to
+            // Five-second budget -- rev-parse is fast; if it isn't, git is wedged and we want to
             // fail tolerantly rather than block task creation.
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(5));

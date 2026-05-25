@@ -134,7 +134,7 @@ internal sealed class TaskCommandHandler
     /// <summary>
     /// Create a new task record + on-disk folder and write the human-readable "[task] created"
     /// banner. Returns the persisted <see cref="TaskRecord"/> so callers that want to chain into
-    /// another action (notably <c>TaskSlashCommand</c>'s auto-switch on <c>/task new</c> тАФ issue
+    /// another action (notably <c>TaskSlashCommand</c>'s auto-switch on <c>/task new</c> -- issue
     /// 0010 in task 0005) can do so without re-querying.
     /// </summary>
     internal async Task<TaskRecord> HandleNewAsync(string description, string? home, CancellationToken ct)
@@ -395,7 +395,7 @@ internal sealed class TaskCommandHandler
     /// Read <paramref name="filePath"/>, apply <paramref name="transform"/>, write the result.
     /// Wraps the read+write in <see cref="LockRegistry"/> acquire/release when a registry is
     /// configured; otherwise writes directly (test code path). A lock-acquire timeout is
-    /// surfaced to the user but isn't fatal тАФ the review report itself is already on disk.
+    /// surfaced to the user but isn't fatal -- the review report itself is already on disk.
     /// </summary>
     private async Task UpdateFileUnderLockAsync(string filePath, Func<string, string> transform, CancellationToken ct)
     {
@@ -442,7 +442,7 @@ internal sealed class TaskCommandHandler
 
     /// <summary>
     /// Append a short entry to the task's <c>progress.md</c>. Always opens a fresh heading rather
-    /// than parsing for an existing one for today тАФ keeps the writes additive and side-effect-free.
+    /// than parsing for an existing one for today -- keeps the writes additive and side-effect-free.
     /// </summary>
     internal static string AppendProgressEntry(string existing, string reportName, ReviewReport report, DateOnly today)
     {

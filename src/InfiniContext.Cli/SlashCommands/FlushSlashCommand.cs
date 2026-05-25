@@ -10,7 +10,7 @@ namespace InfiniContext.Cli.SlashCommands;
 ///
 /// <para>
 /// Refuses when the focused session isn't bound to a task (mirrors the <c>/issue</c>
-/// "no active task" semantics) тАФ there's no <c>.task/</c> folder to flush to.
+/// "no active task" semantics) -- there's no <c>.task/</c> folder to flush to.
 /// </para>
 /// </summary>
 internal sealed class FlushSlashCommand : ISlashCommand

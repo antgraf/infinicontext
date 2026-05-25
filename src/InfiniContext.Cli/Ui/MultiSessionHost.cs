@@ -393,7 +393,7 @@ internal sealed class MultiSessionHost : IReplActions
         {
             // If a context-pressure nudge fired during this task-bound session, the agent's
             // exit is structured-compaction handoff, not a real "done". Auto-rotate to a fresh
-            // session on the same task by populating _pendingSwitch тАФ Program.cs's outer loop
+            // session on the same task by populating _pendingSwitch -- Program.cs's outer loop
             // already respawns on a SwitchPlan, so this reuses /task switch's machinery. The
             // rotation handler fires _exitSignal once the plan is ready; if rotation can't run
             // (no plan loader, no task binding, no nudge, cap hit), we fall through to the
@@ -450,7 +450,7 @@ internal sealed class MultiSessionHost : IReplActions
                 RotationReason.Soft => "soft-nudge",
                 _ => "nudge",
             };
-            Write($"\n[task] {label} flush detected тАФ auto-rotating to task {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+            Write($"\n[task] {label} flush detected \u2014 auto-rotating to task {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
             _logger.Information("auto-rotate: task {TaskId} reason={Reason}", plan.Task.Id, reason);
             RequestSwitch(plan);
         }

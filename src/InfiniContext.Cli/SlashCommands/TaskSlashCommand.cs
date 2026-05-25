@@ -125,7 +125,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
     /// artifacts now (progress.md, index.md, decisions.md, etc.). Phrased so the agent treats it
     /// as a deliberate operator action rather than a context-pressure rescue (so it doesn't also
     /// exit). The actual injection goes through <see cref="IClaudeSession.SendUserMessageAsync"/>
-    /// тАФ the same channel <c>ThresholdInjector</c> uses for the soft/hard threshold nudges.
+    /// -- the same channel <c>ThresholdInjector</c> uses for the soft/hard threshold nudges.
     /// </summary>
     private static async Task TryFlushFocusedSessionAsync(SlashCommandContext ctx, CancellationToken ct)
     {
@@ -236,7 +236,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
     /// <summary>
     /// Shared plan-loading + error-printing path for <c>/task switch</c> and <c>/task spawn</c>
     /// (arch-012). Returns <c>null</c> when the task subsystem is unavailable, when the task
-    /// doesn't resolve, or when <see cref="SlashCommandContext.PrepareTaskSwitch"/> threw ╤В╨Р╨д
+    /// doesn't resolve, or when <see cref="SlashCommandContext.PrepareTaskSwitch"/> threw ╤--
     /// the user-facing message is already printed in each of those cases. <paramref name="verb"/>
     /// is the user-visible operation name ("switch" / "spawn") used in error strings.
     /// </summary>

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace InfiniContext.Core.Review;
 
 /// <summary>
-/// Identifies the file set that defines "the work attributable to a task" тАФ the scope every
+/// Identifies the file set that defines "the work attributable to a task" -- the scope every
 /// reviewer agent will receive context excerpts from.
 ///
 /// <para>Resolution order:</para>
@@ -33,7 +33,7 @@ public sealed class ScopeResolver
     /// <summary>
     /// Resolve the review scope for a task.
     /// </summary>
-    /// <param name="repoRoot">Working directory тАФ the task's <c>HomeCwd</c>.</param>
+    /// <param name="repoRoot">Working directory -- the task's <c>HomeCwd</c>.</param>
     /// <param name="baseCommitSha">Captured at task-creation time. Null when the column was unset or the task pre-dates Migration_002.</param>
     /// <param name="scopeOverridePaths">When non-empty, takes precedence over diff-based resolution. Caller (CLI handler) is responsible for glob expansion.</param>
     /// <param name="progressMdPath">Optional absolute path to the task's <c>progress.md</c>. When supplied, "Files touched" entries union with the diff result.</param>
@@ -212,7 +212,7 @@ public sealed class ScopeResolver
     /// Filenames that are always secrets, regardless of extension. sec-002 expanded the list to
     /// the unambiguous wins (AWS / netrc / npm / pypi / git-credentials / kubeconfig / htpasswd)
     /// and left the false-positive-prone ones out (e.g. <c>appsettings.Development.json</c>,
-    /// <c>*.crt</c>, the project's own <c>settings.json</c>) ╤В╨Р╨д those need a product call paired
+    /// <c>*.crt</c>, the project's own <c>settings.json</c>) ╤-- those need a product call paired
     /// with the configurable seam (arch-011) and aren't taken in v1.
     /// </summary>
     private static readonly string[] SecretFilenames =

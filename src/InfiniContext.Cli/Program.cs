@@ -277,8 +277,8 @@ var taskActivity = taskStore is not null
     ? new TaskActivityCoordinator(taskStore, () => DateTimeOffset.UtcNow, logging.Logger)
     : null;
 // Bound runaway auto-rotation loops (task 0005 issue 0013). If a fresh session immediately
-// re-hits the hard threshold on initial load тАФ e.g. an artifact set big enough to push the
-// agent over 85% on its first turn тАФ without this guard we'd rotate forever. Defaults are
+// re-hits the hard threshold on initial load -- e.g. an artifact set big enough to push the
+// agent over 85% on its first turn -- without this guard we'd rotate forever. Defaults are
 // conservative: 3 rotations per task within 5 minutes; over the cap, the host falls back to a
 // normal exit and tells the operator to /task switch manually.
 var autoRotationGuard = new AutoRotationGuard(maxRotations: 3, window: TimeSpan.FromMinutes(5));
