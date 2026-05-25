@@ -11,6 +11,13 @@ public partial class MainWindow : Window
 {
     private MainWindowViewModel? _boundVm;
     private SessionRowViewModel? _watchedSession;
+    // Pre-maximize windowed dimensions, captured from Window.Width/Height whenever WindowState
+    // is Normal. While Maximized, Window.Width/Height are screen dimensions and the two-way
+    // binding would push them into the VM, overwriting the user's last windowed size. OnClosed
+    // restores VM.WindowWidth/Height from these snapshots so SaveLayoutAsync persists the value
+    // to restore to on next un-maximize (task 0012 finding #6 follow-up).
+    private double _lastNormalWidth;
+    private double _lastNormalHeight;
 
     public MainWindow()
     {
@@ -26,10 +33,24 @@ public partial class MainWindow : Window
 
     private void OnWindowPropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property != WindowStateProperty || _boundVm is null) return;
-        var maximized = WindowState == WindowState.Maximized;
-        if (_boundVm.WindowMaximized != maximized)
-            _boundVm.WindowMaximized = maximized;
+        if (_boundVm is null) return;
+        if (e.Property == WindowStateProperty)
+        {
+            var maximized = WindowState == WindowState.Maximized;
+            if (_boundVm.WindowMaximized != maximized)
+                _boundVm.WindowMaximized = maximized;
+            return;
+        }
+        if (e.Property == WidthProperty || e.Property == HeightProperty)
+        {
+            // Only treat Normal-state dimensions as canonical. While Maximized, Width/Height are
+            // screen dims and don't reflect what the operator wants restored to on next launch.
+            if (WindowState == WindowState.Normal)
+            {
+                if (e.Property == WidthProperty) _lastNormalWidth = Width;
+                else _lastNormalHeight = Height;
+            }
+        }
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -47,6 +68,13 @@ public partial class MainWindow : Window
 
         _boundVm.PropertyChanged += OnVmPropertyChanged;
         WatchSession(_boundVm.FocusedSession);
+
+        // Seed the "last normal" dimensions from the persisted VM values so a close-while-
+        // maximized without any intervening windowed resize still persists the right size.
+        // (After this, any Width/Height PropertyChanged with WindowState == Normal refreshes
+        // them; OnClosed reads these into the VM before SaveLayoutAsync runs.)
+        if (_lastNormalWidth == 0) _lastNormalWidth = _boundVm.WindowWidth;
+        if (_lastNormalHeight == 0) _lastNormalHeight = _boundVm.WindowHeight;
 
         // Apply persisted maximized state. Width/Height are already two-way bound and applied
         // by the binding system before Show; only the WindowState enum needs a one-shot apply
@@ -128,6 +156,17 @@ public partial class MainWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // If the user closes while maximized, the two-way Width/Height binding has been pushing
+        // screen dimensions into the VM throughout the maximized session. Restore the last
+        // windowed size before SaveLayoutAsync runs (via DisposeAsync from OnShutdownRequested)
+        // so we persist the value to restore to on next un-maximize, not the screen dimensions
+        // (task 0012 finding #6 follow-up).
+        if (_boundVm is not null && WindowState == WindowState.Maximized)
+        {
+            if (_lastNormalWidth > 0) _boundVm.WindowWidth = _lastNormalWidth;
+            if (_lastNormalHeight > 0) _boundVm.WindowHeight = _lastNormalHeight;
+        }
+
         if (_boundVm is not null) _boundVm.PropertyChanged -= OnVmPropertyChanged;
         WatchSession(null);
         PropertyChanged -= OnWindowPropertyChanged;

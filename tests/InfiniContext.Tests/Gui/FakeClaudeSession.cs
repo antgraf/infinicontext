@@ -35,6 +35,13 @@ internal sealed class FakeClaudeSession : IClaudeSession
     public Task SendUserMessageAsync(string text, CancellationToken cancellationToken = default)
     {
         SentMessages.Add(text);
+        // Mirror the real ClaudeSession.SendUserMessageAsync, which calls _state.BeginSend() inside
+        // the write lock before flushing to stdin. Without this, IsAgentTurnInFlight stays false
+        // after a fake send and any code path that branches on "is the agent busy?" (e.g. the glue
+        // buffer in SessionRowViewModel.SendOrQueueAsync) takes the Idle branch on subsequent calls.
+        // Guarded: BeginSend is only legal from Idle, and tests may also drive the state machine
+        // directly between sends.
+        if (State.State == SessionState.Idle) State.BeginSend();
         return Task.CompletedTask;
     }
 

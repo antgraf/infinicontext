@@ -400,4 +400,137 @@ public class SessionRowViewModelTests
             "operator must see that the buffered turn never ran.");
         row.Turns[2].Children.Should().Contain(c => c.Summary.Contains("not sent"));
     }
+
+    // ----- SendOrQueueAsync: glue-buffer behaviour (task 0012 finding #7 / docs/todo.md #9) -----
+    //
+    // The legacy BeginUserTurn FIFO contract (the tests above) is preserved for the seed-pointer
+    // path. SendOrQueueAsync is the new operator-facing entry point that buffers prompts typed
+    // during an in-flight turn and flushes them as ONE combined claude message on the next Idle
+    // transition - the visible queued bundle card collapses multiple sends into a single turn.
+
+    [Fact]
+    public async Task SendOrQueue_when_idle_sends_immediately_and_creates_inflight_turn()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        var sentNow = await row.SendOrQueueAsync("hello");
+
+        sentNow.Should().BeTrue("Idle path writes to claude's stdin in the same call.");
+        f.Session.SentMessages.Should().ContainSingle().Which.Should().Be("hello");
+        row.Turns.Should().HaveCount(1);
+        row.Turns[0].UserPrompt.Should().Be("hello");
+        row.QueuedPromptCount.Should().Be(0);
+        row.HasQueuedPrompts.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SendOrQueue_while_inflight_buffers_in_bundle_and_does_not_send()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        // First send goes immediately and moves state to Sending (turn in flight).
+        await row.SendOrQueueAsync("first");
+        f.Session.State.State.Should().Be(SessionState.Sending,
+            "BeginSend inside SendUserMessageAsync transitions to Sending - that is the in-flight state.");
+
+        // Second send during in-flight must NOT hit stdin.
+        var sentNow = await row.SendOrQueueAsync("second");
+
+        sentNow.Should().BeFalse("glue path defers the write to the next Idle transition.");
+        f.Session.SentMessages.Should().ContainSingle().Which.Should().Be("first",
+            "the glue buffer holds the second prompt; no extra stdin write yet.");
+        row.QueuedPromptCount.Should().Be(1);
+        row.HasQueuedPrompts.Should().BeTrue();
+        row.Turns.Should().HaveCount(2, "first turn (in-flight) + bundle turn (queued).");
+        row.Turns[1].IsQueued.Should().BeTrue("the bundle card carries the queued badge.");
+        row.Turns[1].UserPrompt.Should().Be("second");
+    }
+
+    [Fact]
+    public async Task SendOrQueue_multiple_buffered_prompts_join_with_glue_separator()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        await row.SendOrQueueAsync("first");   // immediate, in-flight
+        await row.SendOrQueueAsync("a");        // bundle
+        await row.SendOrQueueAsync("b");        // bundle
+        await row.SendOrQueueAsync("c");        // bundle
+
+        row.QueuedPromptCount.Should().Be(3);
+        row.Turns.Should().HaveCount(2);
+        row.Turns[1].UserPrompt.Should().Be("a\n\n---\n\nb\n\n---\n\nc",
+            "the bundle card's visible UserPrompt is the joined glue-separator concatenation.");
+        f.Session.SentMessages.Should().ContainSingle("nothing flushed yet - waiting on the first turn's ResultEvent.");
+    }
+
+    [Fact]
+    public async Task Result_event_flushes_bundle_as_one_combined_send()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        await row.SendOrQueueAsync("first");
+        await row.SendOrQueueAsync("a");
+        await row.SendOrQueueAsync("b");
+
+        // First-turn lifecycle: assistant text + result. The result closes the in-flight turn
+        // and triggers the glue flush.
+        f.RaiseEvent(SessionContextFactory.MakeAssistantText("first acknowledged"));
+        f.RaiseEvent(SessionContextFactory.MakeResult());
+
+        // SendOrQueueAsync's flush path uses Task.Run; give the continuation a tick to run.
+        await Task.Delay(50);
+
+        f.Session.SentMessages.Should().HaveCount(2, "first + combined-bundle.");
+        f.Session.SentMessages[1].Should().Be("a\n\n---\n\nb",
+            "the flush writes the joined buffer as ONE message - one claude turn, not two.");
+        row.QueuedPromptCount.Should().Be(0, "the buffer drained on flush.");
+        row.HasQueuedPrompts.Should().BeFalse();
+        row.Turns[1].IsQueued.Should().BeFalse("the bundle card is now the in-flight turn.");
+        row.Turns[1].IsInProgress.Should().BeTrue("the bundle's own ResultEvent hasn't arrived yet.");
+    }
+
+    [Fact]
+    public async Task Process_exit_flushes_bundle_with_not_sent_marker()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        await row.SendOrQueueAsync("first");
+        await row.SendOrQueueAsync("a");
+        await row.SendOrQueueAsync("b");
+
+        var sentCountBefore = f.Session.SentMessages.Count;
+        f.Session.State.HandleProcessExit(-1);
+
+        f.Session.SentMessages.Should().HaveCount(sentCountBefore,
+            "claude is dead; no flush write should happen on exit.");
+        row.QueuedPromptCount.Should().Be(0, "bundle cleared on exit.");
+        var bundleCard = row.Turns[1];
+        bundleCard.IsQueued.Should().BeFalse();
+        bundleCard.IsInProgress.Should().BeFalse();
+        bundleCard.Children.Should().Contain(c => c.Summary.Contains("not sent") && c.Summary.Contains("2"),
+            "operator must see the count of unsent buffered prompts.");
+    }
+
+    [Fact]
+    public async Task SendOrQueue_property_change_fires_for_QueuedPromptCount()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+        var changed = new List<string?>();
+        row.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        await row.SendOrQueueAsync("first");      // Idle path - no QueuedPromptCount change expected
+        changed.Clear();
+        await row.SendOrQueueAsync("buffered");    // glue path - QueuedPromptCount must raise
+
+        changed.Should().Contain(nameof(SessionRowViewModel.QueuedPromptCount),
+            "the host VM watches this property to surface the queued-count badge.");
+        changed.Should().Contain(nameof(SessionRowViewModel.HasQueuedPrompts),
+            "HasQueuedPrompts is the IsVisible binding for the badge; must raise when count crosses zero.");
+    }
 }

@@ -122,6 +122,31 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     /// goes here, marked <see cref="TurnNodeViewModel.IsQueued"/>, and is dequeued (and
     /// un-marked) when the next <c>ResultEvent</c> closes the prior in-flight turn.</summary>
     private readonly Queue<TurnNodeViewModel> _queuedTurns = new();
+
+    /// <summary>Glue buffer (task 0012 finding #7 / docs/todo.md #9). Each <see cref="SendOrQueueAsync"/>
+    /// call made while a turn is in flight appends here and updates <see cref="_pendingBundleTurn"/>.
+    /// On the in-flight turn's <c>ResultEvent</c> the joined contents are flushed as ONE stdin write
+    /// and the bundle card is promoted to in-flight. Lives in parallel to <see cref="_queuedTurns"/>:
+    /// FIFO queue carries cards already written to stdin (legacy path used by <see cref="BeginUserTurn"/>
+    /// for the seed-pointer + tests), bundle queue carries prompts NOT yet written. Process exit
+    /// flushes both.</summary>
+    private readonly List<string> _pendingPrompts = new();
+    private TurnNodeViewModel? _pendingBundleTurn;
+
+    /// <summary>Separator joining buffered prompts into one combined stdin write. Reads as a clear
+    /// visual break for both claude (markdown sees three blank lines) and the operator scanning
+    /// the transcript.</summary>
+    private const string GlueSeparator = "\n\n---\n\n";
+
+    [ObservableProperty]
+    private int _queuedPromptCount;
+
+    /// <summary>True while at least one prompt is in the glue buffer. Bound by the row template to
+    /// show the small queued-count badge between StatusGlyph and ShortId.</summary>
+    public bool HasQueuedPrompts => QueuedPromptCount > 0;
+
+    partial void OnQueuedPromptCountChanged(int value) => OnPropertyChanged(nameof(HasQueuedPrompts));
+
     private bool _disposed;
 
     public SessionRowViewModel(
@@ -260,6 +285,57 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         else _dispatcher.Post(Apply);
     }
 
+    /// <summary>Operator-facing send entry point (task 0012 finding #7 / docs/todo.md #9). Decides
+    /// whether the typed prompt becomes an immediate stdin write or joins the glue buffer:
+    ///
+    /// <para><b>Idle path</b> (<see cref="IsAgentTurnInFlight"/> false): render a new card via
+    /// <see cref="BeginUserTurn"/>, append the operator marker to the transcript, then write to
+    /// claude's stdin via <see cref="IClaudeSession.SendUserMessageAsync"/>.</para>
+    ///
+    /// <para><b>Glue path</b> (a turn is in flight): append to <see cref="_pendingPrompts"/> and
+    /// either create or update a single visible "queued bundle" card whose <c>UserPrompt</c> shows
+    /// the joined buffer. Do NOT write to stdin -- the flush is done in
+    /// <see cref="CloseInFlightTurnWith"/> when the in-flight turn closes, as ONE combined write.
+    /// This is the behaviour the operator asked for: multiple prompts typed while busy collapse
+    /// into one claude turn instead of being processed separately.</para>
+    ///
+    /// <para>Returns <c>true</c> when the prompt was written to stdin in this call; <c>false</c>
+    /// when it was buffered (the actual write will happen on the next Idle transition).</para></summary>
+    public async Task<bool> SendOrQueueAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (!IsAgentTurnInFlight)
+        {
+            BeginUserTurn(text);
+            Context.Transcript.Append($"\n> {text}\n");
+            await Context.Session.SendUserMessageAsync(text, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        int countAfter = 0;
+        void Apply()
+        {
+            _pendingPrompts.Add(text);
+            countAfter = _pendingPrompts.Count;
+            if (_pendingBundleTurn is null)
+            {
+                _pendingBundleTurn = new TurnNodeViewModel(text) { IsQueued = true };
+                Turns.Add(_pendingBundleTurn);
+            }
+            else
+            {
+                _pendingBundleTurn.UserPrompt = string.Join(GlueSeparator, _pendingPrompts);
+            }
+            QueuedPromptCount = countAfter;
+        }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
+
+        Context.Transcript.Append($"\n> {text}  [queued: will glue with {countAfter - 1} other(s) on next Idle]\n");
+        return false;
+    }
+
     private void OnStateTransition(StateTransition t)
     {
         // Marshal to the UI thread. The state machine fires Transitioned synchronously while
@@ -297,6 +373,22 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                         TurnContentKind.System,
                         "(not sent - session exited before turn started)",
                         ""));
+                }
+                // Glue buffer (task 0012 finding #7 / docs/todo.md #9). Claude can't drain the
+                // bundle now; surface the unsent payload as a system child so the operator sees
+                // what was buffered rather than having the bundle card vanish silently.
+                if (_pendingBundleTurn is { } bundle)
+                {
+                    bundle.IsQueued = false;
+                    bundle.IsInProgress = false;
+                    var joined = string.Join(GlueSeparator, _pendingPrompts);
+                    bundle.Children.Add(new TurnContentItemViewModel(
+                        TurnContentKind.System,
+                        $"(not sent - session exited with {_pendingPrompts.Count} prompt(s) buffered)",
+                        joined));
+                    _pendingPrompts.Clear();
+                    _pendingBundleTurn = null;
+                    QueuedPromptCount = 0;
                 }
             }
         }
@@ -512,6 +604,26 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         else
         {
             _inFlightTurn = null;
+        }
+
+        // Glue flush (task 0012 finding #7 / docs/todo.md #9). If the FIFO queue didn't claim the
+        // in-flight slot and the bundle buffer is non-empty, promote the bundle and write the
+        // joined contents to claude as ONE combined turn. Task.Run avoids deadlocking the UI
+        // thread - SendUserMessageAsync awaits stdin writes through the session's _writeLock and
+        // we're being called from the dispatched OnEvent path.
+        if (_inFlightTurn is null && _pendingBundleTurn is { } bundle)
+        {
+            var combined = string.Join(GlueSeparator, _pendingPrompts);
+            _pendingPrompts.Clear();
+            bundle.IsQueued = false;
+            _inFlightTurn = bundle;
+            _pendingBundleTurn = null;
+            QueuedPromptCount = 0;
+            _ = Task.Run(async () =>
+            {
+                try { await Context.Session.SendUserMessageAsync(combined).ConfigureAwait(false); }
+                catch (Exception ex) { _logger?.Warning(ex, "gui-row[{Row}] glue-flush SendUserMessageAsync failed", ShortId); }
+            });
         }
     }
 

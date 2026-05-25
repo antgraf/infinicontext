@@ -223,6 +223,143 @@ The whole "MCP channel over named pipe with skill-side acquire/release" machiner
 
 ---
 
+## 9. [SHIPPED 2026-05-25] GUI operator message-queue indicator + glue-send semantics (task 0012 finding #7)
+
+**Status:** actionable. Design landed during task 0012 (2026-05-24) but ZERO code on disk вЂ” the implementing session was aborted under hard context pressure while approval prompts were stalling. The investigation cost is sunk; pick up cold from the design below.
+
+**Motivation.** Today every `MainWindowViewModel.SendToSessionAsync` call writes immediately to claude's stdin via `ClaudeSession.SendUserMessageAsync` (which flushes under `_writeLock`). Claude buffers them FIFO and processes each as a separate turn. Two operator-visible problems:
+1. **No queue indicator beyond the "Agent busy" banner.** Operators report sending the same prompt twice because the second one looks like nothing happened. The visual cue (a `IsQueued=true` turn card) is per-card and easy to miss in a long transcript.
+2. **Multiple typed prompts produce multiple claude turns.** Operator wants them glued into one combined turn so claude sees the operator's full intent in one shot (and the agent doesn't half-execute the first message before reading the second).
+
+The "are queued messages actually flushed on Idle?" sub-question (operator's #7.2) was investigated and confirmed: yes, current writes hit claude immediately. The operator's perception ("not sent until any new user message is sent") is wrong under the current code path. So #7.2 is NOT a fix to existing code; auto-flush-on-Idle is a new property of the glue feature in #7.3.
+
+**Design вЂ” two parallel queueing mechanisms in `SessionRowViewModel`:**
+
+1. **Legacy FIFO (`_queuedTurns`)** вЂ” kept as-is. Used ONLY by `BeginUserTurn` (the seed-pointer path at `MainWindowViewModel.SpawnSessionForTaskAsync:464` and the existing test matrix). Do NOT retire this вЂ” task 0011 RC2/RC3 mandated the FIFO contract and the tests assert it.
+
+2. **Glue buffer (NEW)** вЂ” used by operator-driven sends. New fields immediately after `_queuedTurns = new();` in `SessionRowViewModel.cs`:
+
+```csharp
+private readonly List<string> _pendingPrompts = new();
+private TurnNodeViewModel? _pendingBundleTurn;
+private const string GlueSeparator = "\n\n---\n\n";
+[ObservableProperty] private int _queuedPromptCount;
+public bool HasQueuedPrompts => QueuedPromptCount > 0;
+```
+
+NEW public method `SessionRowViewModel.SendOrQueueAsync(string text, CancellationToken ct = default)`:
+- If `!IsAgentTurnInFlight`: call `BeginUserTurn(text)`, `Context.Transcript.Append("\n> {text}\n")`, `await Context.Session.SendUserMessageAsync(text, ct)`. Return.
+- Else (glue path), dispatcher-marshalled:
+  - `_pendingPrompts.Add(text)`.
+  - If `_pendingBundleTurn is null`: create `new TurnNodeViewModel(text) { IsQueued = true }`, add to `Turns`, store in `_pendingBundleTurn`.
+  - Else: `_pendingBundleTurn.UserPrompt = string.Join(GlueSeparator, _pendingPrompts);`
+  - `QueuedPromptCount = _pendingPrompts.Count;`
+  - `Context.Transcript.Append("\n> {text}  [queued: glued with N other(s) on next Idle]\n")`.
+  - Do NOT call `SendUserMessageAsync` вЂ” that's what makes this glue.
+
+Flush hook in `CloseInFlightTurnWith` (around line 494, after the existing `_queuedTurns.TryDequeue` block):
+- If `_pendingBundleTurn is not null && _inFlightTurn is null` (no FIFO-queued turn took the slot):
+  - `combined = string.Join(GlueSeparator, _pendingPrompts);`
+  - Clear `_pendingPrompts`; bundle's `IsQueued = false`; `_inFlightTurn = bundle`; null the bundle field; `QueuedPromptCount = 0`.
+  - Fire-and-forget the send: `_ = Task.Run(() => Context.Session.SendUserMessageAsync(combined));` (Task.Run avoids deadlock вЂ” we are on the UI thread from the dispatched OnEvent).
+
+Process-exit flush in `OnStateTransition`'s `t.To == SessionState.Exited` branch (around line 280-301, after the existing `_queuedTurns` flush):
+- If `_pendingBundleTurn is not null`: clear `IsQueued` + `IsInProgress`, add a `TurnContentItemViewModel(TurnContentKind.System, "(not sent - session exited with N prompt(s) buffered)", joined)` child, clear `_pendingPrompts`, null the bundle field, `QueuedPromptCount = 0`.
+
+**Files / lines to touch:**
+- `src/InfiniContext.Gui/ViewModels/SessionRowViewModel.cs`: add the 5 new fields, the new `SendOrQueueAsync` method, the flush hook in `CloseInFlightTurnWith`, the Exited-branch bundle flush.
+- `src/InfiniContext.Gui/ViewModels/MainWindowViewModel.cs`: `SendToSessionAsync` (line 508) becomes a thin wrapper that calls `target.SendOrQueueAsync(text)` and sets `StatusText` to either "Sent to {ShortId}." or "Queued to {ShortId} (N pending, will flush on next Idle).". `SendCannedAsync` (line 497) switches to `SendOrQueueAsync`. Move the `Transcript.Append` INTO `SendOrQueueAsync` (the row VM now decides queued-vs-sent).
+- `src/InfiniContext.Gui/Views/MainWindow.axaml`: row template (TreeDataTemplate at line 130 for `vm:SessionRowViewModel`) gains a badge between StatusGlyph and ShortId:
+  ```xml
+  <Border IsVisible="{Binding HasQueuedPrompts}" Background="#FF8800" CornerRadius="6" Padding="4,0" Margin="0,0,4,0">
+    <TextBlock Text="{Binding QueuedPromptCount, StringFormat='+{0}'}" Foreground="White" FontSize="10" FontWeight="Bold" />
+  </Border>
+  ```
+  Status-strip `IsAgentBusy` border (line 65-68): when the focused session has `HasQueuedPrompts`, change the text from "Agent busy - next message will queue" to "Agent busy - N message(s) queued, will glue on Idle". Easiest path: add a derived `MainWindowViewModel.QueuedHint` string and bind to it; or pull `FocusedSession.QueuedPromptCount` into the text via a Run/StringFormat.
+
+**Test fixture note:** `tests/InfiniContext.Tests/Gui/FakeClaudeSession.cs:35` already records into `SentMessages` вЂ” no new fake plumbing needed. Use `SessionContextFactory` + `RaiseEvent` exactly like the existing `SessionRowViewModelTests` to drive `ResultEvent` etc.
+
+**Tests to add in `tests/InfiniContext.Tests/Gui/SessionRowViewModelTests.cs`:**
+1. `SendOrQueue_when_idle_sends_immediately_and_creates_inflight_turn` вЂ” `SentMessages.Count == 1`, no bundle.
+2. `SendOrQueue_while_inflight_buffers_in_bundle_and_does_not_send` вЂ” first send creates in-flight turn; second call (during in-flight) appends to bundle; `SentMessages.Count` still 1; `QueuedPromptCount == 1`; bundle card `IsQueued == true`.
+3. `SendOrQueue_multiple_buffered_prompts_join_with_glue_separator` вЂ” three queued prompts; bundle's `UserPrompt == "a\n\n---\n\nb\n\n---\n\nc"`.
+4. `Result_event_flushes_bundle_as_one_combined_send` вЂ” drive in-flight + queue two prompts + ResultEvent; assert the 2nd `SentMessages` entry equals the joined string, bundle becomes in-flight, `QueuedPromptCount == 0`.
+5. `Process_exit_flushes_bundle_with_not_sent_marker` вЂ” queue 2 prompts then `HandleProcessExit(-1)`; bundle card has the "not sent" system child, no extra `SentMessages` write, `QueuedPromptCount == 0`.
+6. `SendOrQueue_property_change_fires_for_QueuedPromptCount` вЂ” subscribe to `PropertyChanged`, send-while-inflight, assert `QueuedPromptCount` raised.
+
+Existing tests that DO NOT change (the `BeginUserTurn` FIFO contract is preserved):
+- `Operator_send_during_inflight_turn_is_queued`
+- `Result_event_promotes_next_queued_turn_and_clears_isqueued`
+- `Assistant_event_during_queued_state_attaches_to_inflight_not_queued`
+- `Process_exit_flushes_queue_and_marks_each_not_sent`
+
+**Acceptance:**
+- All existing `SessionRowViewModelTests` still pass (FIFO contract preserved).
+- 6 new tests pass.
+- Manual: in the GUI, spawn a session, send a prompt, then while busy send two more вЂ” see ONE queued badge with `+2`, ONE single new turn card showing the joined messages, and ONE combined claude turn after the in-flight result lands.
+- Process-kill while bundle is non-empty: bundle card shows "(not sent...)" instead of vanishing.
+- `dotnet test` green; `dotnet format --verify-no-changes` clean.
+- Update findings.md and progress.md for task 0012 marking finding #7 SHIPPED.
+
+**Cost:** ~2-3 hours. Most of the design risk is already burned; the remaining work is mechanical edits + the 6 new tests.
+
+**Source:** task 0012 findings.md #7.
+
+---
+
+## 10. Agent surface for inspecting + changing host/harness settings
+
+**Status:** large, design-first. Operator flagged on 2026-05-24 as "needs its own ticket" (task 0012 findings.md #13). Scope creep risk is real; resist shipping a thin slice without a security/audit story.
+
+**Motivation.** Today the agent has zero visibility into and zero control over the host's settings surface: approval mode, model selection, light-model effort, soft/hard context thresholds, etc. Several real workflows want this:
+- An agent in an extended autonomous loop knows it would benefit from flipping to `auto` approval to avoid stalling, but has no way to ask for or perform the switch.
+- An agent about to start a high-cost operation knows it should drop to a cheaper model first; same gap.
+- A task-bound agent hitting context pressure could ask the host to raise the soft threshold for this one task; same gap.
+
+In every case, today the operator has to notice and toggle manually. Fine for an attended workflow; kills autonomous use.
+
+**Design boundaries to settle first (NOT pre-decided -- this is the design work):**
+
+1. **Read vs write.** Read-only ("what's my current approval mode?") is cheap and safe; write ("switch me to auto") is where the security boundary matters. Likely outcome: read always available; write gated.
+
+2. **What's settable, what's not.**
+   - Probably-OK to expose: approval mode (subject to gating), session model override for the next turn (subject to budget), per-session soft/hard thresholds (subject to bounds), prompt-text for the next turn.
+   - Probably-NOT exposed (host-process scope, not session scope): `versioning.MinClaudeVersion`, `loggingMaxFieldBytes`, anything that affects the sidecar's wire contract, anything that could mask security signals (e.g. disabling the auto-mode safety reviewer).
+   - Probably-gated on operator policy: model selection if a budget exists.
+
+3. **The gate.** Three plausible models:
+   - **(a)** Every agent-initiated settings change goes through the same `auto`-mode safety reviewer that gates tool calls (light-model classifies as `allow|deny|ask`). Cheap; reuses infra; loses nuance.
+   - **(b)** A separate `settings-change` approval channel surfaced as a banner in the focused-pane UI -- operator can approve a one-off change or whitelist it for the session.
+   - **(c)** A per-key allowlist in `settings.json` ("agent may change these keys without approval"). Simplest; least flexible; works for the autonomous-loop case if operator pre-approves "agent may flip approval mode to auto."
+   - Likely outcome: hybrid. Read freely; some keys allowlisted; others go through (a) or (b).
+
+4. **Surfacing.** Operator-visible audit trail is non-negotiable: every agent-initiated settings read or write logs at INFO with the agent's session id, what changed, what gated it. A small "agent settings activity" pane in the focused-pane status strip would let the operator see "agent just read your approval mode" / "agent switched to auto (you allowlisted this)" without scrubbing logs.
+
+5. **Wire.** Most natural surface: extend the existing MCP sidecar with `mcp__infinicontext__settings_get` / `settings_set` tools. They'd live next to the lock channel (which item #8 above proposes ripping out -- coordinate; if #8 lands first, these tools just live in the sidecar JSON-RPC alongside the approval tools). Per-tool schema lists settable keys + types; out-of-range writes return structured errors.
+
+**Files / lines (preliminary, firm up during design):**
+- `src/InfiniContext.Core/Configuration/InfiniContextSettings.cs` + `вЂ¦Loader.cs`: per-key metadata flagging "agent-readable" / "agent-writable" / "requires-approval" / "session-scope vs host-scope".
+- `src/InfiniContext.Core/Mcp/ApprovalSidecarHost.cs` + `ApprovalChannel.cs`: register the new tools, dispatch via the same JSON-RPC server.
+- `src/InfiniContext.Core/Sessions/SessionManager.cs` + `SessionContext.cs`: a settings-mutation surface that respects session scope (writes affect only this session unless flagged host-scope and approved).
+- `src/InfiniContext.Cli/Program.cs`: register the new MCP tools and wire the approval gate.
+- Stage 3 GUI: focused-pane "agent settings activity" indicator (Avalonia).
+- `settings.schema.json`: matching metadata for the agent-facing surface.
+
+**Acceptance (when this becomes actionable):**
+- `mcp__infinicontext__settings_get` returns the current approval mode and context thresholds from inside an agent prompt.
+- `mcp__infinicontext__settings_set` switches approval mode to `auto`, gated by the chosen approval flow; succeeds silently when allowlisted and produces an audit log entry.
+- Out-of-range writes return structured errors; agent can recover.
+- Operator UI shows the activity in real time (CLI status line + GUI status strip).
+- Full test suite green; new tests cover allowlist enforcement, scope (session vs host), and the audit-trail emission.
+
+**Cost:** large. Budget ~1-2 days for the design and another 1-2 days for implementation. Could be split into "read-only surface first, write later" if a quick win is wanted.
+
+**Source:** task 0012 findings.md #13, operator flag 2026-05-24.
+
+**Source:** `.task/0012-gui-development-phase-3-design-documentation/findings.md` #7. Design recorded during the 2026-05-24 session that hit the AFK-ask-mode wall вЂ” see `feedback_edit_timeout_means_ask_mode_afk.md` in memory for the diagnostic pattern that surfaced after four consecutive Edit timeouts.
+
+---
+
 ## Cross-cutting context
 
 - **Memory files** at `~/.claude/projects/C--src-infinicontext-poc/memory/`:

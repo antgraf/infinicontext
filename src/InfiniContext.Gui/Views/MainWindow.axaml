@@ -64,7 +64,7 @@
         </StackPanel>
         <Border Grid.Column="2" IsVisible="{Binding IsAgentBusy}"
                 Background="#33FFFFFF" CornerRadius="2" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
-          <TextBlock Text="Agent busy - next message will queue" Foreground="White" FontSize="11" />
+          <TextBlock Text="{Binding AgentBusyHint}" Foreground="White" FontSize="11" />
         </Border>
         <TextBlock Grid.Column="3" Text="{Binding StatusText}" Foreground="White" Opacity="0.85" VerticalAlignment="Center" />
       </Grid>
@@ -132,7 +132,20 @@
                   <Grid ColumnDefinitions="Auto,*">
                     <TextBlock Grid.Column="0" Text="{Binding StatusGlyph, Mode=OneWay}" FontFamily="Segoe UI Symbol, Apple Color Emoji, Segoe UI Emoji" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Spacing="1">
-                      <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <!-- Queued-prompt badge (task 0012 finding #7 / docs/todo.md #9). Visible
+                             only when the glue buffer has at least one prompt waiting on the next
+                             Idle transition - tells the operator their typed prompts are buffered
+                             and will be sent as one combined claude turn. -->
+                        <Border IsVisible="{Binding HasQueuedPrompts}"
+                                Background="#FF8800" CornerRadius="6" Padding="4,0"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="Pending prompts will be glued and sent as one claude turn when the agent goes Idle.">
+                          <TextBlock Text="{Binding QueuedPromptCount, StringFormat='+{0}'}"
+                                     Foreground="White" FontSize="10" FontWeight="Bold" />
+                        </Border>
+                        <TextBlock Text="{Binding ShortId}" FontFamily="Consolas, Menlo, monospace" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
                       <TextBlock Text="{Binding Cwd}" FontSize="11" Opacity="0.75" TextTrimming="CharacterEllipsis" />
                       <TextBlock FontSize="11" Opacity="0.6" TextTrimming="CharacterEllipsis">
                         <Run Text="{Binding State, Mode=OneWay}" />
@@ -228,7 +241,8 @@
                                  MaxHeight="160" />
             <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                         Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
-              <Button Content="Deny" Command="{Binding FocusedSession.DenyCommand}" />
+              <Button Content="Deny" Command="{Binding FocusedSession.DenyCommand}"
+                      Background="#FFE8C770" Foreground="#FF6B4E00" BorderBrush="#FFD9B441" />
               <Button Content="Approve" Command="{Binding FocusedSession.ApproveCommand}" Classes="accent" />
             </StackPanel>
           </Grid>

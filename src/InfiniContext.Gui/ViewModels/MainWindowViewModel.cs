@@ -123,6 +123,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         ? "Agent is busy - Send will queue your message behind the in-flight turn. Press Esc to interrupt the current turn."
         : "Send (Ctrl+Enter)";
 
+    /// <summary>Text inside the status-strip "Agent busy" badge. Surfaces the focused session's
+    /// glue-buffer count when non-empty so the operator sees both "agent is mid-turn" AND "your
+    /// typed prompts are buffered and will be glued on the next Idle." Task 0012 finding #7.</summary>
+    public string AgentBusyHint
+    {
+        get
+        {
+            if (FocusedSession is { HasQueuedPrompts: true } row)
+                return $"Agent busy - {row.QueuedPromptCount} message(s) queued, will glue on Idle";
+            return "Agent busy - next message will queue";
+        }
+    }
+
     public IAsyncRelayCommand NewTaskCommand { get; }
     public IAsyncRelayCommand<TaskNodeViewModel?> SpawnSessionForTaskCommand { get; }
     public IAsyncRelayCommand SendPromptCommand { get; }
@@ -238,10 +251,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public async Task SaveLayoutAsync()
     {
         _guiSettings.LeftColumnWidth = LeftColumnWidth.IsAbsolute ? LeftColumnWidth.Value : GuiSettings.Defaults.LeftColumnWidth;
-        // Window size is only meaningful when the window is in Normal state. If the user closed
-        // while maximized, persist the previously-recorded normal size (which the code-behind
-        // captures into the VM on WindowState transitions) so re-launch + un-maximize restores
-        // the same size, not the screen dimensions.
+        // Window size is only meaningful in Normal state. If the user closed while maximized,
+        // MainWindow.OnClosed has already restored WindowWidth/Height from its _lastNormalWidth
+        // /_lastNormalHeight snapshots before this method runs, so what we read here is the
+        // pre-maximize windowed size - not the screen dimensions the two-way binding pushed in
+        // while Maximized. Restoring to Normal on next launch un-maximizes to the right size.
         _guiSettings.WindowWidth = WindowWidth;
         _guiSettings.WindowHeight = WindowHeight;
         _guiSettings.WindowMaximized = WindowMaximized;
@@ -507,19 +521,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     private async Task SendToSessionAsync(SessionRowViewModel target, string text)
     {
-        // Snapshot before the send so we can tell the operator whether their message will run
-        // immediately or queue behind an in-flight turn (claude buffers stdin between turns).
-        var queued = target.IsAgentTurnInFlight;
-        target.BeginUserTurn(text);
-        target.Context.Transcript.Append(queued
-            ? $"\n> {text}  [queued behind in-flight turn]\n"
-            : $"\n> {text}\n");
+        // The row VM decides Idle vs glue-buffer (task 0012 finding #7 / docs/todo.md #9):
+        // - Idle: writes to claude's stdin immediately. Returns true.
+        // - Busy: appends to the row's pending-prompt bundle. Returns false. The actual stdin
+        //   write will happen as ONE combined message on the next ResultEvent, via the flush hook
+        //   in SessionRowViewModel.CloseInFlightTurnWith.
+        // The host VM only does status-text reporting + error surfacing.
         try
         {
-            await target.Context.Session.SendUserMessageAsync(text).ConfigureAwait(true);
-            StatusText = queued
-                ? $"Queued to {target.ShortId} - will run after the current turn."
-                : $"Sent to {target.ShortId}.";
+            var sentNow = await target.SendOrQueueAsync(text).ConfigureAwait(true);
+            StatusText = sentNow
+                ? $"Sent to {target.ShortId}."
+                : $"Queued to {target.ShortId} ({target.QueuedPromptCount} pending, will glue on next Idle).";
         }
         catch (Exception ex)
         {
@@ -587,6 +600,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         InterruptCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsAgentBusy));
         OnPropertyChanged(nameof(SendButtonTooltip));
+        OnPropertyChanged(nameof(AgentBusyHint));
     }
 
     /// <summary>Refresh <see cref="SendPromptCommand"/>'s CanExecute when the focused session
@@ -611,6 +625,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             OnPropertyChanged(nameof(IsAgentBusy));
             OnPropertyChanged(nameof(SendButtonTooltip));
+            OnPropertyChanged(nameof(AgentBusyHint));
+        }
+        if (e.PropertyName == nameof(SessionRowViewModel.QueuedPromptCount) ||
+            e.PropertyName == nameof(SessionRowViewModel.HasQueuedPrompts))
+        {
+            OnPropertyChanged(nameof(AgentBusyHint));
         }
     }
 
