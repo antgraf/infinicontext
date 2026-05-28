@@ -1,4 +1,5 @@
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
@@ -38,21 +39,21 @@ internal sealed class BroadcastCommand : ISlashCommand
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[broadcast] multi-session not available in this host\n");
+            ctx.Renderer.Write("[broadcast] multi-session not available in this host\n");
             return;
         }
 
         var (targetsArg, text) = SplitFirstWord(argLine);
         if (targetsArg.Length == 0 || text.Length == 0)
         {
-            ctx.Write("[broadcast] usage: /broadcast <targets|*> <text>\n");
+            ctx.Renderer.Write("[broadcast] usage: /broadcast <targets|*> <text>\n");
             return;
         }
 
         var active = ctx.SessionManager.Active;
         if (active.Count == 0)
         {
-            ctx.Write("[broadcast] no active sessions\n");
+            ctx.Renderer.Write("[broadcast] no active sessions\n");
             return;
         }
 
@@ -70,12 +71,12 @@ internal sealed class BroadcastCommand : ISlashCommand
                 var matches = active.Where(c => c.Id.ToString("D").StartsWith(raw, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (matches.Count == 0)
                 {
-                    ctx.Write($"[broadcast] no active session matches '{raw}'\n");
+                    ctx.Renderer.Write($"[broadcast] no active session matches '{raw}'\n");
                     return;
                 }
                 if (matches.Count > 1)
                 {
-                    ctx.Write($"[broadcast] '{raw}' is ambiguous ({matches.Count} matches); use /list and try a longer prefix\n");
+                    ctx.Renderer.Write($"[broadcast] '{raw}' is ambiguous ({matches.Count} matches); use /list and try a longer prefix\n");
                     return;
                 }
                 if (seen.Add(matches[0].Id)) targets.Add(matches[0]);
@@ -84,7 +85,7 @@ internal sealed class BroadcastCommand : ISlashCommand
 
         if (targets.Count < 2)
         {
-            ctx.Write("[broadcast] needs at least two targets — use /n + a regular prompt for a single session\n");
+            ctx.Renderer.Write("[broadcast] needs at least two targets — use /n + a regular prompt for a single session\n");
             return;
         }
 
@@ -95,7 +96,7 @@ internal sealed class BroadcastCommand : ISlashCommand
         }
         catch (Exception ex)
         {
-            ctx.Write($"[broadcast] dispatch failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[broadcast] dispatch failed: {ex.Message}\n");
             return;
         }
 
@@ -103,16 +104,16 @@ internal sealed class BroadcastCommand : ISlashCommand
         var failed = results.Count(r => r.Outcome == BroadcastSendOutcome.Failed);
         var missing = results.Count(r => r.Outcome == BroadcastSendOutcome.NotFound);
 
-        ctx.Write($"[broadcast] sent to {sent}/{results.Count} session(s)");
-        if (failed > 0) ctx.Write($", {failed} failed");
-        if (missing > 0) ctx.Write($", {missing} not found");
-        ctx.Write("\n");
+        ctx.Renderer.Write($"[broadcast] sent to {sent}/{results.Count} session(s)");
+        if (failed > 0) ctx.Renderer.Write($", {failed} failed");
+        if (missing > 0) ctx.Renderer.Write($", {missing} not found");
+        ctx.Renderer.Write("\n");
 
         foreach (var r in results.Where(r => r.Outcome != BroadcastSendOutcome.Sent))
         {
             var tag = r.Outcome == BroadcastSendOutcome.Failed ? "failed" : "not-found";
             var detail = r.Error?.Message;
-            ctx.Write(detail is null
+            ctx.Renderer.Write(detail is null
                 ? $"  - {r.HostSessionId:D} ({tag})\n"
                 : $"  - {r.HostSessionId:D} ({tag}): {detail}\n");
         }

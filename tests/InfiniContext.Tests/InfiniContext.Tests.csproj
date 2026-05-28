@@ -52,8 +52,10 @@
     <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommandHandler.cs" Link="Cli\Issues\IssueCommandHandler.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\HostResult.cs" Link="Cli\Ui\HostResult.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\MultiSessionHost.cs" Link="Cli\Ui\MultiSessionHost.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ISlashCommand.cs" Link="Cli\SlashCommands\ISlashCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\SlashCommandRegistry.cs" Link="Cli\SlashCommands\SlashCommandRegistry.cs" />
+    <!-- ISlashCommand, IReplActions, SlashCommandContext, SlashCommandRegistry were promoted to
+         InfiniContext.Core.SlashCommands in slice A of finding #14 (task 0012). Tests now consume
+         them through the normal Core project reference, not as link-compiled files. -->
+    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ConsoleSlashCommandRenderer.cs" Link="Cli\SlashCommands\ConsoleSlashCommandRenderer.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\QuitCommand.cs" Link="Cli\SlashCommands\QuitCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\CostCommand.cs" Link="Cli\SlashCommands\CostCommand.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\StateCommand.cs" Link="Cli\SlashCommands\StateCommand.cs" />

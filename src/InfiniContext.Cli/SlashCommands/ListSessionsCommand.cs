@@ -1,12 +1,12 @@
-using Spectre.Console;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
 /// <summary>
-/// Stage 2B Phase 4b: <c>/list</c> prints two Spectre tables — currently-active sessions and the
-/// "recent" rows loaded from <c>~/.infinicontext/index.json</c>. When the host's
-/// <see cref="SlashCommandContext.Console"/> is null (older test fixtures), falls back to plain
-/// ASCII.
+/// Stage 2B Phase 4b: <c>/list</c> prints two tables -- currently-active sessions and the
+/// "recent" rows loaded from <c>~/.infinicontext/index.json</c>. Output is routed through the
+/// shared <see cref="ISlashCommandRenderer.WriteTable"/> seam so the CLI and GUI surfaces share
+/// the same command implementation.
 /// </summary>
 internal sealed class ListSessionsCommand : ISlashCommand
 {
@@ -27,56 +27,40 @@ internal sealed class ListSessionsCommand : ISlashCommand
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[list] multi-session not available in this host\n");
+            ctx.Renderer.Write("[list] multi-session not available in this host\n");
             return Task.CompletedTask;
         }
 
         var active = ctx.SessionManager.Active;
         var recent = ctx.SessionManager.RecentSessions;
-        var console = ctx.Console;
 
-        if (console is null)
+        var activeRows = active.Select(c => (IReadOnlyList<string>)new[]
         {
-            // Plain-text fallback for tests / non-AnsiConsole environments.
-            ctx.Write($"[list] active ({active.Count}):\n");
-            foreach (var c in active)
-                ctx.Write($"  {c.Id:D}  cwd={c.Cwd ?? "?"} unknown={c.Session.UnknownEventCount}\n");
-            ctx.Write($"[list] recent ({recent.Count}):\n");
-            foreach (var r in recent)
-                ctx.Write($"  {r.SessionId}  cwd={r.Cwd}  last={r.LastActive:u}\n");
-            return Task.CompletedTask;
-        }
+            c.Id.ToString("D"),
+            ctx.FocusedHostSessionId == c.Id ? "*" : "",
+            c.Cwd ?? "-",
+            c.Session.SessionId?.ToString("D") ?? "-",
+            (c.Session.UnknownEventCount + c.Session.MalformedLineCount).ToString(),
+            c.LastCostUsd is { } amt ? $"${amt:F4}" : "-",
+        }).ToList();
+        ctx.Renderer.WriteTable(
+            title: "Active sessions",
+            headers: new[] { "Host id", "Focused?", "Cwd", "Claude id", "Drift", "Cost" },
+            rows: activeRows);
 
-        var activeTable = new Table().Border(TableBorder.Rounded).Title("[bold]Active sessions[/]");
-        activeTable.AddColumns("Host id", "Focused?", "Cwd", "Claude id", "Drift", "Cost");
-        foreach (var c in active)
+        var recentRows = recent.Select(r => (IReadOnlyList<string>)new[]
         {
-            var focused = ctx.FocusedHostSessionId == c.Id ? "[green]*[/]" : "";
-            var claudeId = c.Session.SessionId?.ToString("D") ?? "—";
-            var cost = c.LastCostUsd is { } amt ? $"${amt:F4}" : "—";
-            var drift = c.Session.UnknownEventCount + c.Session.MalformedLineCount;
-            activeTable.AddRow(
-                Markup.Escape(c.Id.ToString("D")),
-                focused,
-                Markup.Escape(c.Cwd ?? "—"),
-                Markup.Escape(claudeId),
-                drift.ToString(),
-                Markup.Escape(cost));
-        }
-        console.Write(activeTable);
+            r.SessionId,
+            r.Cwd,
+            r.Model ?? "-",
+            r.LastActive.ToLocalTime().ToString("yyyy-MM-dd HH:mm"),
+            r.LastState ?? "-",
+        }).ToList();
+        ctx.Renderer.WriteTable(
+            title: "Recent sessions",
+            headers: new[] { "Claude id", "Cwd", "Model", "Last active", "State" },
+            rows: recentRows);
 
-        var recentTable = new Table().Border(TableBorder.Rounded).Title("[bold]Recent sessions[/]");
-        recentTable.AddColumns("Claude id", "Cwd", "Model", "Last active", "State");
-        foreach (var r in recent)
-        {
-            recentTable.AddRow(
-                Markup.Escape(r.SessionId),
-                Markup.Escape(r.Cwd),
-                Markup.Escape(r.Model ?? "—"),
-                Markup.Escape(r.LastActive.ToLocalTime().ToString("yyyy-MM-dd HH:mm")),
-                Markup.Escape(r.LastState ?? "—"));
-        }
-        console.Write(recentTable);
         return Task.CompletedTask;
     }
 }

@@ -3,6 +3,7 @@ using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -21,12 +22,12 @@ public class HelpCommandTests
     [Fact]
     public async Task NoArg_lists_every_registered_command_with_its_summary()
     {
-        var (registry, output, ctx) = MakeContext();
+        var (registry, renderer, ctx) = MakeContext();
 
         var help = registry.TryResolve("/help")!;
         await help.ExecuteAsync(ctx, "", CancellationToken.None);
 
-        var text = output.ToString();
+        var text = renderer.Captured;
         // Header line.
         text.Should().Contain("REPL commands");
 
@@ -41,13 +42,13 @@ public class HelpCommandTests
     [Fact]
     public async Task NoArg_mentions_the_fall_through_to_claude()
     {
-        var (registry, output, ctx) = MakeContext();
+        var (registry, renderer, ctx) = MakeContext();
 
         await registry.TryResolve("/help")!.ExecuteAsync(ctx, "", CancellationToken.None);
 
         // Users need to know that unrecognised /commands reach claude — that's a behavioural
         // contract, not a fun fact, and /help is the natural place to surface it.
-        output.ToString().Should().Contain("forwarded to claude");
+        renderer.Captured.Should().Contain("forwarded to claude");
     }
 
     [Theory]
@@ -60,23 +61,23 @@ public class HelpCommandTests
     [InlineData("?")]         // alias of /help
     public async Task TopicArg_renders_the_full_details_for_that_command(string topic)
     {
-        var (registry, output, ctx) = MakeContext();
+        var (registry, renderer, ctx) = MakeContext();
         var resolved = HelpCommand.ResolveTopic(registry, topic);
         resolved.Should().NotBeNull($"topic '{topic}' must resolve to a registered command");
 
         await registry.TryResolve("/help")!.ExecuteAsync(ctx, topic, CancellationToken.None);
 
-        output.ToString().TrimEnd().Should().Be(resolved!.Details.TrimEnd());
+        renderer.Captured.TrimEnd().Should().Be(resolved!.Details.TrimEnd());
     }
 
     [Fact]
     public async Task UnknownTopic_falls_back_to_summary_with_no_such_topic_line()
     {
-        var (registry, output, ctx) = MakeContext();
+        var (registry, renderer, ctx) = MakeContext();
 
         await registry.TryResolve("/help")!.ExecuteAsync(ctx, "nope", CancellationToken.None);
 
-        var text = output.ToString();
+        var text = renderer.Captured;
         text.Should().Contain("REPL commands");                       // summary
         text.Should().Contain("[help] no such topic 'nope'");         // diagnostic
     }
@@ -84,12 +85,12 @@ public class HelpCommandTests
     [Fact]
     public async Task Topic_is_case_insensitive()
     {
-        var (registry, output, ctx) = MakeContext();
+        var (registry, renderer, ctx) = MakeContext();
 
         await registry.TryResolve("/help")!.ExecuteAsync(ctx, "TASK", CancellationToken.None);
 
         var taskCmd = registry.TryResolve("/task")!;
-        output.ToString().TrimEnd().Should().Be(taskCmd.Details.TrimEnd());
+        renderer.Captured.TrimEnd().Should().Be(taskCmd.Details.TrimEnd());
     }
 
     [Fact]
@@ -110,7 +111,7 @@ public class HelpCommandTests
         rendered.Should().Equal(expected);
     }
 
-    private static (SlashCommandRegistry registry, StringWriter output, SlashCommandContext ctx) MakeContext()
+    private static (SlashCommandRegistry registry, FakeSlashCommandRenderer renderer, SlashCommandContext ctx) MakeContext()
     {
         var registry = new SlashCommandRegistry(new ISlashCommand[]
         {
@@ -124,11 +125,11 @@ public class HelpCommandTests
             new TaskSlashCommand(),
         });
 
-        var output = new StringWriter();
+        var renderer = new FakeSlashCommandRenderer();
         var session = new StubSession();
         var ctx = new SlashCommandContext(
             Session: session,
-            Write: s => output.Write(s),
+            Renderer: renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: "{}",
             GetApprovalMode: null,
@@ -139,7 +140,7 @@ public class HelpCommandTests
             GetLastNumTurns: () => null,
             Actions: new NoopActions(),
             Registry: registry);
-        return (registry, output, ctx);
+        return (registry, renderer, ctx);
     }
 
     private sealed class NoopActions : IReplActions

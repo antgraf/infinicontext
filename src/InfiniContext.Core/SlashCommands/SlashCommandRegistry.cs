@@ -1,13 +1,13 @@
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Immutable lookup of host-handled slash-commands. Resolves by <see cref="ISlashCommand.Name"/>
 /// or any alias, case-insensitively. Sorted views drive the <c>/help</c> output.
 ///
-/// The registry is the single source of truth for "what commands exist" and "what they do" —
+/// The registry is the single source of truth for "what commands exist" and "what they do" --
 /// adding a new command lights up <c>/help</c> automatically; no parallel doc/list to update.
 /// </summary>
-internal sealed class SlashCommandRegistry
+public sealed class SlashCommandRegistry
 {
     private readonly IReadOnlyList<ISlashCommand> _commands;
     private readonly Dictionary<string, ISlashCommand> _byTrigger;
@@ -40,7 +40,7 @@ internal sealed class SlashCommandRegistry
     public ISlashCommand? TryResolve(string nameWithSlash) =>
         _byTrigger.TryGetValue(nameWithSlash, out var cmd) ? cmd : null;
 
-    /// <summary>Commands sorted alphabetically by Name — what <c>/help</c> renders.</summary>
+    /// <summary>Commands sorted alphabetically by Name -- what <c>/help</c> renders.</summary>
     public IReadOnlyList<ISlashCommand> SortedForHelp() =>
         _commands.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToArray();
 }

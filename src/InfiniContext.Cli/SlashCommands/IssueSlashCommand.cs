@@ -1,4 +1,5 @@
 using InfiniContext.Cli.Issues;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
@@ -22,9 +23,11 @@ internal sealed class IssueSlashCommand : ISlashCommand
 
     public async Task ExecuteAsync(SlashCommandContext ctx, string argLine, CancellationToken ct)
     {
-        if (ctx.IssueHandler is null)
+        // Slice A: SlashCommandContext.IssueHandler is typed object? in Core; cast back to the
+        // concrete Cli handler here. Slice C promotes the handler to Core and tightens this.
+        if (ctx.IssueHandler is not IssueCommandHandler issueHandler)
         {
-            ctx.Write("[issue] subsystem is unavailable (see startup warnings).\n");
+            ctx.Renderer.Write("[issue] subsystem is unavailable (see startup warnings).\n");
             return;
         }
 
@@ -35,10 +38,10 @@ internal sealed class IssueSlashCommand : ISlashCommand
 
         if (!IssueCommand.TryParse(raw, out var cmd, out var error))
         {
-            ctx.Write($"[issue] {error}\n");
+            ctx.Renderer.Write($"[issue] {error}\n");
             return;
         }
 
-        await ctx.IssueHandler.HandleAsync(cmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
+        await issueHandler.HandleAsync(cmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
     }
 }

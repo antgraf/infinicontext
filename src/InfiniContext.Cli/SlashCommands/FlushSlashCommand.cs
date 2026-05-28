@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 /// <summary>
@@ -39,13 +41,13 @@ internal sealed class FlushSlashCommand : ISlashCommand
     {
         if (!string.IsNullOrWhiteSpace(argLine))
         {
-            ctx.Write("[flush] this command takes no arguments.\n");
+            ctx.Renderer.Write("[flush] this command takes no arguments.\n");
             return;
         }
 
         if (ctx.ActiveTaskId is not int taskId)
         {
-            ctx.Write("[flush] no active task in this session. /flush only works in task-bound sessions.\n");
+            ctx.Renderer.Write("[flush] no active task in this session. /flush only works in task-bound sessions.\n");
             return;
         }
 
@@ -63,11 +65,11 @@ internal sealed class FlushSlashCommand : ISlashCommand
         }
         catch (Exception ex)
         {
-            ctx.Write($"[flush] dispatch failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[flush] dispatch failed: {ex.Message}\n");
             return;
         }
 
-        ctx.Write($"[flush] requested for task {taskId:D4}; the agent will acknowledge with \"[flushed]\" when done.\n");
+        ctx.Renderer.Write($"[flush] requested for task {taskId:D4}; the agent will acknowledge with \"[flushed]\" when done.\n");
     }
 
     /// <summary>

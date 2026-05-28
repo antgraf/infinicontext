@@ -317,9 +317,145 @@ Operator manually verified both gates from the prior flush and authorised the pu
 - **#6 close-while-maximized follow-up:** confirmed window state is recalled on re-start. Pre-maximize windowed size restored, not screen dimensions.
 - **#12 banner overlay:** confirmed banner is shown on top of the scrollable area against a fresh build. Stale-binary hypothesis was correct; `findings.md` updated from PENDING OPERATOR RE-TEST -> VERIFIED, no code change.
 
-Committing + pushing the cumulative working-tree batch (#7 glue + #11 Deny button + #6 close-while-maximized follow-up + task-surface updates) to `main`.
+Committed `004261b` ("Phase 3B: glue feature, deny button, window-state polish (task 0012).") on `main` and pushed to `origin/main` (`e5fa36f..004261b`). Working tree clean.
 
 **Task 0012 state after this push:**
 - All seven scheduled findings shipped (#2 thresholds, #3 audit, #4 banner readability, #5 New task dialog, #6 + follow-up window state, #9 TreeView collapse, #10 CLI mojibake sweep) plus #7 glue, #11 Deny button, #12 verified-no-change.
 - Three long-term findings moved to `docs/todo.md` (#1 Why & What Happened, #8 task archiving, #13 agent access to harness settings).
 - **No more in-scope work.** Task is a `/task review` candidate.
+
+### Hard-threshold flush (2026-05-25, 114% of 1M)
+
+Host signalled hard context-pressure threshold immediately after the push. Flushing per skill contract; no clarifying questions, no new work.
+
+**State at flush -- nothing mid-flight:**
+- Commit `004261b` on `main`, pushed to `origin/main`. Working tree clean (`git status` verified post-push).
+- All task-surface artifacts (`progress.md`, `findings.md`, `index.md`) reflect operator-verified completion.
+- `docs/todo.md` carries the three long-term findings (#1, #8, #13).
+
+**Pickup for next session:** task 0012 has no in-scope work left. Operator can:
+1. Run `/task review` for a multi-agent pass before closing.
+2. Archive / close task 0012 (no automation for this yet; finding #8 in docs/todo.md is the design for the future "Active/Archived" tree-view + completion ceremony).
+3. Pick up a docs/todo.md item as its own new task.
+
+### Finding #14 design captured (2026-05-25, post-flush)
+
+Operator reversed direction after the hard-threshold flush and asked for finding #14 (slash-commands not wired in GUI) to be implemented, with the constraint "impossible to register a command in one project but not another". Context still at 114% of 1M -- not safe to attempt the full refactor. Captured the design as `design.md` instead so a fresh session can implement cold; no code on disk.
+
+**Design summary (full text in `design.md`):**
+- CLI already has `ISlashCommand` + `SlashCommandRegistry` + per-command classes in `InfiniContext.Cli/SlashCommands/`. The framework is sound; the work is promotion to Core + UI abstraction + single-factory enforcement.
+- **Promote to Core:** `ISlashCommand`, `SlashCommandRegistry`, `SlashCommandContext`, `IReplActions` -> `InfiniContext.Core/SlashCommands/` (public). All command CLASSES move too.
+- **Abstract UI:** new `ISlashCommandRenderer` (WriteLine / WriteTable / WriteError / WriteSuccess / PromptForChoiceAsync / PromptForConfirmAsync). CLI keeps `ConsoleSlashCommandRenderer` (Spectre); GUI adds `GuiSlashCommandRenderer` (Avalonia-native popup).
+- **Single registration site:** `SlashCommandRegistryFactory.Build()` in Core is the only construction path used in production. Both Cli + Gui call it; neither has a `Register(...)` extension surface. Backed by a snapshot test (`RegistrySnapshotTests`) that lists every command -- adding a class without listing it fails the test.
+- **GUI wire-up:** `MainWindowViewModel.SendToSessionAsync` short-circuits on `text.StartsWith("/")` and dispatches via the shared registry; falls through to `SendOrQueueAsync` for non-command input.
+- **Migration:** 5 slices (A promote framework, B introduce renderer, C promote commands, D add factory + snapshot test, E wire GUI dispatch + new `CommandOutputPanel.axaml`). Slices A-D ~1-2h each; E ~3-4h.
+
+**State at this entry:**
+- `design.md` written, indexed in `index.md`.
+- Finding #14 in `findings.md` carries a back-reference to the design doc.
+- No code touched. Task 0012's earlier "no in-scope work" close-out is now superseded -- finding #14's implementation IS in-scope work, but deferred to the next session.
+
+**Pickup for next session (revised):**
+1. Read `design.md`. Pick a slice (A is the smallest, lowest-risk starting point).
+2. Implement slice A (promote framework to Core). Build + tests green before moving on.
+3. Continue B -> C -> D -> E across one or more sessions.
+
+### Finding #14 slice A SHIPPED (2026-05-25)
+
+Slice A from `design.md` -- promote the slash-command framework files from `InfiniContext.Cli/SlashCommands/` to `InfiniContext.Core/SlashCommands/`. No behavioural change.
+
+**Files moved (Cli -> Core, made public):**
+- `ISlashCommand.cs` -- split from the original aggregate file into its own; promoted `internal interface` -> `public interface`.
+- `IReplActions.cs` -- split out from the original aggregate; promoted to `public interface`. Now lives next to `ISlashCommand.cs` instead of being co-located in the same file.
+- `SlashCommandContext.cs` -- split out; promoted to `public sealed record`. The Cli-typed surfaces (`IAnsiConsole? Console`, `TaskCommandHandler? TaskHandler`, `IssueCommandHandler? IssueHandler`) become `object?` because Core can't reference Spectre.Console or Cli types. Consumers in Cli cast back at the call site (TaskSlashCommand, IssueSlashCommand, ListSessionsCommand). Slice B replaces `Console` with the `ISlashCommandRenderer` abstraction; slice C promotes the handlers to Core and tightens these properties.
+- `SlashCommandRegistry.cs` -- promoted to `public sealed class`. Logic unchanged.
+
+**Cli changes (mechanical):**
+- Every `src/InfiniContext.Cli/SlashCommands/*.cs` file picked up a `using InfiniContext.Core.SlashCommands;` so the unqualified `ISlashCommand` / `SlashCommandContext` / `SlashCommandRegistry` / `IReplActions` references resolve from Core instead of the now-empty Cli namespace.
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` picked up the same using; still implements `IReplActions` (now the Core interface) and still constructs `new SlashCommandRegistry(new ISlashCommand[]{...})` (the public ctor is preserved -- slice D adds the factory).
+- `TaskSlashCommand.cs` / `IssueSlashCommand.cs`: `if (ctx.TaskHandler is null)` -> `if (ctx.TaskHandler is not TaskCommandHandler taskHandler)` (single statement covers both null and wrong-type; same external behaviour). Uses `taskHandler` / `issueHandler` locals instead of `ctx.TaskHandler` / `ctx.IssueHandler` thereafter. Inline comment notes the slice-C cleanup.
+- `ListSessionsCommand.cs`: `var console = ctx.Console;` -> `var console = ctx.Console as IAnsiConsole;` (the existing `if (console is null)` fallback now also covers the wrong-type case). Inline comment notes the slice-B cleanup.
+
+**Tests:**
+- All 6 test files under `tests/InfiniContext.Tests/Cli/SlashCommands/` picked up `using InfiniContext.Core.SlashCommands;`. No assertion changes.
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`: removed the `<Compile Include>` link-compile entries for `ISlashCommand.cs` and `SlashCommandRegistry.cs` (they live in Core now; the test assembly picks them up via the existing Core project reference). Inline comment replaces them so future readers understand the omission.
+
+**Verification:**
+- `dotnet build InfiniContext.slnx -c Debug -p:BaseOutputPath=obj/altbuild/ -p:OutDir=bin/altbuild/`: 0 warnings, 0 errors. (Standard `bin/Debug/` blocked by the operator's running GUI instances holding `InfiniContext.Core.dll` -- same env workaround used in prior slices.)
+- `dotnet test InfiniContext.slnx --no-build`: **1036 passed / 3 skipped (POSIX) / 0 failed**, identical to the slice-baseline at commit `004261b`. Slash-command-specific filter: 85 passed / 0 failed.
+- `dotnet format InfiniContext.slnx --verify-no-changes --no-restore`: clean.
+- ASCII-only scan on the four new Core files: zero non-ASCII bytes.
+
+**Working tree at session end:**
+- Added: `src/InfiniContext.Core/SlashCommands/ISlashCommand.cs`, `IReplActions.cs`, `SlashCommandContext.cs`, `SlashCommandRegistry.cs`.
+- Deleted: `src/InfiniContext.Cli/SlashCommands/ISlashCommand.cs`, `src/InfiniContext.Cli/SlashCommands/SlashCommandRegistry.cs`.
+- Modified: `src/InfiniContext.Cli/Ui/MultiSessionHost.cs`, all 14 `src/InfiniContext.Cli/SlashCommands/*.cs` files (using-statement additions + 4 cast-back sites in TaskSlashCommand / IssueSlashCommand / ListSessionsCommand), `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`, all 6 `tests/InfiniContext.Tests/Cli/SlashCommands/*.cs` files (using-statement additions). Plus task-surface updates (`progress.md`, `index.md`).
+- No commits.
+
+**Pickup for next session (slice B):**
+- Add `ISlashCommandRenderer` interface in `InfiniContext.Core/SlashCommands/`. Methods per design.md section "The five UI-coupled surfaces": `WriteLine(string)`, `WriteTable(headers, rows)`, `WriteMarkup(text)`, `WriteError(text)`, `WriteSuccess(text)`, `WriteWarning(text)`, `PromptForChoiceAsync(label, options, ct)`, `PromptForConfirmAsync(label, ct)`.
+- Implement `ConsoleSlashCommandRenderer : ISlashCommandRenderer` in `InfiniContext.Cli/` (Spectre-backed). Replace `Action<string> Write` + `object? Console` on `SlashCommandContext` with a single `Renderer` field.
+- Mechanically port each Cli command's `ctx.Write(...)` / `ctx.Console.Write(...)` to the renderer. Existing tests rewrite to a `FakeSlashCommandRenderer` (`StringBuilder`-backed). Most tests already capture output via `Action<string>` so renaming is mechanical.
+- Build + tests + format gate green before moving on to slice C.
+
+### Hard-threshold flush (2026-05-25, 1380% of 1M)
+
+Host signalled hard context-pressure threshold immediately after slice A landed. Flushing per skill contract; no new work.
+
+**State at flush -- nothing mid-flight:**
+- Slice A (framework promotion) FULLY SHIPPED and documented in the preceding entry. Code on disk; build + tests + format all green; new files ASCII-only.
+- Working tree carries slice A's changes on top of the prior unrelated `M` files (`findings.md`). No commits this session.
+- `progress.md` and `index.md` reflect slice A; no other artifacts pending writes.
+
+**Pickup for next session:** slice B per `design.md` -- see the "Pickup for next session (slice B)" bullets in the preceding entry. No clarifying questions; the design doc + the per-slice plan are sufficient to start cold.
+
+### Finding #14 slice B SHIPPED (2026-05-25)
+
+Slice B from `design.md` -- introduce `ISlashCommandRenderer`, route every CLI command's output through it, replace `Action<string> Write` + `object? Console` on `SlashCommandContext` with a single `Renderer` field.
+
+**New files:**
+- `src/InfiniContext.Core/SlashCommands/ISlashCommandRenderer.cs` -- the UI seam every slash-command writes through. Eight methods: `Write` (no-newline), `WriteLine` (newline), `WriteMarkup`, `WriteError`, `WriteSuccess`, `WriteWarning`, `WriteTable(title, headers, rows)`, `PromptForChoiceAsync`, `PromptForConfirmAsync`. Conservative shapes: raw strings + simple table cells; styling is the renderer's concern.
+- `src/InfiniContext.Cli/SlashCommands/ConsoleSlashCommandRenderer.cs` -- Spectre-backed implementation. Wraps the host's `_writeLock` so transcript-reader fragment appends and slash-command writes don't interleave mid-line. `WriteTable` builds a `Spectre.Console.Table` with `Markup.Escape` on every cell; `WriteError` / `WriteSuccess` / `WriteWarning` use red / green / yellow `MarkupLine`. Prompts use `SelectionPrompt<string>` + `Confirm`.
+- `tests/InfiniContext.Tests/Cli/SlashCommands/FakeSlashCommandRenderer.cs` -- `StringBuilder`-backed test double. `Captured` returns the accumulated output. Table rendering uses `header1 | header2 \n cell | cell \n` form -- enough fidelity for "does string X appear" assertions without pulling Spectre into the test assembly. `PromptForChoiceAsync` / `PromptForConfirmAsync` throw `NotSupportedException` (tests don't exercise interactive prompts).
+
+**Core changes:**
+- `src/InfiniContext.Core/SlashCommands/SlashCommandContext.cs` -- positional record param `Action<string> Write` replaced with `ISlashCommandRenderer Renderer`. Init-only `object? Console` property removed entirely. Doc comments updated to point at slice C for the remaining `object?` typings on `TaskHandler` / `IssueHandler`.
+
+**Cli changes (mechanical):**
+- `src/InfiniContext.Cli/Ui/MultiSessionHost.cs` -- new `_renderer` field constructed once in the ctor as `new ConsoleSlashCommandRenderer(_console, _writeLock)`. `BuildContext()` passes `Renderer: _renderer` (replacing the old `Write: Write` positional arg) and drops the `Console = _console` init property.
+- Every `src/InfiniContext.Cli/SlashCommands/*Command.cs` (13 files): `ctx.Write(...)` -> `ctx.Renderer.Write(...)` via a single `replace_all` per file. No behaviour change.
+- `src/InfiniContext.Cli/SlashCommands/ListSessionsCommand.cs` -- the one command that used `ctx.Console as IAnsiConsole` for Spectre tables. Rewritten to call `ctx.Renderer.WriteTable(title, headers, rows)` twice (active + recent). The plain-text fallback that was needed when `ctx.Console` was null is gone because the renderer is now non-nullable. Cells pass raw strings (no `Markup.Escape` at the call site) -- escaping is the renderer's job.
+
+**Tests:**
+- `tests/InfiniContext.Tests/Cli/SlashCommands/HelpCommandTests.cs`, `NewSessionCommandTests.cs`, `BroadcastCommandTests.cs`, `FocusCommandTests.cs`, `FlushSlashCommandTests.cs` -- each rewritten to construct a `FakeSlashCommandRenderer` instead of a `StringWriter` + `Action<string> Write` lambda. Fixture types that exposed `Output { get; init; } as StringWriter` now expose `Renderer { get; init; } as FakeSlashCommandRenderer` and a `string Output => Renderer.Captured` getter so the `fx.Output.Should().Contain(...)` call shape stays unchanged. `SlashCommandRegistryTests.cs` had no `SlashCommandContext` references and needed no changes.
+- `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` -- new `<Compile Include>` link entry for `ConsoleSlashCommandRenderer.cs` (the host instantiates it inside the linked `MultiSessionHost.cs`).
+
+**Verification:**
+- `dotnet build InfiniContext.slnx -c Debug -p:BaseOutputPath=obj/altbuild/ -p:OutDir=bin/altbuild/`: 0 warnings, 0 errors. (Standard `bin/Debug/` still blocked by operator's running GUI instances holding `InfiniContext.Core.dll` -- same env workaround as slice A and prior slices.)
+- `dotnet test InfiniContext.slnx --no-build`: **1036 passed / 3 skipped (POSIX) / 0 failed**, identical to the slice-A baseline at commit `004261b`.
+- `dotnet format InfiniContext.slnx --verify-no-changes --no-restore`: clean.
+- ASCII-only scan on the three new files: zero non-ASCII bytes.
+
+**Working tree at session end (cumulative across slices A + B):**
+- Added: `src/InfiniContext.Core/SlashCommands/ISlashCommand.cs`, `IReplActions.cs`, `SlashCommandContext.cs`, `SlashCommandRegistry.cs` (slice A); `src/InfiniContext.Core/SlashCommands/ISlashCommandRenderer.cs`, `src/InfiniContext.Cli/SlashCommands/ConsoleSlashCommandRenderer.cs`, `tests/InfiniContext.Tests/Cli/SlashCommands/FakeSlashCommandRenderer.cs` (slice B).
+- Deleted (slice A): `src/InfiniContext.Cli/SlashCommands/ISlashCommand.cs`, `src/InfiniContext.Cli/SlashCommands/SlashCommandRegistry.cs`.
+- Modified across both slices: `src/InfiniContext.Cli/Ui/MultiSessionHost.cs`, all 14 `src/InfiniContext.Cli/SlashCommands/*.cs` files, `src/InfiniContext.Core/SlashCommands/SlashCommandContext.cs`, `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`, all 6 `tests/InfiniContext.Tests/Cli/SlashCommands/*.cs` files, plus task-surface (`progress.md`, `index.md`).
+- No commits.
+
+**Pickup for next session (slice C):**
+- Promote each command class from `src/InfiniContext.Cli/SlashCommands/*Command.cs` to `src/InfiniContext.Core/SlashCommands/`. Make each `internal sealed` -> `public sealed`. Update namespaces from `InfiniContext.Cli.SlashCommands` to `InfiniContext.Core.SlashCommands`.
+- Slice C also tightens `SlashCommandContext.TaskHandler` and `SlashCommandContext.IssueHandler` from `object?` to the actual handler types. This requires promoting `TaskCommandHandler` (currently in `src/InfiniContext.Cli/Tasks/`) and `IssueCommandHandler` (currently in `src/InfiniContext.Cli/Issues/`) to Core as well -- bigger lift than the command moves. Decide at slice-C start whether to do it in one batch or split (handlers in slice C, commands in C', or vice versa).
+- `TaskSlashCommand.cs` and `IssueSlashCommand.cs` currently cast `ctx.TaskHandler`/`ctx.IssueHandler` from `object?` to the concrete types; the cast becomes a no-op (or vanishes) once the types are promoted. The inline `// slice-C cleanup` comments mark the affected sites.
+- `ListSessionsCommand.cs`'s old slice-A `// slice-B cleanup` comment is already gone (the cast was the file's whole reason for using `IAnsiConsole`; removing it removed the comment).
+- Build + tests + format gate green before slice D.
+
+### Hard-threshold flush (2026-05-25, 1425% of 1M)
+
+Host signalled hard context-pressure threshold immediately after slice B landed. Flushing per skill contract; no new work.
+
+**State at flush -- nothing mid-flight:**
+- Slice B FULLY SHIPPED and documented in the preceding entry. All code on disk; build + tests + format all green; new files ASCII-only.
+- `progress.md` and `index.md` reflect slice B; no other artifacts pending writes.
+- Working tree carries the cumulative slice A + B changes on top of clean `main` (commit `004261b`). No commits this session.
+
+**Pickup for next session:** slice C per `design.md` -- see "Pickup for next session (slice C)" bullets in the preceding entry. Decide upfront whether to bundle handler promotion with command promotion in one slice or split. Design doc + per-slice plan are sufficient to start cold; no clarifying questions outstanding.

@@ -4,6 +4,7 @@ using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -16,13 +17,13 @@ public class FlushSlashCommandTests
     public async Task Refuses_when_no_active_task_in_focused_session()
     {
         var session = new FakeSession();
-        var output = new StringWriter();
-        var ctx = MakeContext(session, output, activeTaskId: null);
+        var renderer = new FakeSlashCommandRenderer();
+        var ctx = MakeContext(session, renderer, activeTaskId: null);
         var cmd = new FlushSlashCommand();
 
         await cmd.ExecuteAsync(ctx, "", CancellationToken.None);
 
-        output.ToString().Should().Contain("[flush] no active task");
+        renderer.Captured.Should().Contain("[flush] no active task");
         session.Sent.Should().BeEmpty();
     }
 
@@ -30,8 +31,8 @@ public class FlushSlashCommandTests
     public async Task Sends_nudge_with_task_id_when_active_task_is_set()
     {
         var session = new FakeSession();
-        var output = new StringWriter();
-        var ctx = MakeContext(session, output, activeTaskId: 42);
+        var renderer = new FakeSlashCommandRenderer();
+        var ctx = MakeContext(session, renderer, activeTaskId: 42);
         var cmd = new FlushSlashCommand();
 
         await cmd.ExecuteAsync(ctx, "", CancellationToken.None);
@@ -42,20 +43,20 @@ public class FlushSlashCommandTests
         msg.Should().Contain("progress.md");
         msg.Should().Contain("index.md");
         msg.Should().Contain("[flushed]");
-        output.ToString().Should().Contain("[flush] requested for task 0042");
+        renderer.Captured.Should().Contain("[flush] requested for task 0042");
     }
 
     [Fact]
     public async Task Pads_task_id_to_four_digits_in_the_console_message()
     {
         var session = new FakeSession();
-        var output = new StringWriter();
-        var ctx = MakeContext(session, output, activeTaskId: 7);
+        var renderer = new FakeSlashCommandRenderer();
+        var ctx = MakeContext(session, renderer, activeTaskId: 7);
         var cmd = new FlushSlashCommand();
 
         await cmd.ExecuteAsync(ctx, "", CancellationToken.None);
 
-        output.ToString().Should().Contain("task 0007");
+        renderer.Captured.Should().Contain("task 0007");
         session.Sent[0].Should().Contain("0007");
     }
 
@@ -63,13 +64,13 @@ public class FlushSlashCommandTests
     public async Task Refuses_when_args_are_provided()
     {
         var session = new FakeSession();
-        var output = new StringWriter();
-        var ctx = MakeContext(session, output, activeTaskId: 42);
+        var renderer = new FakeSlashCommandRenderer();
+        var ctx = MakeContext(session, renderer, activeTaskId: 42);
         var cmd = new FlushSlashCommand();
 
         await cmd.ExecuteAsync(ctx, "unexpected arg", CancellationToken.None);
 
-        output.ToString().Should().Contain("takes no arguments");
+        renderer.Captured.Should().Contain("takes no arguments");
         session.Sent.Should().BeEmpty();
     }
 
@@ -77,13 +78,13 @@ public class FlushSlashCommandTests
     public async Task Surfaces_dispatch_failure_without_crashing()
     {
         var session = new FakeSession { SendThrows = new IOException("pipe closed") };
-        var output = new StringWriter();
-        var ctx = MakeContext(session, output, activeTaskId: 42);
+        var renderer = new FakeSlashCommandRenderer();
+        var ctx = MakeContext(session, renderer, activeTaskId: 42);
         var cmd = new FlushSlashCommand();
 
         await cmd.ExecuteAsync(ctx, "", CancellationToken.None);
 
-        output.ToString().Should().Contain("[flush] dispatch failed: pipe closed");
+        renderer.Captured.Should().Contain("[flush] dispatch failed: pipe closed");
     }
 
     [Fact]
@@ -101,10 +102,10 @@ public class FlushSlashCommandTests
 
     // ---------- Helpers ----------
 
-    private static SlashCommandContext MakeContext(FakeSession session, StringWriter output, int? activeTaskId) =>
+    private static SlashCommandContext MakeContext(FakeSession session, FakeSlashCommandRenderer renderer, int? activeTaskId) =>
         new(
             Session: session,
-            Write: s => output.Write(s),
+            Renderer: renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: null,
             GetApprovalMode: null,

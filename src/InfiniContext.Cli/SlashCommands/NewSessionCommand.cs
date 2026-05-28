@@ -1,4 +1,5 @@
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
@@ -28,19 +29,19 @@ internal sealed class NewSessionCommand : ISlashCommand
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[n] multi-session not available in this host\n");
+            ctx.Renderer.Write("[n] multi-session not available in this host\n");
             return;
         }
 
         var cwd = argLine.Trim();
         if (cwd.Length == 0)
         {
-            ctx.Write("[n] usage: /n <cwd>\n");
+            ctx.Renderer.Write("[n] usage: /n <cwd>\n");
             return;
         }
         if (!Directory.Exists(cwd))
         {
-            ctx.Write($"[n] cwd does not exist: {cwd}\n");
+            ctx.Renderer.Write($"[n] cwd does not exist: {cwd}\n");
             return;
         }
 
@@ -59,11 +60,11 @@ internal sealed class NewSessionCommand : ISlashCommand
         }
         catch (Exception ex)
         {
-            ctx.Write($"[n] failed to start session: {ex.Message}\n");
+            ctx.Renderer.Write($"[n] failed to start session: {ex.Message}\n");
             return;
         }
 
-        ctx.Write($"[n] opened {newSession.Id:D} at {cwd}\n");
+        ctx.Renderer.Write($"[n] opened {newSession.Id:D} at {cwd}\n");
         ctx.Actions.RequestFocus(newSession.Id);
     }
 }

@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 internal sealed class ApprovalCommand : ISlashCommand
@@ -25,19 +27,19 @@ internal sealed class ApprovalCommand : ISlashCommand
         if (arg.Length == 0)
         {
             var current = ctx.GetApprovalMode?.Invoke().ToString().ToLowerInvariant() ?? "<unknown>";
-            ctx.Write($"[approval] mode={current}. Usage: /approval <ask|deny|allow|auto>\n");
+            ctx.Renderer.Write($"[approval] mode={current}. Usage: /approval <ask|deny|allow|auto>\n");
             return Task.CompletedTask;
         }
 
         if (ctx.SwitchApprovalMode is null)
         {
-            ctx.Write("[approval] mode switching is unavailable in this context\n");
+            ctx.Renderer.Write("[approval] mode switching is unavailable in this context\n");
             return Task.CompletedTask;
         }
 
         if (!RunArgs.TryParseApprovalMode(arg, out var requested))
         {
-            ctx.Write($"[approval] '{arg}' is not one of ask, deny, allow, auto\n");
+            ctx.Renderer.Write($"[approval] '{arg}' is not one of ask, deny, allow, auto\n");
             return Task.CompletedTask;
         }
 
@@ -45,13 +47,13 @@ internal sealed class ApprovalCommand : ISlashCommand
         {
             var effective = ctx.SwitchApprovalMode(requested);
             if (effective != requested)
-                ctx.Write($"[approval] requested={requested.ToString().ToLowerInvariant()} but using {effective.ToString().ToLowerInvariant()} (see warnings above)\n");
+                ctx.Renderer.Write($"[approval] requested={requested.ToString().ToLowerInvariant()} but using {effective.ToString().ToLowerInvariant()} (see warnings above)\n");
             else
-                ctx.Write($"[approval] mode={effective.ToString().ToLowerInvariant()}\n");
+                ctx.Renderer.Write($"[approval] mode={effective.ToString().ToLowerInvariant()}\n");
         }
         catch (Exception ex)
         {
-            ctx.Write($"[approval] switch failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[approval] switch failed: {ex.Message}\n");
         }
         return Task.CompletedTask;
     }

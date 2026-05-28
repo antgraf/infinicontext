@@ -4,6 +4,7 @@ using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -37,7 +38,7 @@ public class FocusCommandTests
 
         await cmd.ExecuteAsync(fx.Context, "zzzzz", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("no active session matches");
+        fx.Output.Should().Contain("no active session matches");
         fx.Actions.FocusRequests.Should().BeEmpty();
     }
 
@@ -52,7 +53,7 @@ public class FocusCommandTests
 
         await cmd.ExecuteAsync(fx.Context, "", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("usage: /focus");
+        fx.Output.Should().Contain("usage: /focus");
     }
 
     [Fact]
@@ -91,12 +92,14 @@ public class FocusCommandTests
     {
         public required SessionManager Mgr { get; init; }
         public required RecordingActions Actions { get; init; }
-        public required StringWriter Output { get; init; }
+        public required FakeSlashCommandRenderer Renderer { get; init; }
         public Guid? FocusedId { get; set; }
+
+        public string Output => Renderer.Captured;
 
         public SlashCommandContext Context => new(
             Session: new FakeSession(),
-            Write: s => Output.Write(s),
+            Renderer: Renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: null,
             GetApprovalMode: null,
@@ -127,7 +130,7 @@ public class FocusCommandTests
             {
                 Mgr = mgr,
                 Actions = new RecordingActions(),
-                Output = new StringWriter(),
+                Renderer = new FakeSlashCommandRenderer(),
             };
         }
 

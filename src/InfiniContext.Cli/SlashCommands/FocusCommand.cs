@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 /// <summary>
@@ -24,13 +26,13 @@ internal sealed class FocusCommand : ISlashCommand
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[focus] multi-session not available in this host\n");
+            ctx.Renderer.Write("[focus] multi-session not available in this host\n");
             return Task.CompletedTask;
         }
         var arg = argLine.Trim();
         if (arg.Length == 0)
         {
-            ctx.Write("[focus] usage: /focus <host-id-or-prefix>\n");
+            ctx.Renderer.Write("[focus] usage: /focus <host-id-or-prefix>\n");
             return Task.CompletedTask;
         }
 
@@ -38,12 +40,12 @@ internal sealed class FocusCommand : ISlashCommand
         var matches = active.Where(c => c.Id.ToString("D").StartsWith(arg, StringComparison.OrdinalIgnoreCase)).ToList();
         if (matches.Count == 0)
         {
-            ctx.Write($"[focus] no active session matches '{arg}'\n");
+            ctx.Renderer.Write($"[focus] no active session matches '{arg}'\n");
             return Task.CompletedTask;
         }
         if (matches.Count > 1)
         {
-            ctx.Write($"[focus] '{arg}' is ambiguous ({matches.Count} matches); use /list and try a longer prefix\n");
+            ctx.Renderer.Write($"[focus] '{arg}' is ambiguous ({matches.Count} matches); use /list and try a longer prefix\n");
             return Task.CompletedTask;
         }
         ctx.Actions.RequestFocus(matches[0].Id);
@@ -86,13 +88,13 @@ internal static class FocusCycle
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[focus] multi-session not available in this host\n");
+            ctx.Renderer.Write("[focus] multi-session not available in this host\n");
             return Task.CompletedTask;
         }
         var active = ctx.SessionManager.Active;
         if (active.Count <= 1)
         {
-            ctx.Write("[focus] only one active session\n");
+            ctx.Renderer.Write("[focus] only one active session\n");
             return Task.CompletedTask;
         }
         // Find current focus index (or pretend we're at -1 if the focused id is unknown to the

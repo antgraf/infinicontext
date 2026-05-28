@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 internal sealed class StateCommand : ISlashCommand
@@ -23,7 +25,7 @@ internal sealed class StateCommand : ISlashCommand
         var unknownTypes = ctx.Session.UnknownEventCount;
         var malformed = ctx.Session.MalformedLineCount;
         var active = ctx.SessionManager?.ActiveCount ?? 1;
-        ctx.Write($"[state] {s.State} | open_tools={s.OpenToolUses.Count} | drift=unk:{unknownTypes}/malformed:{malformed} | active_sessions={active} | session={session}\n");
+        ctx.Renderer.Write($"[state] {s.State} | open_tools={s.OpenToolUses.Count} | drift=unk:{unknownTypes}/malformed:{malformed} | active_sessions={active} | session={session}\n");
 
         if (unknownTypes > 0 && ctx.Session.UnknownTypeHistogram.Count > 0)
         {
@@ -31,7 +33,7 @@ internal sealed class StateCommand : ISlashCommand
                 .OrderByDescending(kv => kv.Value)
                 .Take(5)
                 .Select(kv => $"{kv.Key}:{kv.Value}");
-            ctx.Write($"        unknown-types: {string.Join(", ", top)}\n");
+            ctx.Renderer.Write($"        unknown-types: {string.Join(", ", top)}\n");
         }
         return Task.CompletedTask;
     }

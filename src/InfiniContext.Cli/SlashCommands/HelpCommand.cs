@@ -1,4 +1,5 @@
 using System.Text;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
@@ -31,19 +32,19 @@ internal sealed class HelpCommand : ISlashCommand
         var topic = argLine.Trim();
         if (topic.Length == 0)
         {
-            ctx.Write(RenderSummary(ctx.Registry));
+            ctx.Renderer.Write(RenderSummary(ctx.Registry));
             return Task.CompletedTask;
         }
 
         var resolved = ResolveTopic(ctx.Registry, topic);
         if (resolved is null)
         {
-            ctx.Write(RenderSummary(ctx.Registry));
-            ctx.Write($"[help] no such topic '{topic}'\n");
+            ctx.Renderer.Write(RenderSummary(ctx.Registry));
+            ctx.Renderer.Write($"[help] no such topic '{topic}'\n");
             return Task.CompletedTask;
         }
 
-        ctx.Write(resolved.Details.TrimEnd() + "\n");
+        ctx.Renderer.Write(resolved.Details.TrimEnd() + "\n");
         return Task.CompletedTask;
     }
 

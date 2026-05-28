@@ -4,6 +4,7 @@ using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using Serilog;
@@ -36,6 +37,7 @@ internal sealed class MultiSessionHost : IReplActions
     private readonly object _writeLock;
     private readonly InfiniContextSettings _settings;
     private readonly SlashCommandRegistry _registry;
+    private readonly ConsoleSlashCommandRenderer _renderer;
     private readonly string? _effectiveSettingsJson;
     private readonly Func<ApprovalMode>? _getApprovalMode;
     private readonly Func<ApprovalMode, ApprovalMode>? _switchApprovalMode;
@@ -88,6 +90,7 @@ internal sealed class MultiSessionHost : IReplActions
         _tryEnterTask = tryEnterTask;
         _manager = sessionManager;
         _autoRotationGuard = autoRotationGuard;
+        _renderer = new ConsoleSlashCommandRenderer(_console, _writeLock);
 
         _registry = new SlashCommandRegistry(new ISlashCommand[]
         {
@@ -288,7 +291,7 @@ internal sealed class MultiSessionHost : IReplActions
     private SlashCommandContext BuildContext() =>
         new(
             Session: _focused.Session,
-            Write: Write,
+            Renderer: _renderer,
             Settings: _settings,
             EffectiveSettingsJson: _effectiveSettingsJson,
             GetApprovalMode: _getApprovalMode,
@@ -301,7 +304,6 @@ internal sealed class MultiSessionHost : IReplActions
             Registry: _registry)
         {
             SessionManager = _manager,
-            Console = _console,
             FocusedHostSessionId = _focused.Id,
             ActiveTaskId = _focused.ActiveTaskId,
             IssueHandler = _issueHandler,

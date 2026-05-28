@@ -52,3 +52,10 @@ Operator re-tested against a fresh build on 2026-05-25 and confirmed: the banner
 
 ## 13. Agent access to harness settings (e.g. switch approval mode) [MOVED to docs/todo.md - separate ticket]
 Today the agent cannot inspect or change host/harness settings - approval mode, model selection, thresholds, etc. - despite being the entity that most often discovers it needs to. Example: an agent doing an extended autonomous loop knows it would like to flip to `auto` approval to avoid stalling, but has no surface to do so. Operator flagged this as a larger feature deserving its own ticket; full design (security boundary, scope of settable surface, audit trail, UI surfacing of agent-initiated changes) lives in `docs/todo.md` under its own item.
+
+## 14. Slash commands not wired in GUI input
+The CLI (`MultiSessionHost`) parses `/n`, `/focus`, `/next`, `/prev`, `/broadcast`, `/approval`, `/task ...` (incl. `/task switch`, `/task review`) etc. from its input loop in `Program.cs`. The GUI input box (`MainWindowViewModel.SendToSessionAsync`) routes whatever the operator types straight to `SessionRowViewModel.SendOrQueueAsync` -- there is no `/`-prefix dispatcher, so `/task review` is sent to claude as a chat message instead of being intercepted by the host.
+
+Fix shape: in `MainWindowViewModel.SendToSessionAsync` (or a new `TryHandleSlashCommandAsync` helper), short-circuit on `text.StartsWith("/")` and dispatch to the same command handlers the CLI uses. Cleanest factoring: promote `MultiSessionHost`'s command parser into a shared component in `InfiniContext.Core` (see [[feedback_no_cli_code_duplication]]) -- both the CLI and GUI consume it. Bounded but non-trivial because the CLI parser is tangled with `Spectre.Console` rendering today; the shared component would need to return structured `CommandResult` records that the GUI can render its own way.
+
+Out of scope for current task 0012; logging as a new finding so it doesn't get lost. Candidate for its own slice (or a fresh task) given the refactor scope.

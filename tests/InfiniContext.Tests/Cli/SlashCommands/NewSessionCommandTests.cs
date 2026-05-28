@@ -4,6 +4,7 @@ using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -16,13 +17,13 @@ public class NewSessionCommandTests
     [Fact]
     public async Task Without_cwd_argument_prints_usage()
     {
-        var (mgr, ctx, actions, output) = await BuildAsync();
+        var (mgr, ctx, actions, renderer) = await BuildAsync();
         await using var _ = mgr;
         var cmd = new NewSessionCommand();
 
         await cmd.ExecuteAsync(ctx, "", CancellationToken.None);
 
-        output.ToString().Should().Contain("usage: /n <cwd>");
+        renderer.Captured.Should().Contain("usage: /n <cwd>");
         mgr.ActiveCount.Should().Be(0);
         actions.FocusRequests.Should().BeEmpty();
     }
@@ -30,21 +31,21 @@ public class NewSessionCommandTests
     [Fact]
     public async Task With_missing_cwd_prints_error()
     {
-        var (mgr, ctx, actions, output) = await BuildAsync();
+        var (mgr, ctx, actions, renderer) = await BuildAsync();
         await using var _ = mgr;
         var cmd = new NewSessionCommand();
 
         var bogus = Path.Combine(Path.GetTempPath(), $"cp-nope-{Guid.NewGuid():N}");
         await cmd.ExecuteAsync(ctx, bogus, CancellationToken.None);
 
-        output.ToString().Should().Contain("cwd does not exist");
+        renderer.Captured.Should().Contain("cwd does not exist");
         mgr.ActiveCount.Should().Be(0);
     }
 
     [Fact]
     public async Task Valid_cwd_spawns_session_and_requests_focus()
     {
-        var (mgr, ctx, actions, output) = await BuildAsync();
+        var (mgr, ctx, actions, renderer) = await BuildAsync();
         await using var _ = mgr;
         var cmd = new NewSessionCommand();
 
@@ -53,12 +54,12 @@ public class NewSessionCommandTests
         mgr.ActiveCount.Should().Be(1);
         actions.FocusRequests.Should().ContainSingle()
             .Which.Should().Be(mgr.Active[0].Id);
-        output.ToString().Should().Contain("[n] opened");
+        renderer.Captured.Should().Contain("[n] opened");
     }
 
-    private static async Task<(SessionManager mgr, SlashCommandContext ctx, RecordingActions actions, StringWriter output)> BuildAsync()
+    private static async Task<(SessionManager mgr, SlashCommandContext ctx, RecordingActions actions, FakeSlashCommandRenderer renderer)> BuildAsync()
     {
-        var output = new StringWriter();
+        var renderer = new FakeSlashCommandRenderer();
         var mgr = await SessionManager.OpenAsync(
             InfiniContextSettings.Defaults,
             Log.Logger,
@@ -69,7 +70,7 @@ public class NewSessionCommandTests
         var registry = new SlashCommandRegistry(new ISlashCommand[] { new NewSessionCommand() });
         var ctx = new SlashCommandContext(
             Session: new FakeSession(),
-            Write: s => output.Write(s),
+            Renderer: renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: null,
             GetApprovalMode: null,
@@ -83,7 +84,7 @@ public class NewSessionCommandTests
         {
             SessionManager = mgr,
         };
-        return (mgr, ctx, actions, output);
+        return (mgr, ctx, actions, renderer);
     }
 
     private sealed class RecordingActions : IReplActions

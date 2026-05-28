@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 internal sealed class CostCommand : ISlashCommand
@@ -18,9 +20,9 @@ internal sealed class CostCommand : ISlashCommand
         var cost = ctx.GetLastCostUsd();
         var turns = ctx.GetLastNumTurns();
         if (cost is { } c)
-            ctx.Write($"[cost] ${c:F6} ({turns?.ToString() ?? "?"} turns)\n");
+            ctx.Renderer.Write($"[cost] ${c:F6} ({turns?.ToString() ?? "?"} turns)\n");
         else
-            ctx.Write("[cost] no completed turns yet\n");
+            ctx.Renderer.Write("[cost] no completed turns yet\n");
         return Task.CompletedTask;
     }
 }

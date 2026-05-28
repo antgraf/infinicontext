@@ -1,4 +1,5 @@
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 
 namespace InfiniContext.Cli.SlashCommands;
 
@@ -35,13 +36,13 @@ internal sealed class ResumeCommand : ISlashCommand
 
         if (string.IsNullOrEmpty(target))
         {
-            ctx.Write("[resume] no session id provided and no current session id is known yet.\n");
+            ctx.Renderer.Write("[resume] no session id provided and no current session id is known yet.\n");
             return;
         }
 
         if (!Guid.TryParse(target, out _))
         {
-            ctx.Write($"[resume] '{target}' is not a valid session id (expected a UUID).\n");
+            ctx.Renderer.Write($"[resume] '{target}' is not a valid session id (expected a UUID).\n");
             return;
         }
 
@@ -65,18 +66,18 @@ internal sealed class ResumeCommand : ISlashCommand
             try
             {
                 var spawned = await ctx.SessionManager.CreateAsync(request, ct).ConfigureAwait(false);
-                ctx.Write($"[resume] opened {spawned.Id:D} as resume of {target}\n");
+                ctx.Renderer.Write($"[resume] opened {spawned.Id:D} as resume of {target}\n");
                 ctx.Actions.RequestFocus(spawned.Id);
             }
             catch (Exception ex)
             {
-                ctx.Write($"[resume] failed: {ex.Message}\n");
+                ctx.Renderer.Write($"[resume] failed: {ex.Message}\n");
             }
             return;
         }
 
         // Fallback: legacy destructive resume for tests/contexts without a SessionManager.
-        ctx.Write($"[resume] switching to session {target}…\n");
+        ctx.Renderer.Write($"[resume] switching to session {target}…\n");
         ctx.Actions.RequestResume(target);
     }
 }

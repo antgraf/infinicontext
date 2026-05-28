@@ -1,3 +1,5 @@
+using InfiniContext.Core.SlashCommands;
+
 namespace InfiniContext.Cli.SlashCommands;
 
 internal sealed class SettingsCommand : ISlashCommand
@@ -16,8 +18,8 @@ internal sealed class SettingsCommand : ISlashCommand
 
     public Task ExecuteAsync(SlashCommandContext ctx, string argLine, CancellationToken ct)
     {
-        ctx.Write(ctx.EffectiveSettingsJson ?? "[settings] no effective config available\n");
-        ctx.Write("\n");
+        ctx.Renderer.Write(ctx.EffectiveSettingsJson ?? "[settings] no effective config available\n");
+        ctx.Renderer.Write("\n");
         return Task.CompletedTask;
     }
 }

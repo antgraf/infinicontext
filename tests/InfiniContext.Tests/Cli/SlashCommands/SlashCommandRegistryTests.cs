@@ -1,4 +1,5 @@
 using InfiniContext.Cli.SlashCommands;
+using InfiniContext.Core.SlashCommands;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Cli.SlashCommands;

@@ -4,6 +4,7 @@ using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
@@ -24,7 +25,7 @@ public class BroadcastCommandTests
         await cmd.ExecuteAsync(fx.Context, "", CancellationToken.None);
         await cmd.ExecuteAsync(fx.Context, "*", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("usage: /broadcast");
+        fx.Output.Should().Contain("usage: /broadcast");
     }
 
     [Fact]
@@ -39,7 +40,7 @@ public class BroadcastCommandTests
 
         ((FakeSession)a.Session).Sent.Should().Equal(new[] { "run the suite" });
         ((FakeSession)b.Session).Sent.Should().Equal(new[] { "run the suite" });
-        fx.Output.ToString().Should().Contain("sent to 2/2");
+        fx.Output.Should().Contain("sent to 2/2");
     }
 
     [Fact]
@@ -70,7 +71,7 @@ public class BroadcastCommandTests
 
         await cmd.ExecuteAsync(fx.Context, "zzzzzz,abcdef hi", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("no active session matches 'zzzzzz'");
+        fx.Output.Should().Contain("no active session matches 'zzzzzz'");
         ((FakeSession)a.Session).Sent.Should().BeEmpty();
         ((FakeSession)b.Session).Sent.Should().BeEmpty();
     }
@@ -88,7 +89,7 @@ public class BroadcastCommandTests
 
         await cmd.ExecuteAsync(fx.Context, $"{prefixA} solo", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("needs at least two targets");
+        fx.Output.Should().Contain("needs at least two targets");
         ((FakeSession)a.Session).Sent.Should().BeEmpty();
     }
 
@@ -100,7 +101,7 @@ public class BroadcastCommandTests
 
         await cmd.ExecuteAsync(fx.Context, "* hi", CancellationToken.None);
 
-        fx.Output.ToString().Should().Contain("no active sessions");
+        fx.Output.Should().Contain("no active sessions");
     }
 
     [Fact]
@@ -114,7 +115,7 @@ public class BroadcastCommandTests
 
         await cmd.ExecuteAsync(fx.Context, "* ping", CancellationToken.None);
 
-        var output = fx.Output.ToString();
+        var output = fx.Output;
         output.Should().Contain("sent to 1/2");
         output.Should().Contain("1 failed");
         output.Should().Contain("disconnected");
@@ -123,9 +124,10 @@ public class BroadcastCommandTests
     [Fact]
     public async Task Without_session_manager_reports_unsupported()
     {
+        var renderer = new FakeSlashCommandRenderer();
         var ctx = new SlashCommandContext(
             Session: new FakeSession(),
-            Write: _ => { },
+            Renderer: renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: null,
             GetApprovalMode: null,
@@ -136,24 +138,24 @@ public class BroadcastCommandTests
             GetLastNumTurns: () => null,
             Actions: new NoopActions(),
             Registry: new SlashCommandRegistry(Array.Empty<ISlashCommand>()));
-        var output = new StringWriter();
-        var withWrite = ctx with { Write = s => output.Write(s) };
         var cmd = new BroadcastCommand();
 
-        await cmd.ExecuteAsync(withWrite, "* hello", CancellationToken.None);
+        await cmd.ExecuteAsync(ctx, "* hello", CancellationToken.None);
 
-        output.ToString().Should().Contain("multi-session not available");
+        renderer.Captured.Should().Contain("multi-session not available");
     }
 
     private sealed class Fixture : IAsyncDisposable
     {
         public required SessionManager Mgr { get; init; }
         public required NoopActions Actions { get; init; }
-        public required StringWriter Output { get; init; }
+        public required FakeSlashCommandRenderer Renderer { get; init; }
+
+        public string Output => Renderer.Captured;
 
         public SlashCommandContext Context => new(
             Session: new FakeSession(),
-            Write: s => Output.Write(s),
+            Renderer: Renderer,
             Settings: InfiniContextSettings.Defaults,
             EffectiveSettingsJson: null,
             GetApprovalMode: null,
@@ -183,7 +185,7 @@ public class BroadcastCommandTests
             {
                 Mgr = mgr,
                 Actions = new NoopActions(),
-                Output = new StringWriter(),
+                Renderer = new FakeSlashCommandRenderer(),
             };
         }
 

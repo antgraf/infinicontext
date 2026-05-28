@@ -1,6 +1,7 @@
 using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.Tasks;
 
 namespace InfiniContext.Cli.SlashCommands;
@@ -22,9 +23,12 @@ internal sealed class TaskSlashCommand : ISlashCommand
 
     public async Task ExecuteAsync(SlashCommandContext ctx, string argLine, CancellationToken ct)
     {
-        if (ctx.TaskHandler is null)
+        // Slice A: SlashCommandContext.TaskHandler / IssueHandler are typed object? in Core; cast
+        // back to the concrete Cli handlers here. Slice C promotes the handlers to Core and
+        // tightens these typings.
+        if (ctx.TaskHandler is not TaskCommandHandler taskHandler)
         {
-            ctx.Write("[task] subsystem is unavailable (see startup warnings).\n");
+            ctx.Renderer.Write("[task] subsystem is unavailable (see startup warnings).\n");
             return;
         }
 
@@ -35,18 +39,18 @@ internal sealed class TaskSlashCommand : ISlashCommand
         if (trimmed.StartsWith("issue", StringComparison.OrdinalIgnoreCase)
             && (trimmed.Length == 5 || char.IsWhiteSpace(trimmed[5])))
         {
-            if (ctx.IssueHandler is null)
+            if (ctx.IssueHandler is not IssueCommandHandler issueHandler)
             {
-                ctx.Write("[issue] subsystem is unavailable (see startup warnings).\n");
+                ctx.Renderer.Write("[issue] subsystem is unavailable (see startup warnings).\n");
                 return;
             }
             var issueRaw = "/issue" + trimmed[5..];
             if (!IssueCommand.TryParse(issueRaw, out var issueCmd, out var issueErr))
             {
-                ctx.Write($"[issue] {issueErr}\n");
+                ctx.Renderer.Write($"[issue] {issueErr}\n");
                 return;
             }
-            await ctx.IssueHandler.HandleAsync(issueCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
+            await issueHandler.HandleAsync(issueCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
             return;
         }
 
@@ -56,7 +60,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
 
         if (!TaskCommand.TryParse(raw, out var cmd, out var error))
         {
-            ctx.Write($"[task] {error}\n");
+            ctx.Renderer.Write($"[task] {error}\n");
             return;
         }
 
@@ -78,11 +82,11 @@ internal sealed class TaskSlashCommand : ISlashCommand
             TaskRecord record;
             try
             {
-                record = await ctx.TaskHandler.HandleNewAsync(newCmd.Description, newCmd.Home, ct).ConfigureAwait(false);
+                record = await taskHandler.HandleNewAsync(newCmd.Description, newCmd.Home, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                ctx.Write($"[task] new failed: {ex.Message}\n");
+                ctx.Renderer.Write($"[task] new failed: {ex.Message}\n");
                 return;
             }
             await TryStartTaskSwitchAsync(ctx, record.Id, ct).ConfigureAwait(false);
@@ -94,7 +98,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
         // both are null (handler prints a refusal).
         if (cmd is TaskCommand.Review reviewCmd)
         {
-            await ctx.TaskHandler.HandleReviewAsync(reviewCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
+            await taskHandler.HandleReviewAsync(reviewCmd, ctx.ActiveTaskId, ct).ConfigureAwait(false);
             return;
         }
 
@@ -117,7 +121,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
             return;
         }
 
-        await ctx.TaskHandler.HandleAsync(cmd, ct).ConfigureAwait(false);
+        await taskHandler.HandleAsync(cmd, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -133,14 +137,14 @@ internal sealed class TaskSlashCommand : ISlashCommand
             ? $"Operator-requested flush. Update this task's documents now (progress.md, index.md, and any other artifacts you've changed since the last flush) to reflect everything you've done so far. Task id: {activeId:D4}. Keep working after the flush; this is not a context-pressure handoff."
             : "Operator-requested flush. If this session has any task artifacts in flight, update them now (progress.md, index.md, etc.) to reflect everything you've done since the last flush. Keep working after the flush; this is not a context-pressure handoff.";
 
-        ctx.Write("[task] flushing focused session...\n");
+        ctx.Renderer.Write("[task] flushing focused session...\n");
         try
         {
             await ctx.Session.SendUserMessageAsync(message, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            ctx.Write($"[task] flush failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[task] flush failed: {ex.Message}\n");
         }
     }
 
@@ -152,7 +156,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
         // The host's outer loop spawns the next session with cwd = plan.Task.HomeCwd, so the
         // relative `.task/<id>-<slug>/` pointer in FirstUserMessage resolves correctly regardless
         // of where InfiniContext itself was launched from. Tasks own their home; sessions follow.
-        ctx.Write($"[task] switching to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+        ctx.Renderer.Write($"[task] switching to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
         WriteCwdAndDrift(ctx, plan);
 
         ctx.Actions.RequestSwitch(plan);
@@ -162,7 +166,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
     {
         if (ctx.SessionManager is null)
         {
-            ctx.Write("[task] spawn is unavailable in this context (no session manager).\n");
+            ctx.Renderer.Write("[task] spawn is unavailable in this context (no session manager).\n");
             return;
         }
 
@@ -173,7 +177,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
         {
             if (s.ActiveTaskId == id)
             {
-                ctx.Write($"[task] {id:D4} is already active in session {s.Id:D}. Use /focus {s.Id:D} to switch to it.\n");
+                ctx.Renderer.Write($"[task] {id:D4} is already active in session {s.Id:D}. Use /focus {s.Id:D} to switch to it.\n");
                 return;
             }
         }
@@ -198,7 +202,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
         }
         catch (Exception ex)
         {
-            ctx.Write($"[task] spawn failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[task] spawn failed: {ex.Message}\n");
             return;
         }
 
@@ -214,20 +218,20 @@ internal sealed class TaskSlashCommand : ISlashCommand
             }
             catch (Exception ex)
             {
-                ctx.Write($"[task] spawn: coordinator enter failed: {ex.Message}\n");
+                ctx.Renderer.Write($"[task] spawn: coordinator enter failed: {ex.Message}\n");
                 await ctx.SessionManager.CloseAsync(newSession.Id).ConfigureAwait(false);
                 return;
             }
 
             if (enter is EnterTaskResult.RefusedResult refused)
             {
-                ctx.Write($"[task] {refused.TaskId:D4} is already claimed by session {refused.HolderSessionId:D}; rolling back the spawn.\n");
+                ctx.Renderer.Write($"[task] {refused.TaskId:D4} is already claimed by session {refused.HolderSessionId:D}; rolling back the spawn.\n");
                 await ctx.SessionManager.CloseAsync(newSession.Id).ConfigureAwait(false);
                 return;
             }
         }
 
-        ctx.Write($"[task] spawned session {newSession.Id:D} bound to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
+        ctx.Renderer.Write($"[task] spawned session {newSession.Id:D} bound to {plan.Task.Id:D4} \"{plan.Task.Title}\"\n");
         WriteCwdAndDrift(ctx, plan);
 
         ctx.Actions.RequestFocus(newSession.Id);
@@ -244,7 +248,7 @@ internal sealed class TaskSlashCommand : ISlashCommand
     {
         if (ctx.PrepareTaskSwitch is null)
         {
-            ctx.Write($"[task] {verb} is unavailable in this context.\n");
+            ctx.Renderer.Write($"[task] {verb} is unavailable in this context.\n");
             return null;
         }
 
@@ -255,13 +259,13 @@ internal sealed class TaskSlashCommand : ISlashCommand
         }
         catch (Exception ex)
         {
-            ctx.Write($"[task] {verb} failed: {ex.Message}\n");
+            ctx.Renderer.Write($"[task] {verb} failed: {ex.Message}\n");
             return null;
         }
 
         if (plan is null)
         {
-            ctx.Write($"[task] {id:D4} not found.\n");
+            ctx.Renderer.Write($"[task] {id:D4} not found.\n");
             return null;
         }
 
@@ -276,9 +280,9 @@ internal sealed class TaskSlashCommand : ISlashCommand
     private static void WriteCwdAndDrift(SlashCommandContext ctx, TaskSwitchPlan plan)
     {
         if (!PathsAreEquivalent(plan.Task.HomeCwd, Environment.CurrentDirectory))
-            ctx.Write($"       cwd: {plan.Task.HomeCwd}\n");
+            ctx.Renderer.Write($"       cwd: {plan.Task.HomeCwd}\n");
         if (plan.Drift.Count > 0)
-            ctx.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
+            ctx.Renderer.Write($"       drift: {string.Join(", ", plan.Drift)} (will ask the agent to reconcile)\n");
     }
 
     private static bool PathsAreEquivalent(string a, string b)
