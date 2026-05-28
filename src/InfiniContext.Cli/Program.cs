@@ -290,6 +290,19 @@ await using var sessionManager = await SessionManager.OpenAsync(
     lockRegistry: lockRegistry);
 logging.Logger.Information("session-index: loaded {Path} with {Recent} recent row(s)",
     sessionManager.IndexPath, sessionManager.RecentSessions.Count);
+
+// Task 0013 Slice 1: lift the auto-rotation policy out of MultiSessionHost into a Core-side
+// service so the future GUI host (task 0013 Slice 2) can subscribe to the same proposal signal.
+// Only constructed when the task subsystem is wired -- without taskService there is no
+// PrepareSwitchAsync delegate, and the legacy TryStartAutoRotation in MultiSessionHost stayed
+// gated on the same prerequisite. Disposal is implicit at process exit.
+using var autoRotationService = taskService is null
+    ? null
+    : new AutoRotationService(
+        sessionManager,
+        autoRotationGuard,
+        (id, ct) => taskService.PrepareSwitchAsync(id, ct),
+        logging.Logger);
 while (true)
 {
     var spawnRequest = new SpawnRequest
@@ -358,7 +371,8 @@ while (true)
             ? null
             : (sid, id, ct) => taskActivity.EnterAsync(sid, id, ct),
         sessionManager: sessionManager,
-        autoRotationGuard: autoRotationGuard);
+        autoRotationGuard: autoRotationGuard,
+        autoRotationService: autoRotationService);
     HostResult result;
     try
     {

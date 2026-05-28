@@ -46,6 +46,8 @@ internal sealed class MultiSessionHost : IReplActions
     private readonly Func<int, CancellationToken, Task<TaskSwitchPlan?>>? _prepareTaskSwitch;
     private readonly Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? _tryEnterTask;
     private readonly AutoRotationGuard? _autoRotationGuard;
+    private readonly AutoRotationService? _autoRotationService;
+    private readonly Action<AutoRotationProposal> _onAutoRotationProposal;
     private readonly Action<string> _onFragment;
     private readonly Action<StateTransition> _onTransition;
 
@@ -73,7 +75,8 @@ internal sealed class MultiSessionHost : IReplActions
         Func<int, CancellationToken, Task<TaskSwitchPlan?>>? prepareTaskSwitch = null,
         Func<Guid, int, CancellationToken, Task<EnterTaskResult>>? tryEnterTask = null,
         SessionManager? sessionManager = null,
-        AutoRotationGuard? autoRotationGuard = null)
+        AutoRotationGuard? autoRotationGuard = null,
+        AutoRotationService? autoRotationService = null)
     {
         _focused = ctx ?? throw new ArgumentNullException(nameof(ctx));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -90,6 +93,7 @@ internal sealed class MultiSessionHost : IReplActions
         _tryEnterTask = tryEnterTask;
         _manager = sessionManager;
         _autoRotationGuard = autoRotationGuard;
+        _autoRotationService = autoRotationService;
         _renderer = new ConsoleSlashCommandRenderer(_console, _writeLock);
 
         _registry = new SlashCommandRegistry(new ISlashCommand[]
@@ -114,11 +118,16 @@ internal sealed class MultiSessionHost : IReplActions
 
         _onFragment = OnFragmentAppended;
         _onTransition = OnStateTransition;
+        _onAutoRotationProposal = OnAutoRotationProposal;
     }
 
     public async Task<HostResult> RunAsync()
     {
         SubscribeFocused(_focused);
+        if (_autoRotationService is not null)
+        {
+            _autoRotationService.AutoRotationProposed += _onAutoRotationProposal;
+        }
         ConsoleCancelEventHandler? cancelHandler = null;
 
         // Console.CancelKeyPress is only relevant when stdin is an actual console (interactive run).
@@ -165,6 +174,10 @@ internal sealed class MultiSessionHost : IReplActions
         finally
         {
             UnsubscribeFocused(_focused);
+            if (_autoRotationService is not null)
+            {
+                try { _autoRotationService.AutoRotationProposed -= _onAutoRotationProposal; } catch { }
+            }
             if (cancelHandler is not null)
             {
                 try { Console.CancelKeyPress -= cancelHandler; } catch { }
@@ -396,12 +409,77 @@ internal sealed class MultiSessionHost : IReplActions
             // If a context-pressure nudge fired during this task-bound session, the agent's
             // exit is structured-compaction handoff, not a real "done". Auto-rotate to a fresh
             // session on the same task by populating _pendingSwitch -- Program.cs's outer loop
-            // already respawns on a SwitchPlan, so this reuses /task switch's machinery. The
-            // rotation handler fires _exitSignal once the plan is ready; if rotation can't run
-            // (no plan loader, no task binding, no nudge, cap hit), we fall through to the
-            // normal exit signal immediately.
-            if (TryStartAutoRotation()) return;
+            // already respawns on a SwitchPlan, so this reuses /task switch's machinery.
+            //
+            // Two paths: production wires AutoRotationService (Core-side policy shared with the
+            // GUI host), so we suppress the exit signal here and let _onAutoRotationProposal
+            // drive RequestSwitch / the refused fallback. Tests that construct MultiSessionHost
+            // without a service fall back to the legacy TryStartAutoRotation branch, which keeps
+            // their assertions stable. Either way, on no-rotation we fall through to the normal
+            // exit signal immediately.
+            if (_autoRotationService is not null)
+            {
+                if (WillServicePropose()) return;
+            }
+            else if (TryStartAutoRotation()) return;
             _exitSignal.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Synchronous predicate matching <see cref="AutoRotationService"/>'s qualification: the
+    /// focused session must have a recorded rotation reason and an active task id. Used to decide
+    /// whether to suppress the exit signal while the service's async proposal is in flight; the
+    /// service's own guard / plan-load decisions arrive via <see cref="OnAutoRotationProposal"/>.
+    /// </summary>
+    private bool WillServicePropose()
+    {
+        var ctx = _focused;
+        if (ctx.RotationReason == RotationReason.None) return false;
+        if (ctx.ActiveTaskId is null) return false;
+        return true;
+    }
+
+    private void OnAutoRotationProposal(AutoRotationProposal proposal)
+    {
+        // CLI is single-focus: only act on the focused session's proposal. A non-focused
+        // session's exit shouldn't yank the user's attention to a different task. (The GUI's
+        // adapter has the opposite policy -- it spawns the new row regardless of focus.)
+        if (proposal.Session.Id != _focused.Id) return;
+
+        switch (proposal.Status)
+        {
+            case AutoRotationStatus.Refused:
+                Write($"\n[task] auto-rotation refused: hit cap of {proposal.RefusedCap} within {proposal.RefusedWindow!.Value.TotalMinutes:F0} min on task {proposal.TaskId:D4}. Use /task switch {proposal.TaskId:D4} to retry manually.\n");
+                _logger.Warning("auto-rotate: cap hit for task {TaskId}", proposal.TaskId);
+                _exitRequested = true;
+                _exitSignal.TrySetResult();
+                return;
+
+            case AutoRotationStatus.Failed:
+                Write($"\n[task] auto-rotation failed: {proposal.Failure?.Message}\n");
+                _exitRequested = true;
+                _exitSignal.TrySetResult();
+                return;
+
+            case AutoRotationStatus.Approved:
+                if (proposal.Plan is null)
+                {
+                    Write($"\n[task] auto-rotation: task {proposal.TaskId:D4} not found; exiting.\n");
+                    _exitRequested = true;
+                    _exitSignal.TrySetResult();
+                    return;
+                }
+                var label = proposal.Reason switch
+                {
+                    RotationReason.Hard => "hard-nudge",
+                    RotationReason.Soft => "soft-nudge",
+                    _ => "nudge",
+                };
+                Write($"\n[task] {label} flush detected \u2014 auto-rotating to task {proposal.Plan.Task.Id:D4} \"{proposal.Plan.Task.Title}\"\n");
+                _logger.Information("auto-rotate: task {TaskId} reason={Reason}", proposal.Plan.Task.Id, proposal.Reason);
+                RequestSwitch(proposal.Plan);
+                return;
         }
     }
 

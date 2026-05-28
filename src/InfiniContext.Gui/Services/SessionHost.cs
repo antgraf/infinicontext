@@ -28,6 +28,7 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly LightModelServiceFactory _lightModelFactory;
     private readonly TimeSpan _approvalTimeout;
     private readonly ModeHolder _modeHolder;
+    private readonly AutoRotationService? _autoRotationService;
     private int _disposed;
 
     public InfiniContextSettings Settings { get; }
@@ -38,6 +39,17 @@ public sealed class SessionHost : IAsyncDisposable
     public ILogger Logger => _logging.Logger;
     public event Action<SessionContext>? SessionCreated;
     public event Action<Guid>? SessionClosed;
+
+    /// <summary>Re-exposed from the owned <see cref="AutoRotationService"/>. Fires on the state
+    /// machine's locked thread; the VM must marshal to the UI thread before touching observable
+    /// collections. Null payloads are never raised. When the task subsystem is unavailable
+    /// (no <see cref="TaskService"/>) the underlying service is not constructed and this event
+    /// will never fire.</summary>
+    public event Action<AutoRotationProposal>? AutoRotationProposed
+    {
+        add { if (_autoRotationService is not null) _autoRotationService.AutoRotationProposed += value; }
+        remove { if (_autoRotationService is not null) _autoRotationService.AutoRotationProposed -= value; }
+    }
 
     /// <summary>Host-wide effective approval mode (D12 - one effective mode across all sessions).
     /// Updated at startup from <c>settings.Approval.Mode</c>, then pinned to the post-fallback
@@ -59,7 +71,8 @@ public sealed class SessionHost : IAsyncDisposable
         TaskService? taskService,
         LightModelServiceFactory lightModelFactory,
         TimeSpan approvalTimeout,
-        ModeHolder modeHolder)
+        ModeHolder modeHolder,
+        AutoRotationService? autoRotationService)
     {
         Settings = settings;
         _logging = logging;
@@ -71,6 +84,7 @@ public sealed class SessionHost : IAsyncDisposable
         _lightModelFactory = lightModelFactory;
         _approvalTimeout = approvalTimeout;
         _modeHolder = modeHolder;
+        _autoRotationService = autoRotationService;
     }
 
     /// <summary>Mutable shared holder for the host-wide effective approval mode. Both the
@@ -158,7 +172,19 @@ public sealed class SessionHost : IAsyncDisposable
             logging.Logger.Warning(ex, "tasks: subsystem unavailable; GUI tree will show sessions under (unattached) only");
         }
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder);
+        // Task 0013 Slice 2: own the Core auto-rotation service. Same defaults as the CLI
+        // (Program.cs:284): 3 rotations per task within 5 minutes. The service only fires when
+        // PrepareSwitchAsync is available, mirroring the CLI's `taskService is null` gate.
+        var autoRotationGuard = new AutoRotationGuard(maxRotations: 3, window: TimeSpan.FromMinutes(5));
+        AutoRotationService? autoRotationService = taskService is null
+            ? null
+            : new AutoRotationService(
+                manager,
+                autoRotationGuard,
+                (id, ct) => taskService.PrepareSwitchAsync(id, ct),
+                logging.Logger);
+
+        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder, autoRotationService);
     }
 
     /// <summary>
@@ -303,6 +329,9 @@ public sealed class SessionHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // Detach the auto-rotation service first so its state-machine subscriptions don't outlive
+        // the manager teardown below.
+        _autoRotationService?.Dispose();
         try { await _sessionManager.DisposeAsync().ConfigureAwait(false); }
         catch { /* logged inside manager */ }
         if (_taskStore is not null)

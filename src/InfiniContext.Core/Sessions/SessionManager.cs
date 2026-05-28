@@ -68,6 +68,14 @@ public sealed class SessionManager : IAsyncDisposable
     /// every startup.</summary>
     public const int RecentSessionsCap = 1000;
 
+    /// <summary>Raised after a session has been successfully constructed, started, and registered
+    /// in <see cref="CreateAsync"/>. Subscribers see the live <see cref="SessionContext"/>; the
+    /// <see cref="SessionTranscriptReader"/> for that session has also been started. Used by
+    /// <see cref="AutoRotationService"/> to attach a per-session state-transition handler without
+    /// the manager having to know about rotation policy. Handlers run synchronously inside
+    /// <see cref="CreateAsync"/>; do not block.</summary>
+    public event Action<SessionContext>? SessionCreated;
+
     public SessionManager(
         InfiniContextSettings settings,
         ILogger logger,
@@ -263,6 +271,10 @@ public sealed class SessionManager : IAsyncDisposable
         }
         _logger.Information("session-manager: opened {HostSessionId} cwd={Cwd} task={TaskId} resume={Resume}",
             id, request.Cwd, request.ActiveTaskId, request.ResumeSessionId ?? "<none>");
+
+        try { SessionCreated?.Invoke(ctx); }
+        catch (Exception ex) { _logger.Warning(ex, "session-manager: SessionCreated subscriber threw for {HostSessionId}", id); }
+
         return ctx;
     }
 

@@ -1,5 +1,7 @@
 using FluentAssertions;
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.Sessions;
+using InfiniContext.Core.Tasks;
 using InfiniContext.Gui.ViewModels;
 
 namespace InfiniContext.Tests.Gui;
@@ -198,5 +200,113 @@ public class MainWindowViewModelTests
         var vm = BuildMainVm();
 
         vm.CurrentApprovalMode.Should().Be(ApprovalMode.Ask);
+    }
+
+    // ---------------------------------------------------------------------
+    // Task 0013 Slice 2: auto-rotation proposal handling.
+    //
+    // The Approved-with-plan path drives _host.CreateSessionAsync which requires a real
+    // SessionHost; we cover that via manual GUI smoke per plan.md's "skip the VM test and
+    // rely on the Core service tests" escape hatch. These three cases pin the non-spawn
+    // branches (Refused / Failed / Approved-but-task-not-found) -- pure StatusText updates
+    // the hostless VM can exercise without spinning Avalonia or the host.
+    // ---------------------------------------------------------------------
+
+    private static AutoRotationProposal MakeRefusedProposal(int taskId = 42)
+    {
+        var f = new SessionContextFactory(activeTaskId: taskId, cwd: "/repo");
+        return new AutoRotationProposal(
+            Session: f.Context,
+            TaskId: taskId,
+            Reason: RotationReason.Hard,
+            Status: AutoRotationStatus.Refused,
+            Plan: null,
+            RefusedCap: 3,
+            RefusedWindow: TimeSpan.FromMinutes(5),
+            Failure: null);
+    }
+
+    private static AutoRotationProposal MakeFailedProposal(int taskId = 42, string message = "db locked")
+    {
+        var f = new SessionContextFactory(activeTaskId: taskId, cwd: "/repo");
+        return new AutoRotationProposal(
+            Session: f.Context,
+            TaskId: taskId,
+            Reason: RotationReason.Hard,
+            Status: AutoRotationStatus.Failed,
+            Plan: null,
+            RefusedCap: null,
+            RefusedWindow: null,
+            Failure: new InvalidOperationException(message));
+    }
+
+    private static AutoRotationProposal MakeApprovedNoPlan(int taskId = 42)
+    {
+        var f = new SessionContextFactory(activeTaskId: taskId, cwd: "/repo");
+        return new AutoRotationProposal(
+            Session: f.Context,
+            TaskId: taskId,
+            Reason: RotationReason.Soft,
+            Status: AutoRotationStatus.Approved,
+            Plan: null,
+            RefusedCap: null,
+            RefusedWindow: null,
+            Failure: null);
+    }
+
+    [Fact]
+    public void AutoRotation_refused_updates_status_text_with_cap_and_window()
+    {
+        var vm = BuildMainVm();
+        var proposal = MakeRefusedProposal(taskId: 99);
+
+        vm.OnAutoRotationProposed(proposal);
+
+        vm.StatusText.Should().Contain("refused");
+        vm.StatusText.Should().Contain("3");           // cap
+        vm.StatusText.Should().Contain("5 min");        // window
+        vm.StatusText.Should().Contain("0099");         // task id formatted D4
+    }
+
+    [Fact]
+    public void AutoRotation_failed_updates_status_text_with_failure_message()
+    {
+        var vm = BuildMainVm();
+        var proposal = MakeFailedProposal(taskId: 7, message: "db locked");
+
+        vm.OnAutoRotationProposed(proposal);
+
+        vm.StatusText.Should().Contain("failed");
+        vm.StatusText.Should().Contain("db locked");
+        vm.StatusText.Should().Contain("0007");
+    }
+
+    [Fact]
+    public void AutoRotation_approved_without_plan_updates_status_text_task_not_found()
+    {
+        var vm = BuildMainVm();
+        var proposal = MakeApprovedNoPlan(taskId: 12);
+
+        vm.OnAutoRotationProposed(proposal);
+
+        vm.StatusText.Should().Contain("not found");
+        vm.StatusText.Should().Contain("0012");
+    }
+
+    [Fact]
+    public void AutoRotation_marshals_through_dispatcher_when_off_thread()
+    {
+        var tracking = new TrackingUiDispatcher { CheckAccessReturns = false };
+        var vm = new MainWindowViewModel(tracking, new TestUiTimerFactory());
+        var proposal = MakeRefusedProposal();
+
+        vm.OnAutoRotationProposed(proposal);
+
+        // The handler runs on the source session's state-machine thread; the VM must Post the
+        // observable mutation back. CheckAccess gates the branch; Post does the marshal. Both
+        // counts must be non-zero, matching the existing OnSessionClosed marshal contract.
+        tracking.CheckAccessCount.Should().BeGreaterThan(0);
+        tracking.PostCount.Should().BeGreaterThan(0);
+        vm.StatusText.Should().Contain("refused");
     }
 }

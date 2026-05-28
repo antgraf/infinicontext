@@ -196,6 +196,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         _suppressApprovalModeSwitch = false;
         host.SessionClosed += OnSessionClosed;
         host.ApprovalModeChanged += OnHostApprovalModeChanged;
+        host.AutoRotationProposed += OnAutoRotationProposed;
     }
 
     private void OnHostApprovalModeChanged(ApprovalMode effective)
@@ -460,24 +461,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             // otherwise the warning stays visible long enough for the operator to notice it.
             if (firstUserMessage is not null || taskId is null) StatusText = spawning;
             var ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
-            var row = new SessionRowViewModel(ctx, _dispatcher, _timerFactory, _host.Logger);
-            var parent = ResolveParentNode(ctx.ActiveTaskId);
-            parent.Sessions.Add(row);
-            parent.IsExpanded = true;
-            FocusedSession = row;
-            SelectedNode = row;
-            row.IsFocused = true;
-            // Render the seed (task pointer) prompt into the transcript and the per-turn tree so
-            // the operator can SEE what was just sent to claude. Without this, the message area
-            // shows only the (session ready) marker from system/init - leaving the operator
-            // wondering what the agent is "busy" processing. The send itself happens inside
-            // ClaudeSession.StartAsync as a host-driven stdin write; that path never produces a
-            // UserEvent in the stream, so this is the only place we can surface it.
-            if (firstUserMessage is not null)
-            {
-                row.BeginUserTurn(firstUserMessage);
-                ctx.Transcript.Append($"\n> {firstUserMessage}  [seed prompt]\n");
-            }
+            var row = AttachRowForContext(ctx, firstUserMessage);
             var driftSuffix = drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
             var warmingSuffix = firstUserMessage is not null ? " Warming up..." : "";
             StatusText = $"Spawned {row.ShortId} in {row.Cwd}.{warmingSuffix}{driftSuffix}";
@@ -487,6 +471,33 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = $"Spawn failed: {ex.Message}";
             ShowError?.Invoke($"Failed to spawn session:\n\n{ex}");
         }
+    }
+
+    /// <summary>Build the row VM for a freshly-spawned context, hang it under its task node,
+    /// focus it, and render the optional seed prompt. Shared between manual spawns
+    /// (<see cref="SpawnSessionForTaskAsync"/>) and the Core auto-rotation path
+    /// (<see cref="OnAutoRotationProposed"/>) so the two routes stay observably identical.</summary>
+    private SessionRowViewModel AttachRowForContext(SessionContext ctx, string? firstUserMessage)
+    {
+        var row = new SessionRowViewModel(ctx, _dispatcher, _timerFactory, _host!.Logger);
+        var parent = ResolveParentNode(ctx.ActiveTaskId);
+        parent.Sessions.Add(row);
+        parent.IsExpanded = true;
+        FocusedSession = row;
+        SelectedNode = row;
+        row.IsFocused = true;
+        // Render the seed (task pointer) prompt into the transcript and the per-turn tree so
+        // the operator can SEE what was just sent to claude. Without this, the message area
+        // shows only the (session ready) marker from system/init - leaving the operator
+        // wondering what the agent is "busy" processing. The send itself happens inside
+        // ClaudeSession.StartAsync as a host-driven stdin write; that path never produces a
+        // UserEvent in the stream, so this is the only place we can surface it.
+        if (firstUserMessage is not null)
+        {
+            row.BeginUserTurn(firstUserMessage);
+            ctx.Transcript.Append($"\n> {firstUserMessage}  [seed prompt]\n");
+        }
+        return row;
     }
 
     private bool CanSendPrompt() =>
@@ -584,6 +595,75 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         else _dispatcher.Post(Apply);
     }
 
+    /// <summary>Handler for <see cref="SessionHost.AutoRotationProposed"/>. Runs on the source
+    /// session's state-machine thread; marshals to the UI thread before touching the tree.
+    /// Unlike the CLI adapter, the GUI does NOT filter on focus -- every row is visible in the
+    /// left tree, so a non-focused session crossing the threshold should still spawn its
+    /// successor (the operator may be reading another pane and gets a status-text update they
+    /// can act on). On Refused/Failed/plan-missing, the VM only updates StatusText -- there is
+    /// no GUI analogue to the CLI's RequestSwitch (the dead row stays in the tree and the
+    /// operator can decide whether to /task switch manually).</summary>
+    internal void OnAutoRotationProposed(AutoRotationProposal proposal)
+    {
+        if (_dispatcher.CheckAccess()) _ = HandleAutoRotationAsync(proposal);
+        else _dispatcher.Post(() => _ = HandleAutoRotationAsync(proposal));
+    }
+
+    private async Task HandleAutoRotationAsync(AutoRotationProposal proposal)
+    {
+        switch (proposal.Status)
+        {
+            case AutoRotationStatus.Refused:
+                StatusText = $"Auto-rotation refused: cap of {proposal.RefusedCap} within {proposal.RefusedWindow!.Value.TotalMinutes:F0} min hit on task {proposal.TaskId:D4}. Spawn manually from the tree.";
+                _host?.Logger.Warning("gui-auto-rotate: cap hit for task {TaskId}", proposal.TaskId);
+                return;
+
+            case AutoRotationStatus.Failed:
+                StatusText = $"Auto-rotation failed for task {proposal.TaskId:D4}: {proposal.Failure?.Message}";
+                return;
+
+            case AutoRotationStatus.Approved:
+                if (proposal.Plan is null)
+                {
+                    StatusText = $"Auto-rotation: task {proposal.TaskId:D4} not found - spawn manually from the tree.";
+                    return;
+                }
+                await SpawnRotatedSessionAsync(proposal).ConfigureAwait(true);
+                return;
+        }
+    }
+
+    private async Task SpawnRotatedSessionAsync(AutoRotationProposal proposal)
+    {
+        if (_host is null) return;
+        var plan = proposal.Plan!;
+        var cwd = proposal.Session.Cwd;
+        if (string.IsNullOrWhiteSpace(cwd))
+        {
+            StatusText = $"Auto-rotation failed: source session for task {proposal.TaskId:D4} has no cwd.";
+            return;
+        }
+        try
+        {
+            var ctx = await _host.CreateSessionAsync(cwd, plan.Task.Id, plan.FirstUserMessage).ConfigureAwait(true);
+            var row = AttachRowForContext(ctx, plan.FirstUserMessage);
+            var label = proposal.Reason switch
+            {
+                RotationReason.Hard => "hard-nudge",
+                RotationReason.Soft => "soft-nudge",
+                _ => "nudge",
+            };
+            var driftSuffix = plan.Drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
+            StatusText = $"{label} flush detected - auto-rotated to task {plan.Task.Id:D4} \"{plan.Task.Title}\" ({row.ShortId}).{driftSuffix} Warming up...";
+            _host.Logger.Information("gui-auto-rotate: task {TaskId} reason={Reason} new-session={SessionId}", plan.Task.Id, proposal.Reason, ctx.Id);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Auto-rotation spawn failed for task {proposal.TaskId:D4}: {ex.Message}";
+            _host.Logger.Error(ex, "gui-auto-rotate: spawn failed for task {TaskId}", proposal.TaskId);
+        }
+    }
+
     partial void OnFocusedSessionChanged(SessionRowViewModel? oldValue, SessionRowViewModel? newValue)
     {
         if (oldValue is not null)
@@ -645,6 +725,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             _host.SessionClosed -= OnSessionClosed;
             _host.ApprovalModeChanged -= OnHostApprovalModeChanged;
+            _host.AutoRotationProposed -= OnAutoRotationProposed;
             await _host.DisposeAsync().ConfigureAwait(false);
         }
     }
