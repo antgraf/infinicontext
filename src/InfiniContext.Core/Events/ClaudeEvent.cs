@@ -39,6 +39,7 @@ public sealed record SystemTaskNotificationEvent : ClaudeEvent;
 public sealed record SystemStatusEvent : ClaudeEvent;
 public sealed record SystemPluginInstallEvent : ClaudeEvent;
 public sealed record SystemCompactEvent : ClaudeEvent;
+public sealed record SystemThinkingTokensEvent : ClaudeEvent;
 
 public sealed record AssistantEvent : ClaudeEvent
 {

@@ -157,6 +157,7 @@ public sealed class StreamJsonParser
             "status" => new SystemStatusEvent { Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid, ParentToolUseId = parentToolUseId, Raw = root },
             "plugin_install" => new SystemPluginInstallEvent { Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid, ParentToolUseId = parentToolUseId, Raw = root },
             "compact" => new SystemCompactEvent { Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid, ParentToolUseId = parentToolUseId, Raw = root },
+            "thinking_tokens" => new SystemThinkingTokensEvent { Type = type, Subtype = subtype, SessionId = sessionId, Uuid = uuid, ParentToolUseId = parentToolUseId, Raw = root },
             _ => RecordUnknown(c, discriminator: $"system/{subtype ?? "<null>"}"),
         };
     }

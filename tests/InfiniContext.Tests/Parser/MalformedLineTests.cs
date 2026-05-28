@@ -1,3 +1,4 @@
+using InfiniContext.Core.Events;
 using InfiniContext.Core.Parser;
 using FluentAssertions;
 
@@ -5,6 +6,21 @@ namespace InfiniContext.Tests.Parser;
 
 public class MalformedLineTests
 {
+    [Fact]
+    public async Task SystemThinkingTokens_IsTypedEvent_NotUnknown()
+    {
+        // Recent claude versions emit `{"type":"system","subtype":"thinking_tokens",...}`
+        // for thinking-token accounting. Without a typed mapping, every one of these
+        // rendered as `[unknown_event: system/thinking_tokens]` in the CLI mid-turn.
+        var input = "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"tokens\":1234}";
+        var parser = new StreamJsonParser();
+
+        var events = await CollectAsync(parser, input);
+
+        events.Should().ContainSingle().Which.Should().BeOfType<SystemThinkingTokensEvent>();
+        parser.UnknownEventCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task TruncatedJson_IsCounted_AndDoesNotThrow()
     {

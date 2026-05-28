@@ -187,6 +187,7 @@ public sealed class SessionStateMachine
             case SystemStatusEvent:
             case SystemHookResponseEvent:
             case SystemPluginInstallEvent:
+            case SystemThinkingTokensEvent:
             case SystemInitEvent:
             case ControlResponseEvent:
                 // Informational — no state change.
