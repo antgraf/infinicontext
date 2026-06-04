@@ -232,7 +232,7 @@ Defaults are in `settings.json`. Per-developer overrides go in `settings.user.js
     }
   },
   "models": {
-    "main":  { "id": "claude-opus-4-7" },
+    "main":  { "id": "claude-opus-4-8" },
     "light": { "id": "claude-haiku-4-5" }
   }
 }

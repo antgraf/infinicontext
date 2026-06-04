@@ -296,7 +296,9 @@ public sealed class SessionHost : IAsyncDisposable
             new SpawnRequest
             {
                 Cwd = cwd,
-                Model = Settings.Session.Model,
+                // Fall back to the configured main model id when session.model is unset, so the
+                // GUI pins KnownModels.Main rather than letting claude pick its own default.
+                Model = Settings.Session.Model ?? Settings.Models.Main.Id,
                 IncludePartialMessages = Settings.Session.IncludePartialMessages,
                 ActiveTaskId = activeTaskId,
                 FirstUserMessage = firstUserMessage,
@@ -329,11 +331,15 @@ public sealed class SessionHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        // Detach the auto-rotation service first so its state-machine subscriptions don't outlive
-        // the manager teardown below.
-        _autoRotationService?.Dispose();
+        // Dispose the session manager BEFORE the auto-rotation service so any Exited transitions
+        // raised by killing the child processes still propagate to AutoRotationService while it's
+        // subscribed. The earlier order (service first) silently lost app-shutdown rotations:
+        // unsubscribing the per-ctx Transitioned handler before the child kill meant the Exited
+        // event arrived with no listener, so no proposal/log line was ever raised. See task 0013
+        // bug B (the 2026-05-27 manual smoke handoff in progress.md).
         try { await _sessionManager.DisposeAsync().ConfigureAwait(false); }
         catch { /* logged inside manager */ }
+        _autoRotationService?.Dispose();
         if (_taskStore is not null)
         {
             try { await _taskStore.DisposeAsync().ConfigureAwait(false); }

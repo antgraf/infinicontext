@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using InfiniContext.Core.Mcp;
+using InfiniContext.Core.Mcp.Sessions;
 using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Tests.Cli;
 using FluentAssertions;
@@ -68,14 +69,15 @@ public class SidecarSmokeTests
 
             var listResp = responses[2];
             var tools = listResp["result"]!["tools"] as JsonArray;
-            // Approval + Phase 7 lock acquire/release.
-            tools!.Count.Should().Be(3);
+            // Approval + Phase 7 lock acquire/release + Stage 3 session_exit.
+            tools!.Count.Should().Be(4);
             var toolNames = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
             toolNames.Should().BeEquivalentTo(new[]
             {
                 ApprovalSidecarContract.ToolName,
                 ApprovalSidecarContract.LockAcquireToolName,
                 ApprovalSidecarContract.LockReleaseToolName,
+                ApprovalSidecarContract.SessionExitToolName,
             });
 
             var callResp = responses[3];
@@ -165,6 +167,69 @@ public class SidecarSmokeTests
             (JsonNode.Parse(releaseText) as JsonObject)!["ok"]!.GetValue<bool>().Should().BeTrue();
 
             registry.Snapshot().Should().BeEmpty();
+        }
+        finally
+        {
+            try { proc.StandardInput.Close(); } catch { }
+            try { if (!proc.WaitForExit(2000)) proc.Kill(true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Sidecar_session_exit_forwards_to_channel_callback_and_returns_ok()
+    {
+        // Stage 3 bug A: drive the real spawned sidecar through tools/call for session_exit and
+        // verify the host channel's onSessionExit callback fires with the agent's reason and the
+        // tool result is { ok: true }. This is the closest achievable end-to-end of the agent path
+        // (real sidecar process + real pipe + real channel); FakeClaude can't speak MCP so it can't
+        // originate the tools/call itself.
+        var pipeName = ApprovalChannel.GeneratePipeName();
+        var fired = new TaskCompletionSource<SessionExitRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var channel = new ApprovalChannel(
+            pipeName, new RecordingSink(req => ApprovalResponse.Allow(req.Input)),
+            onSessionExit: (req, _) => { fired.TrySetResult(req); return Task.CompletedTask; });
+        await channel.StartAsync();
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = CliRunner.ExecutablePath,
+            ArgumentList = { "--mcp-approval-server", pipeName },
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
+        };
+
+        using var proc = Process.Start(psi)!;
+        try
+        {
+            await proc.StandardInput.WriteLineAsync(
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}""");
+            await proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
+            await proc.StandardInput.WriteLineAsync(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_exit","arguments":{"reason":"flushed after hard nudge"}}}""");
+            await proc.StandardInput.FlushAsync();
+
+            var responses = new Dictionary<int, JsonObject>();
+            for (var i = 0; i < 2; i++)
+            {
+                var line = await ReadLineWithTimeoutAsync(proc.StandardOutput, TimeSpan.FromSeconds(5));
+                var obj = JsonNode.Parse(line!) as JsonObject ?? throw new InvalidOperationException($"non-object line: {line}");
+                var id = obj["id"]?.GetValue<int>() ?? throw new InvalidOperationException($"missing id: {line}");
+                responses[id] = obj;
+            }
+
+            var exitResp = responses[2];
+            exitResp["result"]!["isError"]!.GetValue<bool>().Should().BeFalse();
+            var text = exitResp["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            (JsonNode.Parse(text) as JsonObject)!["ok"]!.GetValue<bool>().Should().BeTrue();
+
+            var observed = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            observed.Reason.Should().Be("flushed after hard nudge");
         }
         finally
         {

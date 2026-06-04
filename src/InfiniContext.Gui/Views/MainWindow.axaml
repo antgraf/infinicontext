@@ -271,9 +271,19 @@
           </Grid>
         </Border>
         <ScrollViewer Name="TranscriptScroll" Padding="12,12,12,16">
-          <ItemsControl ItemsSource="{Binding FocusedSession.Turns}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:TurnNodeViewModel">
+          <!-- Task 0014: rebuild the entire transcript subtree on every session flip. Binding a
+               single ItemsControl's ItemsSource to FocusedSession.Turns reused the same item
+               containers (and their alpha Markdown.Avalonia visuals) across the swap, leaving
+               orphaned visuals from the previous session mixed into the new one ("XAML tree
+               corruption"). A ContentControl keyed on FocusedSession discards the old ItemsControl
+               wholesale and builds a fresh one per session. -->
+          <ContentControl Content="{Binding FocusedSession}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:SessionRowViewModel">
+                <ItemsControl ItemsSource="{Binding Turns}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TurnNodeViewModel">
                 <Border Margin="0,4,0,8" Padding="10" CornerRadius="4"
                         BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="1"
                         Background="{DynamicResource SystemAltLowColor}">
@@ -337,8 +347,11 @@
                   </StackPanel>
                 </Border>
               </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
         </ScrollViewer>
       </DockPanel>
 

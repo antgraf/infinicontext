@@ -256,47 +256,47 @@ public class SessionManagerTests
             Type = "system",
             Subtype = "init",
             SessionId = sid,
-            Model = "claude-opus-4-7",
+            Model = "claude-opus-4-8",
             Raw = new System.Text.Json.Nodes.JsonObject
             {
                 ["type"] = "system",
                 ["subtype"] = "init",
                 ["session_id"] = sid.ToString("D"),
-                ["model"] = "claude-opus-4-7",
+                ["model"] = "claude-opus-4-8",
             },
         });
-        observer(BuildResultEvent(sid, used: 130_000, window: 200_000)); // 65% тАФ soft
+        observer(BuildAssistantEvent(sid, used: 130_000)); // 65% тАФ soft
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Soft);
 
-        observer(BuildResultEvent(sid, used: 180_000, window: 200_000)); // 90% тАФ hard
+        observer(BuildAssistantEvent(sid, used: 180_000)); // 90% тАФ hard
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Hard, "hard escalates over soft");
     }
 
-    private static ResultEvent BuildResultEvent(Guid sessionId, int used, int? window)
+    // Task 0014: context occupancy is measured per API call from each assistant event's
+    // message.usage, not from the summed result.usage. The window resolves from the manager's
+    // default ModelContextWindows map (claude-opus-4-8 -> 200_000), so no modelUsage is needed.
+    private static AssistantEvent BuildAssistantEvent(Guid sessionId, int used)
     {
-        var usage = new System.Text.Json.Nodes.JsonObject
-        {
-            ["input_tokens"] = used,
-            ["cache_creation_input_tokens"] = 0,
-            ["cache_read_input_tokens"] = 0,
-        };
         var raw = new System.Text.Json.Nodes.JsonObject
         {
-            ["type"] = "result",
+            ["type"] = "assistant",
             ["session_id"] = sessionId.ToString("D"),
-            ["usage"] = usage,
-        };
-        if (window is { } w)
-        {
-            raw["modelUsage"] = new System.Text.Json.Nodes.JsonObject
+            ["message"] = new System.Text.Json.Nodes.JsonObject
             {
-                ["claude-opus-4-7"] = new System.Text.Json.Nodes.JsonObject { ["contextWindow"] = w },
-            };
-        }
-        return new ResultEvent
+                ["model"] = "claude-opus-4-8",
+                ["usage"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["input_tokens"] = used,
+                    ["cache_creation_input_tokens"] = 0,
+                    ["cache_read_input_tokens"] = 0,
+                },
+            },
+        };
+        return new AssistantEvent
         {
-            Type = "result",
+            Type = "assistant",
             SessionId = sessionId,
+            Content = Array.Empty<ContentBlock>(),
             Raw = raw,
         };
     }

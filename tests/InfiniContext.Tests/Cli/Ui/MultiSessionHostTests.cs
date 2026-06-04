@@ -225,6 +225,48 @@ public class MultiSessionHostTests
     }
 
     [Fact]
+    public async Task Nudge_rotation_completes_even_when_input_loop_is_parked_in_ReadLineAsync()
+    {
+        // Regression (task 0015): the other rotation tests deliberately move state out of Idle so
+        // the input loop parks on _exitSignal rather than ReadLineAsync. But in production the
+        // nudged session reaches Idle (its final turn completes) BEFORE it exits, so the loop wakes
+        // to the prompt and blocks inside ReadLineAsync. The later Exited transition fires the
+        // rotation and _exitSignal, but a bare `await ReadLineAsync()` does not watch the signal:
+        // the host printed "...flush detected, auto-rotating..." and then hung forever. The fix
+        // races the read against _exitSignal. This test parks the loop inside a never-returning
+        // ReadLineAsync and asserts the rotation still produces a SwitchPlan.
+        var fake = new FakeSession();
+        await using var ctx = BuildContext(fake, activeTaskId: 7);
+        ctx.MarkRotationReason(InfiniContext.Core.Sessions.RotationReason.Hard);
+
+        var input = new BlockingReader();
+        var console = new TestConsole();
+        var fakePlan = NewSwitchPlan(taskId: 7);
+        var host = new MultiSessionHost(
+            ctx,
+            input,
+            console,
+            Log.Logger,
+            settings: FastDrainSettings,
+            prepareTaskSwitch: (id, ct) => Task.FromResult<TaskSwitchPlan?>(id == 7 ? fakePlan : null),
+            autoRotationGuard: new AutoRotationGuard(3, TimeSpan.FromMinutes(5)));
+
+        var hostRun = host.RunAsync();
+
+        // Wait until the input loop is genuinely blocked inside ReadLineAsync (the production hang
+        // point) before driving the exit вЂ” the session went Idle, so the loop is at the prompt.
+        await input.ReadLineCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fake.State.HandleProcessExit(0); // Exited в†’ rotation в†’ RequestSwitch в†’ _exitSignal
+        fake.SignalExit();
+
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.SwitchPlan.Should().NotBeNull("the rotation must complete even though ReadLineAsync never returned");
+        result.SwitchPlan!.Task.Id.Should().Be(7);
+        console.Output.Should().Contain("hard-nudge flush detected");
+    }
+
+    [Fact]
     public async Task Session_exit_without_a_nudge_reason_does_not_auto_rotate()
     {
         // Baseline: a session exit with RotationReason.None is treated as a normal end. No
@@ -341,6 +383,21 @@ public class MultiSessionHostTests
             approvalSlot: new PendingApprovalSlot(),
             transcript: new TranscriptModel(),
             activeTaskId: activeTaskId);
+
+    /// <summary>A reader whose <see cref="ReadLineAsync()"/> never completes, modelling an
+    /// interactive console parked at the prompt. <see cref="ReadLineCalled"/> lets a test wait
+    /// until the host is actually blocked inside the read before driving subsequent state.</summary>
+    private sealed class BlockingReader : TextReader
+    {
+        public TaskCompletionSource ReadLineCalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string?> _never = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task<string?> ReadLineAsync()
+        {
+            ReadLineCalled.TrySetResult();
+            return _never.Task;
+        }
+    }
 
     private sealed class StubApprovalSink : IApprovalSink
     {

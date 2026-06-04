@@ -5,14 +5,19 @@ using Serilog;
 namespace InfiniContext.Core.Tasks;
 
 /// <summary>
-/// Stage 2A Phase 8. Watches a session's <see cref="ResultEvent"/>s and fires once-per-session
-/// when the running token usage crosses the configured soft or hard threshold. The monitor does
+/// Stage 2A Phase 8. Watches a session's <see cref="AssistantEvent"/>s and fires once-per-session
+/// when context occupancy crosses the configured soft or hard threshold. The monitor does
 /// not send anything itself — it raises C# events; <see cref="ThresholdInjector"/> turns those
 /// into host-injected user turns.
 ///
 /// <para>
 /// Token sum follows design.md §8: <c>input_tokens + cache_creation_input_tokens +
-/// cache_read_input_tokens</c> from the <c>result.usage</c> object. The context window is
+/// cache_read_input_tokens</c>, but taken from each <c>assistant</c> event's
+/// <c>message.usage</c> (a single API call's prompt size, bounded by the window), NOT the
+/// turn-level <c>result.usage</c>, which sums those fields across every API-call iteration and
+/// over-reports occupancy by a factor of the iteration count (the "359% of 1M" anomaly,
+/// task 0014). Sub-agent calls (non-null <see cref="ClaudeEvent.ParentToolUseId"/>) have their
+/// own window and are skipped. The context window is
 /// resolved in priority order:
 /// </para>
 /// <list type="number">
@@ -40,6 +45,10 @@ public sealed class ContextPressureMonitor
     private Guid? _sessionId;
     private bool _softCrossed;
     private bool _hardCrossed;
+
+    /// <summary>Authoritative window cached from a <c>result</c> event's
+    /// <c>modelUsage[&lt;active model&gt;].contextWindow</c>. Reset on a new session id.</summary>
+    private long? _windowFromResult;
 
     public ContextPressureMonitor(
         int softThresholdPct,
@@ -79,7 +88,13 @@ public sealed class ContextPressureMonitor
                 HandleInit(init);
                 break;
             case ResultEvent r:
-                HandleResult(r);
+                // Result usage is summed across the turn's API calls (over-counts occupancy by
+                // a factor of the iteration count), so it does NOT drive the threshold. It is
+                // only mined for the authoritative context window.
+                CacheWindowFromResult(r);
+                break;
+            case AssistantEvent a:
+                HandleAssistant(a);
                 break;
         }
     }
@@ -92,21 +107,32 @@ public sealed class ContextPressureMonitor
             _sessionId = sid;
             _softCrossed = false;
             _hardCrossed = false;
+            _windowFromResult = null;
         }
         _activeModel = init.Model;
     }
 
-    private void HandleResult(ResultEvent r)
+    /// <summary>
+    /// Measure context occupancy from a single API call's <c>message.usage</c> and fire the
+    /// soft/hard crossings. Each assistant event is one model round-trip; its footprint is the
+    /// prompt size for that call and is bounded by the window. Sub-agent calls (non-null
+    /// <see cref="ClaudeEvent.ParentToolUseId"/>) have their own window and are skipped.
+    /// </summary>
+    private void HandleAssistant(AssistantEvent a)
     {
-        var usage = r.Raw["usage"] as JsonObject;
-        if (usage is null) return;
+        // Sub-agent (Task tool) round-trips run against a separate context window; counting them
+        // toward the main session's occupancy is what would make a Task-heavy turn look full.
+        if (a.ParentToolUseId is not null) return;
+
+        if (a.Raw["message"] is not JsonObject message) return;
+        if (message["usage"] is not JsonObject usage) return;
 
         long used = ReadLong(usage, "input_tokens")
                   + ReadLong(usage, "cache_creation_input_tokens")
                   + ReadLong(usage, "cache_read_input_tokens");
         if (used <= 0) return;
 
-        var window = ResolveWindow(r);
+        var window = CurrentWindow();
         if (window is null or <= 0)
         {
             _logger.Debug("context pressure: no window known for model={Model}; skipping check", _activeModel);
@@ -136,21 +162,28 @@ public sealed class ContextPressureMonitor
         }
     }
 
-    private long? ResolveWindow(ResultEvent r)
+    /// <summary>Cache claude's self-reported window from a result event's <c>modelUsage</c>.</summary>
+    private void CacheWindowFromResult(ResultEvent r)
     {
-        // 1. claude's self-report.
         if (_activeModel is not null
             && r.Raw["modelUsage"] is JsonObject mu
             && mu[_activeModel] is JsonObject mm
             && mm["contextWindow"] is { } cw
-            && TryReadLong(cw) is { } w0)
+            && TryReadLong(cw) is { } w0 and > 0)
         {
-            return w0;
+            _windowFromResult = w0;
         }
+    }
 
-        // 2. Settings-supplied map.
+    /// <summary>
+    /// Resolve the active model's context window: claude's cached self-report first (reflects the
+    /// <c>[1m]</c> beta), else the settings-supplied map (which is itself keyed on the suffixed
+    /// model id, so it is correct even before the first result event arrives).
+    /// </summary>
+    private long? CurrentWindow()
+    {
+        if (_windowFromResult is > 0) return _windowFromResult;
         if (_activeModel is not null && _windowsBySettings.TryGetValue(_activeModel, out var w)) return w;
-
         return null;
     }
 
@@ -180,7 +213,7 @@ public sealed class ContextPressureMonitor
 /// <summary>
 /// Payload for <see cref="ContextPressureMonitor.SoftCrossed"/> / <see cref="ContextPressureMonitor.HardCrossed"/>.
 /// </summary>
-/// <param name="UsedTokens">Sum of <c>input + cache_creation_input + cache_read_input</c> at the crossing turn.</param>
+/// <param name="UsedTokens">Single API call's <c>input + cache_creation_input + cache_read_input</c> at the crossing.</param>
 /// <param name="WindowTokens">Resolved context window for the active model.</param>
 /// <param name="UsedFraction">UsedTokens / WindowTokens. Caller can render <c>:P0</c> for the user.</param>
 /// <param name="Model">Active model id from <c>system/init</c>, or null if it was never observed.</param>

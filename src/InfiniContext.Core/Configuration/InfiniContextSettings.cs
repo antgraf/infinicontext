@@ -130,17 +130,18 @@ public sealed record ModelsOptions
 public sealed record MainModelOptions
 {
     /// <summary>
-    /// Identifier of the host's "main" model. Currently informational — the active main-model
-    /// channel is the spawned <c>claude</c> child, which selects its own model unless
-    /// <c>session.model</c> overrides it. Reserved for future host-side direct calls.
+    /// Identifier of the host's "main" model. This is the model the spawned <c>claude</c> child
+    /// runs when neither the <c>--model</c> CLI flag nor <c>session.model</c> is set: both the CLI
+    /// host (<c>Program.cs</c>) and the GUI (<c>SessionHost.cs</c>) fall back to this id. Bump
+    /// <see cref="KnownModels.Main"/> to upgrade the whole app in one edit.
     /// </summary>
-    public string Id { get; init; } = "claude-opus-4-7";
+    public string Id { get; init; } = KnownModels.Main;
 }
 
 public sealed record LightModelOptions
 {
     /// <summary>Anthropic model id used by <see cref="ILightModelService"/>. Default: Haiku 4.5.</summary>
-    public string Id { get; init; } = "claude-haiku-4-5";
+    public string Id { get; init; } = KnownModels.Light;
 
     /// <summary>Cap on output tokens per call. Light tasks rarely need more than a few hundred.</summary>
     public int MaxTokens { get; init; } = 1024;
@@ -314,10 +315,10 @@ public sealed record TasksOptions
     public IReadOnlyDictionary<string, int> ModelContextWindows { get; init; } =
         new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            ["claude-sonnet-4-6"] = 200_000,
-            ["claude-opus-4-7"] = 200_000,
-            ["claude-opus-4-7[1m]"] = 1_000_000,
-            ["claude-haiku-4-5"] = 200_000,
+            [KnownModels.Reviewer] = 200_000,
+            [KnownModels.Main] = 200_000,
+            [KnownModels.MainLargeContext] = 1_000_000,
+            [KnownModels.Light] = 200_000,
         };
 
     /// <summary>

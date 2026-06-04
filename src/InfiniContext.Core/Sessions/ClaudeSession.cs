@@ -6,6 +6,7 @@ using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Logging;
 using InfiniContext.Core.Mcp;
+using InfiniContext.Core.Mcp.Sessions;
 using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Parser;
 using InfiniContext.Core.State;
@@ -137,7 +138,8 @@ public sealed class ClaudeSession : IClaudeSession
                     _options.ApprovalSidecarArgs,
                     lockRegistry: _lockRegistry,
                     lockTtl: TimeSpan.FromSeconds(_settings.Tasks.LockTtlSeconds),
-                    lockMaxWait: TimeSpan.FromSeconds(_settings.Tasks.LockMaxWaitSeconds)).ConfigureAwait(false);
+                    lockMaxWait: TimeSpan.FromSeconds(_settings.Tasks.LockMaxWaitSeconds),
+                    onSessionExit: OnSessionExitRequestedAsync).ConfigureAwait(false);
             }
             catch
             {
@@ -268,6 +270,44 @@ public sealed class ClaudeSession : IClaudeSession
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Callback wired into the approval sidecar's <c>session.exit</c> path. The agent calls
+    /// <c>mcp__infinicontext__session_exit</c> after a context-pressure flush; the channel posts this
+    /// to the threadpool (fire-and-forget, so the tool result returns before stdin closes) and we
+    /// close the child's stdin from here.
+    /// </summary>
+    private async Task OnSessionExitRequestedAsync(SessionExitRequest req, CancellationToken ct)
+    {
+        _logger.Information("session.exit requested by agent reason={Reason}", req.Reason ?? "<none>");
+        try { await RequestGracefulExitAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { _logger.Warning(ex, "session.exit: graceful close threw"); }
+    }
+
+    /// <summary>
+    /// Closes the child's stdin without killing the process. Claude finishes the current turn (if
+    /// any), then exits naturally via EOF. The state machine sees the standard <c>Exited</c>
+    /// transition through the stdout drain loop's finally block вЂ” so <c>AutoRotationService</c> fires
+    /// if a rotation reason was armed by a context-pressure nudge.
+    ///
+    /// <para>
+    /// Distinct from <see cref="DisposeAsync"/>, which also kills the process and disposes the
+    /// launcher / supervisor / write lock. Idempotent: a second call after the child has exited is a
+    /// no-op. The <see cref="_writeLock"/> acquisition serializes against any in-flight
+    /// <see cref="SendUserMessageAsync"/> so stdin isn't closed mid-write.
+    /// </para>
+    /// </summary>
+    public async Task RequestGracefulExitAsync(CancellationToken cancellationToken = default)
+    {
+        if (_process is not { } proc) return;
+        if (proc.HasExited) return;
+
+        _logger.Information("graceful-exit: closing stdin pid={Pid}", proc.Id);
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { proc.StandardInput.Close(); }
+        catch (Exception ex) { _logger.Warning(ex, "graceful-exit: stdin close threw"); }
+        finally { _writeLock.Release(); }
     }
 
     public Task WaitForExitAsync(CancellationToken cancellationToken = default)

@@ -430,6 +430,28 @@ public class FakeClaudeIntegrationTests
             },
         };
 
+        // Task 0014: the monitor measures occupancy per API call from message.usage, so the
+        // crossing is driven by this assistant event (50k + 30k + 50k = 130k = 65% of 200k). The
+        // result above is emitted first only to seed the window via modelUsage; its summed usage
+        // is intentionally ignored.
+        var assistantMsg = new JsonObject
+        {
+            ["type"] = "assistant",
+            ["session_id"] = sessionId,
+            ["message"] = new JsonObject
+            {
+                ["model"] = "claude-opus-4-7",
+                ["content"] = new JsonArray(),
+                ["usage"] = new JsonObject
+                {
+                    ["input_tokens"] = 50_000,
+                    ["cache_creation_input_tokens"] = 30_000,
+                    ["cache_read_input_tokens"] = 50_000,
+                    ["output_tokens"] = 100,
+                },
+            },
+        };
+
         var script = new JsonObject
         {
             ["actions"] = new JsonArray
@@ -442,6 +464,7 @@ public class FakeClaudeIntegrationTests
                     ["claude_code_version"] = "0.0.0",
                 } },
                 new JsonObject { ["type"] = "emit-line", ["json"] = resultMsg },
+                new JsonObject { ["type"] = "emit-line", ["json"] = assistantMsg },
                 // Now the host's monitor fires soft and the injector sends a nudge — capture it.
                 new JsonObject { ["type"] = "wait-stdin", ["record_to"] = stdinRecord, ["lines"] = 1 },
                 new JsonObject { ["type"] = "emit-line", ["json"] = new JsonObject

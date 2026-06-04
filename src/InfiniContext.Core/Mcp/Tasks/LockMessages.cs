@@ -14,6 +14,12 @@ public static class LockWireFormat
     public const string AcquireKind = "lock.acquire";
     public const string ReleaseKind = "lock.release";
 
+    /// <summary>
+    /// Stage 3 bug A. Agent-driven graceful exit multiplexed onto the same pipe; carries no
+    /// payload beyond an optional free-form <c>reason</c>. See <c>Mcp/Sessions/SessionExitMessages.cs</c>.
+    /// </summary>
+    public const string SessionExitKind = "session.exit";
+
     /// <summary>Approvals didn't carry a kind in v1; treat absence as approval for back-compat.</summary>
     public const string ApprovalKind = "approval";
 }

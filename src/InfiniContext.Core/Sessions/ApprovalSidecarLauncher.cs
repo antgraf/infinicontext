@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using InfiniContext.Core.Mcp;
+using InfiniContext.Core.Mcp.Sessions;
 using InfiniContext.Core.Mcp.Tasks;
 using Serilog;
 
@@ -44,13 +45,15 @@ internal sealed class ApprovalSidecarLauncher : IAsyncDisposable
         IReadOnlyList<string>? sidecarArgs,
         LockRegistry? lockRegistry = null,
         TimeSpan? lockTtl = null,
-        TimeSpan? lockMaxWait = null)
+        TimeSpan? lockMaxWait = null,
+        Func<SessionExitRequest, CancellationToken, Task>? onSessionExit = null)
     {
         var pipeName = ApprovalChannel.GeneratePipeName();
         _channel = new ApprovalChannel(pipeName, sink, _logger,
             lockRegistry: lockRegistry,
             lockTtl: lockTtl,
-            lockMaxWait: lockMaxWait);
+            lockMaxWait: lockMaxWait,
+            onSessionExit: onSessionExit);
         await _channel.StartAsync().ConfigureAwait(false);
 
         var sidecarExe = string.IsNullOrEmpty(sidecarExecutable)
@@ -94,6 +97,13 @@ internal sealed class ApprovalSidecarLauncher : IAsyncDisposable
         {
             allowed.Add(ApprovalSidecarContract.FullyQualifiedLockAcquireToolName);
             allowed.Add(ApprovalSidecarContract.FullyQualifiedLockReleaseToolName);
+        }
+        // Allowlist session_exit so claude dispatches it straight to the sidecar (auto-honored)
+        // instead of routing it through the approval-prompt tool вЂ” the host treats the call itself
+        // as the agent's "I am done" signal, so there's nothing to approve.
+        if (onSessionExit is not null)
+        {
+            allowed.Add(ApprovalSidecarContract.FullyQualifiedSessionExitToolName);
         }
         if (baseOptions.AllowedTools is { Count: > 0 } existing)
         {

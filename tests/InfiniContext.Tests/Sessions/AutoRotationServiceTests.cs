@@ -256,6 +256,53 @@ public class AutoRotationServiceTests
         fired.Should().BeFalse("a disposed service must not raise proposals");
     }
 
+    [Fact]
+    public async Task Dispose_drains_in_flight_ProposeAsync_until_prepareSwitch_completes()
+    {
+        // Follow-up #1b (task 0013, 2026-05-27 handoff): when prepareSwitch is mid-flight,
+        // Dispose must hold on the bounded drain until the proposal completes. Without this,
+        // SessionHost.DisposeAsync would tear down taskStore/supervisor/logging while
+        // ProposeAsync is still awaiting, losing the rotation log line to ObjectDisposedException.
+        var fake = new FakeSession();
+        var factory = new QueueingFactory(new IClaudeSession[] { fake });
+        await using var mgr = NewManager(factory);
+
+        var prepareGate = new TaskCompletionSource<TaskSwitchPlan?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var plan = NewSwitchPlan(7);
+        var service = new AutoRotationService(
+            mgr,
+            new AutoRotationGuard(3, TimeSpan.FromMinutes(5)),
+            async (id, ct) =>
+            {
+                await prepareGate.Task.ConfigureAwait(false);
+                return plan;
+            },
+            Log.Logger);
+
+        var proposalFired = new TaskCompletionSource<AutoRotationProposal>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.AutoRotationProposed += p => proposalFired.TrySetResult(p);
+
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        ctx.MarkRotationReason(RotationReason.Hard);
+        fake.State.BeginSend();
+        fake.State.HandleProcessExit(0);
+        // OnStateTransition ran synchronously on this thread inside HandleProcessExit; the
+        // unfinished ProposeAsync Task is now in _pending (the await of prepareGate suspends
+        // before _pending.Add returns).
+
+        var disposeTask = Task.Run(() => service.Dispose());
+
+        await Task.Delay(200);
+        disposeTask.IsCompleted.Should().BeFalse("Dispose must drain the in-flight proposal");
+
+        prepareGate.SetResult(plan);
+        await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var proposal = await proposalFired.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        proposal.Status.Should().Be(AutoRotationStatus.Approved);
+        proposal.Plan.Should().BeSameAs(plan);
+    }
+
     private static SessionManager NewManager(QueueingFactory factory) =>
         new(
             InfiniContextSettings.Defaults,
