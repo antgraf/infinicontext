@@ -68,7 +68,13 @@ public sealed class AutoRotationService : IDisposable
     private readonly ILogger _logger;
     private readonly object _gate = new();
     private readonly Dictionary<Guid, Action<StateTransition>> _handlers = new();
+    private readonly List<Task> _pending = new();
     private int _disposed;
+
+    /// <summary>Bounded wait for in-flight <see cref="ProposeAsync"/> tasks during <see cref="Dispose"/>.
+    /// Hung <see cref="_prepareSwitch"/> delegates must not block app shutdown forever; 5 s is generous
+    /// for the SQLite-backed <c>TaskService.PrepareSwitchAsync</c> in practice.</summary>
+    private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>Fires once per qualifying <see cref="SessionState.Exited"/> transition. Handlers
     /// run on the state machine's locked thread (the stdout-loop or send thread that produced the
@@ -121,7 +127,22 @@ public sealed class AutoRotationService : IDisposable
         if (ctx.RotationReason == RotationReason.None) return;
         if (ctx.ActiveTaskId is not int taskId) return;
 
-        _ = ProposeAsync(ctx, taskId, ctx.RotationReason);
+        // Track the in-flight proposal in _pending under _gate so Dispose can drain it before
+        // returning. Without this, SessionHost.DisposeAsync would proceed to dispose downstream
+        // resources (taskStore, supervisor, logging) while ProposeAsync is mid-`_prepareSwitch`,
+        // causing the await to throw ObjectDisposedException and the rotation log line to be
+        // swallowed. Adding under the lock + disposed-check makes the add/drain race-free with
+        // Dispose's snapshot.
+        //
+        // ProposeAsync's synchronous prefix (the guard check + a possible Refused Raise) executes
+        // on this thread inside the lock; subscribers should not re-enter the service or acquire
+        // any lock _gate transitively guards. In practice MainWindowViewModel marshals proposals
+        // through the dispatcher and tests use TaskCompletionSource, so this is safe today.
+        lock (_gate)
+        {
+            if (_disposed != 0) return;
+            _pending.Add(ProposeAsync(ctx, taskId, ctx.RotationReason));
+        }
     }
 
     private async Task ProposeAsync(SessionContext ctx, int taskId, RotationReason reason)
@@ -180,19 +201,31 @@ public sealed class AutoRotationService : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _manager.SessionCreated -= OnSessionCreated;
+        // Snapshot _handlers AND _pending atomically with the disposed flag, so a concurrent
+        // OnStateTransition either (a) finished its _pending.Add before us and is captured in
+        // the snapshot, or (b) sees _disposed != 0 and skips the add entirely. Either way the
+        // drain at the end of Dispose waits for every proposal that was started.
         KeyValuePair<Guid, Action<StateTransition>>[] snapshot;
+        Task[] pending;
         lock (_gate)
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             snapshot = _handlers.ToArray();
             _handlers.Clear();
+            pending = _pending.ToArray();
+            _pending.Clear();
         }
+        _manager.SessionCreated -= OnSessionCreated;
         foreach (var kv in snapshot)
         {
             var ctx = _manager.TryGet(kv.Key);
             if (ctx is null) continue;
             try { ctx.Session.State.Transitioned -= kv.Value; } catch { /* best-effort */ }
+        }
+        if (pending.Length > 0)
+        {
+            try { Task.WaitAll(pending, DisposeDrainTimeout); }
+            catch (AggregateException) { /* per-task exceptions already logged in ProposeAsync's catch */ }
         }
     }
 }
