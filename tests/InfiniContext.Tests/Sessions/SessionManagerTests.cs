@@ -256,13 +256,13 @@ public class SessionManagerTests
             Type = "system",
             Subtype = "init",
             SessionId = sid,
-            Model = "claude-opus-4-7",
+            Model = "claude-opus-4-8",
             Raw = new System.Text.Json.Nodes.JsonObject
             {
                 ["type"] = "system",
                 ["subtype"] = "init",
                 ["session_id"] = sid.ToString("D"),
-                ["model"] = "claude-opus-4-7",
+                ["model"] = "claude-opus-4-8",
             },
         });
         observer(BuildAssistantEvent(sid, used: 130_000)); // 65% тАФ soft
@@ -274,7 +274,7 @@ public class SessionManagerTests
 
     // Task 0014: context occupancy is measured per API call from each assistant event's
     // message.usage, not from the summed result.usage. The window resolves from the manager's
-    // default ModelContextWindows map (claude-opus-4-7 -> 200_000), so no modelUsage is needed.
+    // default ModelContextWindows map (claude-opus-4-8 -> 200_000), so no modelUsage is needed.
     private static AssistantEvent BuildAssistantEvent(Guid sessionId, int used)
     {
         var raw = new System.Text.Json.Nodes.JsonObject
@@ -283,7 +283,7 @@ public class SessionManagerTests
             ["session_id"] = sessionId.ToString("D"),
             ["message"] = new System.Text.Json.Nodes.JsonObject
             {
-                ["model"] = "claude-opus-4-7",
+                ["model"] = "claude-opus-4-8",
                 ["usage"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["input_tokens"] = used,

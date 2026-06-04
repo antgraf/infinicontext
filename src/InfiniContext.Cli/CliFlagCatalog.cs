@@ -24,7 +24,7 @@ internal static class CliFlagCatalog
             "Looks up ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl. The host does not mirror Claude's session store; the file must exist."),
         new Entry("--model", "<name>",
             "Override the model used for this session.",
-            "Overrides session.model from settings. Use Anthropic model ids, e.g. claude-opus-4-7 or claude-sonnet-4-6."),
+            "Overrides session.model from settings. Use Anthropic model ids, e.g. claude-opus-4-8 or claude-sonnet-4-6."),
         new Entry("--include-partial-messages", null,
             "Stream stream_event deltas instead of per-turn batched messages.",
             "Default mode is per-turn batched (one assistant event per turn). Only set this if you actually consume deltas — adds noise to the log otherwise."),

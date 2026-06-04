@@ -25,7 +25,7 @@ public class TasksOptionsResolveThresholdsTests
     {
         var opts = new TasksOptions();
 
-        var (soft, hard) = opts.ResolveThresholds("claude-opus-4-7[1m]");
+        var (soft, hard) = opts.ResolveThresholds("claude-opus-4-8[1m]");
 
         soft.Should().Be(opts.SoftThresholdPctLargeContext);
         hard.Should().Be(opts.HardThresholdPctLargeContext);
@@ -50,7 +50,7 @@ public class TasksOptionsResolveThresholdsTests
             LargeContextWindowTokens = 0,
         };
 
-        var (soft, hard) = opts.ResolveThresholds("claude-opus-4-7[1m]");
+        var (soft, hard) = opts.ResolveThresholds("claude-opus-4-8[1m]");
 
         soft.Should().Be(opts.SoftThresholdPct);
         hard.Should().Be(opts.HardThresholdPct);

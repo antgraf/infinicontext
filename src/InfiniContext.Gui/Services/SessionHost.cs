@@ -296,7 +296,9 @@ public sealed class SessionHost : IAsyncDisposable
             new SpawnRequest
             {
                 Cwd = cwd,
-                Model = Settings.Session.Model,
+                // Fall back to the configured main model id when session.model is unset, so the
+                // GUI pins KnownModels.Main rather than letting claude pick its own default.
+                Model = Settings.Session.Model ?? Settings.Models.Main.Id,
                 IncludePartialMessages = Settings.Session.IncludePartialMessages,
                 ActiveTaskId = activeTaskId,
                 FirstUserMessage = firstUserMessage,

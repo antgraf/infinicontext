@@ -253,8 +253,10 @@ SessionApprovalSinkFactory perSessionSinkFactory = (slot, transcript, cwd) =>
 };
 logging.Logger.Information("approval-mode: initial={Mode} (requested={Requested})", currentApprovalMode, initialMode);
 
-// CLI args take precedence over settings; settings provide the fallback.
-var effectiveModel = parsed.Model ?? settings.Session.Model;
+// CLI args take precedence over settings; settings provide the fallback. When neither --model nor
+// session.model is set, fall back to the configured main model id (KnownModels.Main) so the host
+// pins its main model rather than letting claude pick its own default.
+var effectiveModel = parsed.Model ?? settings.Session.Model ?? settings.Models.Main.Id;
 var effectivePartial = parsed.IncludePartialMessages || settings.Session.IncludePartialMessages;
 IReadOnlyList<string> effectiveExtraArgs = parsed.ExtraArgs.Count > 0 ? parsed.ExtraArgs : settings.Session.ExtraArgs;
 

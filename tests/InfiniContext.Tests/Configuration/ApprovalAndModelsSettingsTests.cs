@@ -31,7 +31,7 @@ public class ApprovalAndModelsSettingsTests
             "low effort matches the §6 recipe — fast/cheap, fine for most calls");
         d.Approval.Auto.Mode.Should().Be(CliLightModelMode.SingleShot,
             "auto-mode safety review needs real isolation between unrelated tool calls (single-shot)");
-        d.Models.Main.Id.Should().Be("claude-opus-4-7");
+        d.Models.Main.Id.Should().Be("claude-opus-4-8");
         d.Models.Light.Id.Should().Be("claude-haiku-4-5");
         d.Models.Light.MaxTokens.Should().Be(1024);
         d.Models.Light.TimeoutSeconds.Should().Be(30);
@@ -59,8 +59,8 @@ public class ApprovalAndModelsSettingsTests
         t.ModelContextWindows.Should().BeEquivalentTo(new Dictionary<string, int>
         {
             ["claude-sonnet-4-6"] = 200_000,
-            ["claude-opus-4-7"] = 200_000,
-            ["claude-opus-4-7[1m]"] = 1_000_000,
+            ["claude-opus-4-8"] = 200_000,
+            ["claude-opus-4-8[1m]"] = 1_000_000,
             ["claude-haiku-4-5"] = 200_000,
         });
     }

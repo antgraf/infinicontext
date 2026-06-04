@@ -1,3 +1,5 @@
+using InfiniContext.Core.Configuration;
+
 namespace InfiniContext.Core.Review;
 
 /// <summary>
@@ -13,7 +15,7 @@ public sealed record ReviewerAgentOptions
     /// deliberately not the default here -- the user's design requires reasoning, not
     /// classification.
     /// </summary>
-    public string Model { get; init; } = "claude-sonnet-4-6";
+    public string Model { get; init; } = KnownModels.Reviewer;
 
     /// <summary>Override the resolved <c>claude</c> executable. Mainly for tests pointing at FakeClaude.</summary>
     public string? ClaudeExecutable { get; init; }

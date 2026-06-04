@@ -212,7 +212,22 @@ internal sealed class MultiSessionHost : IReplActions
             string? line;
             try
             {
-                line = await _input.ReadLineAsync().ConfigureAwait(false);
+                // Race the (blocking) read against the exit signal. Without this, an exit/switch
+                // raised while we are parked here -- most importantly an auto-rotation from a
+                // context-pressure nudge, where the session goes Idle (waking us to the prompt)
+                // and only then Exited (which fires _exitSignal and populates _pendingSwitch) --
+                // would never be observed: ReadLineAsync does not watch the signal, so the host
+                // hung forever after printing "...flush detected, auto-rotating...". The read task
+                // is abandoned on the exit path; we are tearing down anyway.
+                var readTask = _input.ReadLineAsync();
+                await Task.WhenAny(readTask, _exitSignal.Task).ConfigureAwait(false);
+                if (_exitRequested)
+                {
+                    // Observe any later fault on the abandoned read so it isn't unobserved.
+                    _ = readTask.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
+                    break;
+                }
+                line = await readTask.ConfigureAwait(false);
             }
             catch (IOException)
             {
