@@ -27,7 +27,7 @@ public static class InfiniContextTaskSkill
     public const string SkillName = "infinicontext-task";
 
     /// <summary>Embedded version stamp. Increment on every change to <see cref="SkillMarkdown"/>.</summary>
-    public const int Version = 5;
+    public const int Version = 6;
 
     /// <summary>Marker prefix inside the SKILL.md file. The trailing integer is the version.</summary>
     public const string VersionMarkerPrefix = "<!-- infinicontext-task-skill-version: ";
@@ -140,8 +140,8 @@ public static class InfiniContextTaskSkill
 
         The host monitors your context usage and may inject one of two turns:
 
-        - **Soft (~60%):** finish the current sub-task, write progress, then exit cleanly so a fresh session can resume without losing state.
-        - **Hard (~85%):** flush *now* — update `progress.md` with where you are and what's left, then exit. Do not start new work or ask clarifying questions.
+        - **Soft (~60%):** finish the current sub-task, write progress, then call `mcp__infinicontext__session_exit` so a fresh session can resume without losing state.
+        - **Hard (~85%):** flush *now* — update `progress.md` with where you are and what's left, then call `mcp__infinicontext__session_exit`. Do not start new work or ask clarifying questions.
 
         ## Mandatory vs optional artifacts
 

@@ -20,4 +20,8 @@ public static class ApprovalSidecarContract
     /// <summary>Stage 2A Phase 7: MCP tool name for releasing a previously acquired lock.</summary>
     public const string LockReleaseToolName = "task_release_lock";
     public static readonly string FullyQualifiedLockReleaseToolName = $"mcp__{McpServerKey}__{LockReleaseToolName}";
+
+    /// <summary>Stage 3 bug A: MCP tool the agent calls to gracefully exit its session after a context-pressure flush.</summary>
+    public const string SessionExitToolName = "session_exit";
+    public static readonly string FullyQualifiedSessionExitToolName = $"mcp__{McpServerKey}__{SessionExitToolName}";
 }

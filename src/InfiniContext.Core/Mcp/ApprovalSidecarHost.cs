@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
+using InfiniContext.Core.Mcp.Sessions;
 using InfiniContext.Core.Mcp.Tasks;
 using Serilog;
 
@@ -195,6 +196,45 @@ public static class ApprovalSidecarHost
                     return ("{\"ok\":false,\"error\":\"malformed host response\"}", true);
                 }
                 return ($"{{\"ok\":{(response.Ok ? "true" : "false")}}}", false);
+            });
+
+        var exitSchema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["reason"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Free-form description of why the session is exiting "
+                        + "(e.g., 'flushed after hard nudge', 'task complete').",
+                },
+            },
+        };
+
+        server.RegisterTool(
+            ApprovalSidecarContract.SessionExitToolName,
+            "Request a graceful exit of this Claude session. The host closes stdin; the current turn "
+            + "completes, then the process exits. Auto-rotation, if armed by a context-pressure nudge, "
+            + "fires from the resulting Exited transition. Returns { ok: true }.",
+            exitSchema,
+            async (arguments, innerCt) =>
+            {
+                var reason = arguments["reason"]?.GetValue<string>();
+                var req = new SessionExitRequest(reason);
+                logger.Information("sidecar: forwarding session.exit reason={Reason}", reason ?? "<none>");
+                var responseObj = await ExchangeAsync(pipeWriter, pipeReader, pipeLock, req.ToJson(), innerCt).ConfigureAwait(false);
+                if (responseObj is null)
+                    return ("{\"ok\":false,\"error\":\"host disconnected\"}", true);
+
+                SessionExitResponse response;
+                try { response = SessionExitResponse.FromJson(responseObj); }
+                catch (Exception ex)
+                {
+                    logger.Warning(ex, "sidecar: malformed session.exit response");
+                    return ("{\"ok\":false,\"error\":\"malformed host response\"}", true);
+                }
+                return ($"{{\"ok\":{(response.Ok ? "true" : "false")}}}", response.Ok ? false : true);
             });
 
         await server.RunAsync(ct).ConfigureAwait(false);

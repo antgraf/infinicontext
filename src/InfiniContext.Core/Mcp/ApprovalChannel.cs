@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
+using InfiniContext.Core.Mcp.Sessions;
 using InfiniContext.Core.Mcp.Tasks;
 using Serilog;
 
@@ -30,6 +31,7 @@ public sealed class ApprovalChannel : IAsyncDisposable
     private readonly LockRegistry? _lockRegistry;
     private readonly TimeSpan _lockTtl;
     private readonly TimeSpan _lockMaxWait;
+    private readonly Func<SessionExitRequest, CancellationToken, Task>? _onSessionExit;
     private readonly ILogger _logger;
     private readonly TimeSpan _disposeTimeout;
     private readonly CancellationTokenSource _cts = new();
@@ -44,13 +46,15 @@ public sealed class ApprovalChannel : IAsyncDisposable
         int disposeTimeoutSeconds = 2,
         LockRegistry? lockRegistry = null,
         TimeSpan? lockTtl = null,
-        TimeSpan? lockMaxWait = null)
+        TimeSpan? lockMaxWait = null,
+        Func<SessionExitRequest, CancellationToken, Task>? onSessionExit = null)
     {
         _pipeName = pipeName;
         _sink = sink;
         _lockRegistry = lockRegistry;
         _lockTtl = lockTtl ?? TimeSpan.FromSeconds(30);
         _lockMaxWait = lockMaxWait ?? TimeSpan.FromSeconds(60);
+        _onSessionExit = onSessionExit;
         _logger = logger ?? Log.Logger;
         _disposeTimeout = TimeSpan.FromSeconds(disposeTimeoutSeconds);
     }
@@ -129,6 +133,9 @@ public sealed class ApprovalChannel : IAsyncDisposable
                         break;
                     case LockWireFormat.ReleaseKind:
                         responseJson = HandleLockRelease(requestObj).ToJson();
+                        break;
+                    case LockWireFormat.SessionExitKind:
+                        responseJson = HandleSessionExit(requestObj).ToJson();
                         break;
                     case LockWireFormat.ApprovalKind:
                         responseJson = (await HandleApprovalAsync(requestObj).ConfigureAwait(false)).ToWireJson();
@@ -212,6 +219,31 @@ public sealed class ApprovalChannel : IAsyncDisposable
         {
             _logger.Error(ex, "approval-channel: lock.release handler threw");
             return new LockReleaseResponse(false);
+        }
+    }
+
+    private SessionExitResponse HandleSessionExit(JsonObject obj)
+    {
+        if (_onSessionExit is null)
+        {
+            // A newer skill emitting session.exit against a host that wired no handler. Refuse
+            // explicitly (the sidecar surfaces ok:false as a tool error) rather than hanging.
+            _logger.Warning("approval-channel: session.exit received but no handler wired");
+            return new SessionExitResponse(false);
+        }
+        try
+        {
+            var req = SessionExitRequest.FromJson(obj);
+            // Fire-and-forget is load-bearing: the agent's tool result must return BEFORE stdin
+            // closes, or claude may die before reading it. Deferring the close to the threadpool
+            // lets this method reply {ok:true} on the pipe first. See design.md В§"Sequence diagram".
+            _ = Task.Run(() => _onSessionExit(req, _cts.Token));
+            return new SessionExitResponse(true);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "approval-channel: session.exit handler threw");
+            return new SessionExitResponse(false);
         }
     }
 
