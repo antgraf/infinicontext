@@ -1,6 +1,6 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// User-triggered version of the host's context-pressure hard-threshold nudge. Injects a
@@ -15,7 +15,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// "no active task" semantics) -- there's no <c>.task/</c> folder to flush to.
 /// </para>
 /// </summary>
-internal sealed class FlushSlashCommand : ISlashCommand
+public sealed class FlushSlashCommand : ISlashCommand
 {
     public string Name => "/flush";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();

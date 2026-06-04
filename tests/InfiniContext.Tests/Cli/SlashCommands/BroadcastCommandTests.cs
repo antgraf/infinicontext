@@ -1,10 +1,9 @@
 using System.Threading.Channels;
-using InfiniContext.Cli.SlashCommands;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
-using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.State;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;

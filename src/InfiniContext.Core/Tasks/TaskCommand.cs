@@ -1,14 +1,14 @@
 using System.Text;
 using InfiniContext.Core.Tasks;
 
-namespace InfiniContext.Cli.Tasks;
+namespace InfiniContext.Core.Tasks;
 
 /// <summary>
 /// Pure parser for <c>/task &lt;subcommand&gt; …</c> REPL input. Returns a discriminated record
 /// the handler can dispatch on. Linked into the test assembly via <c>&lt;Compile Include&gt;</c>
 /// so parsing edge cases can be exercised without spawning the CLI.
 /// </summary>
-internal abstract record TaskCommand
+public abstract record TaskCommand
 {
     public sealed record New(string Description, string? Home = null) : TaskCommand;
     public sealed record List(int? Limit, TaskItemStatus? Status) : TaskCommand;

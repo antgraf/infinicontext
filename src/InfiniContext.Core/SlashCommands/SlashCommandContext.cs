@@ -1,4 +1,5 @@
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.Tasks;
 
@@ -22,7 +23,7 @@ public sealed record SlashCommandContext(
     string? EffectiveSettingsJson,
     Func<ApprovalMode>? GetApprovalMode,
     Func<ApprovalMode, ApprovalMode>? SwitchApprovalMode,
-    object? TaskHandler,
+    TaskCommandHandler? TaskHandler,
     Func<int, CancellationToken, Task<TaskSwitchPlan?>>? PrepareTaskSwitch,
     Func<decimal?> GetLastCostUsd,
     Func<int?> GetLastNumTurns,
@@ -47,8 +48,8 @@ public sealed record SlashCommandContext(
     /// successfully; null otherwise (the <c>/issue</c> surface prints an "unavailable" message
     /// in that case). Kept as an init-only property rather than a positional record param so
     /// callers (tests, future host modes) that don't care about the issue surface don't have to
-    /// thread <c>null</c> through. Held as <c>object?</c> for slice A; see record-level note.</summary>
-    public object? IssueHandler { get; init; }
+    /// thread <c>null</c> through.</summary>
+    public IssueCommandHandler? IssueHandler { get; init; }
 
     /// <summary>Register a task claim with the host's <see cref="TaskActivityCoordinator"/> when
     /// a slash command spawns a new task-bound session (currently only <c>/task spawn</c>).

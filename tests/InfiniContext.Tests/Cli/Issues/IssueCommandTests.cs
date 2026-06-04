@@ -1,4 +1,4 @@
-using InfiniContext.Cli.Issues;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.Tasks;
 using FluentAssertions;
 

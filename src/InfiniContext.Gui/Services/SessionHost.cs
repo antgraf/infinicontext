@@ -1,8 +1,10 @@
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Logging;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Mcp.Tasks;
+using InfiniContext.Core.Review;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.Supervision;
 using InfiniContext.Core.Tasks;
@@ -29,6 +31,10 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly TimeSpan _approvalTimeout;
     private readonly ModeHolder _modeHolder;
     private readonly AutoRotationService? _autoRotationService;
+    private readonly ReviewService? _reviewService;
+    private readonly ScopeResolver? _scopeResolver;
+    private readonly IssueService? _issueService;
+    private readonly object _handlerWriteLock = new();
     private int _disposed;
 
     public InfiniContextSettings Settings { get; }
@@ -72,7 +78,10 @@ public sealed class SessionHost : IAsyncDisposable
         LightModelServiceFactory lightModelFactory,
         TimeSpan approvalTimeout,
         ModeHolder modeHolder,
-        AutoRotationService? autoRotationService)
+        AutoRotationService? autoRotationService,
+        ReviewService? reviewService,
+        ScopeResolver? scopeResolver,
+        IssueService? issueService)
     {
         Settings = settings;
         _logging = logging;
@@ -85,6 +94,9 @@ public sealed class SessionHost : IAsyncDisposable
         _approvalTimeout = approvalTimeout;
         _modeHolder = modeHolder;
         _autoRotationService = autoRotationService;
+        _reviewService = reviewService;
+        _scopeResolver = scopeResolver;
+        _issueService = issueService;
     }
 
     /// <summary>Mutable shared holder for the host-wide effective approval mode. Both the
@@ -157,15 +169,20 @@ public sealed class SessionHost : IAsyncDisposable
         // and sessions still spawn under the (unattached) root.
         TaskStore? taskStore = null;
         TaskService? taskService = null;
+        ReviewService? reviewService = null;
+        ScopeResolver? scopeResolver = null;
+        IssueService? issueService = null;
         try
         {
             taskStore = await TaskStore.OpenAsync(settings.Tasks.ResolvedDbPath()).ConfigureAwait(false);
-            // Light model for TaskService is unused by PrepareSwitchAsync (the only entry point the
-            // GUI currently calls), but the ctor requires a non-null instance. Mirrors the CLI's
-            // construction at Program.cs:149-150.
             var lightForTasks = lightModelFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
             taskService = new TaskService(taskStore, lightForTasks);
-            logging.Logger.Information("tasks: subsystem ready (db={DbPath})", settings.Tasks.ResolvedDbPath());
+
+            // Review + issue subsystems, mirroring the CLI's Program.cs wiring so /task review and
+            // /issue work in the GUI through the shared command classes (task 0015 slice E).
+            (reviewService, scopeResolver) = BuildReviewStack(settings, supervisor, logging.Logger);
+            issueService = new IssueService(taskStore, lockRegistry);
+            logging.Logger.Information("tasks: subsystem ready (db={DbPath}); review + issue: ready", settings.Tasks.ResolvedDbPath());
         }
         catch (Exception ex)
         {
@@ -184,8 +201,79 @@ public sealed class SessionHost : IAsyncDisposable
                 (id, ct) => taskService.PrepareSwitchAsync(id, ct),
                 logging.Logger);
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder, autoRotationService);
+        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder, autoRotationService, reviewService, scopeResolver, issueService);
     }
+
+    /// <summary>
+    /// Build the review-subsystem objects (<see cref="ReviewService"/> + <see cref="ScopeResolver"/>)
+    /// used by <c>/task review</c>. Ported verbatim from the CLI's <c>Program.cs</c> wiring so both
+    /// hosts produce identical review behaviour. Returns <c>(null, null)</c> on failure; the caller
+    /// degrades <c>/task review</c> to an "unavailable" message rather than crashing the GUI.
+    /// </summary>
+    private static (ReviewService?, ScopeResolver?) BuildReviewStack(
+        InfiniContextSettings settings, IProcessSupervisor supervisor, ILogger logger)
+    {
+        try
+        {
+            var reviewSettings = settings.Review;
+            var reviewerModelId = string.IsNullOrWhiteSpace(reviewSettings.ReviewerModel)
+                ? settings.Models.Main.Id
+                : reviewSettings.ReviewerModel!;
+            var coordinatorModelId = string.IsNullOrWhiteSpace(reviewSettings.CoordinatorModel)
+                ? reviewerModelId
+                : reviewSettings.CoordinatorModel!;
+            var reviewerAgent = new CliReviewerAgentService(
+                new ReviewerAgentOptions { Model = reviewerModelId, InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds },
+                supervisor: supervisor, logger: logger);
+            var coordinatorAgent = string.Equals(coordinatorModelId, reviewerModelId, StringComparison.Ordinal)
+                ? reviewerAgent
+                : new CliReviewerAgentService(
+                    new ReviewerAgentOptions { Model = coordinatorModelId, InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds },
+                    supervisor: supervisor, logger: logger);
+            var autoApplyExecutor = new AutoApplyExecutor(
+                new ProcessBuildTestRunner(supervisor: supervisor),
+                new AutoApplyOptions
+                {
+                    ConfidenceFloor = reviewSettings.ConfidenceFloor,
+                    MaxLinesPerFinding = reviewSettings.AutoApplyMaxLinesPerFinding,
+                    MaxFilesPerFinding = reviewSettings.AutoApplyMaxFilesPerFinding,
+                    SkipBuildTestGate = reviewSettings.SkipBuildTestGate,
+                },
+                logger: logger);
+            var reviewService = new ReviewService(reviewerAgent, coordinatorAgent, autoApplyExecutor, logger: logger);
+            var scopeResolver = new ScopeResolver(new ProcessGitRunner(), byteCap: reviewSettings.PerFileByteCap);
+            return (reviewService, scopeResolver);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(ex, "review: stack init failed; /task review will report 'unavailable'");
+            return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// Build a <see cref="TaskCommandHandler"/> whose output is written to <paramref name="output"/>
+    /// (the GUI binds this to the focused session's transcript). Returns null when the task
+    /// subsystem is unavailable. <paramref name="input"/> backs <c>/task review</c>'s interactive
+    /// confirmation; the GUI passes <c>null</c>, so GUI review requires the <c>--yes</c> flag.
+    /// </summary>
+    public TaskCommandHandler? CreateTaskCommandHandler(TextWriter output, TextReader? input = null)
+    {
+        if (_taskService is null) return null;
+        return new TaskCommandHandler(
+            _taskService,
+            output,
+            _handlerWriteLock,
+            reviewService: _reviewService,
+            scopeResolver: _scopeResolver,
+            input: input,
+            lockRegistry: _lockRegistry);
+    }
+
+    /// <summary>Build an <see cref="IssueCommandHandler"/> writing to <paramref name="output"/>.
+    /// Returns null when the issue subsystem is unavailable.</summary>
+    public IssueCommandHandler? CreateIssueCommandHandler(TextWriter output) =>
+        _issueService is null ? null : new IssueCommandHandler(_issueService, output, _handlerWriteLock);
 
     /// <summary>
     /// Switch the host-wide approval mode and hot-swap every active session's

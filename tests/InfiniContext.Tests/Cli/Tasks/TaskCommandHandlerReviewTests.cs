@@ -1,8 +1,7 @@
-using InfiniContext.Cli.Tasks;
+using InfiniContext.Core.Tasks;
 using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Review;
-using InfiniContext.Core.Tasks;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Cli.Tasks;

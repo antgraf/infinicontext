@@ -1,4 +1,4 @@
-using InfiniContext.Cli.Tasks;
+using InfiniContext.Core.Tasks;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Cli.Tasks;

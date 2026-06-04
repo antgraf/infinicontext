@@ -1,6 +1,6 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Stage 2B Phase 4b: <c>/list</c> prints two tables -- currently-active sessions and the
@@ -8,7 +8,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// shared <see cref="ISlashCommandRenderer.WriteTable"/> seam so the CLI and GUI surfaces share
 /// the same command implementation.
 /// </summary>
-internal sealed class ListSessionsCommand : ISlashCommand
+public sealed class ListSessionsCommand : ISlashCommand
 {
     public string Name => "/list";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/ls" };

@@ -1,8 +1,8 @@
-using InfiniContext.Core.SlashCommands;
+using InfiniContext.Core.Configuration;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
-internal sealed class ApprovalCommand : ISlashCommand
+public sealed class ApprovalCommand : ISlashCommand
 {
     public string Name => "/approval";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();
@@ -37,7 +37,7 @@ internal sealed class ApprovalCommand : ISlashCommand
             return Task.CompletedTask;
         }
 
-        if (!RunArgs.TryParseApprovalMode(arg, out var requested))
+        if (!ApprovalModeParser.TryParse(arg, out var requested))
         {
             ctx.Renderer.Write($"[approval] '{arg}' is not one of ask, deny, allow, auto\n");
             return Task.CompletedTask;

@@ -1,8 +1,8 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
-internal sealed class QuitCommand : ISlashCommand
+public sealed class QuitCommand : ISlashCommand
 {
     public string Name => "/quit";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/exit" };

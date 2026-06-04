@@ -1,7 +1,6 @@
-using InfiniContext.Cli.Issues;
 using InfiniContext.Cli.SlashCommands;
-using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.SlashCommands;
@@ -96,25 +95,7 @@ internal sealed class MultiSessionHost : IReplActions
         _autoRotationService = autoRotationService;
         _renderer = new ConsoleSlashCommandRenderer(_console, _writeLock);
 
-        _registry = new SlashCommandRegistry(new ISlashCommand[]
-        {
-            new QuitCommand(),
-            new CostCommand(),
-            new StateCommand(),
-            new HelpCommand(),
-            new SettingsCommand(),
-            new ResumeCommand(),
-            new ApprovalCommand(),
-            new TaskSlashCommand(),
-            new IssueSlashCommand(),
-            new FlushSlashCommand(),
-            new NewSessionCommand(),
-            new ListSessionsCommand(),
-            new FocusCommand(),
-            new FocusNextCommand(),
-            new FocusPrevCommand(),
-            new BroadcastCommand(),
-        });
+        _registry = SlashCommandRegistryFactory.Build();
 
         _onFragment = OnFragmentAppended;
         _onTransition = OnStateTransition;

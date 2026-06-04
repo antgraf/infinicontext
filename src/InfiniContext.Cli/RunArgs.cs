@@ -99,15 +99,6 @@ internal sealed record RunArgs(
         return true;
     }
 
-    public static bool TryParseApprovalMode(string s, out ApprovalMode mode)
-    {
-        switch (s.ToLowerInvariant())
-        {
-            case "ask": mode = InfiniContext.Core.Configuration.ApprovalMode.Ask; return true;
-            case "deny": mode = InfiniContext.Core.Configuration.ApprovalMode.Deny; return true;
-            case "allow": mode = InfiniContext.Core.Configuration.ApprovalMode.Allow; return true;
-            case "auto": mode = InfiniContext.Core.Configuration.ApprovalMode.Auto; return true;
-            default: mode = default; return false;
-        }
-    }
+    public static bool TryParseApprovalMode(string s, out ApprovalMode mode) =>
+        InfiniContext.Core.Configuration.ApprovalModeParser.TryParse(s, out mode);
 }

@@ -1,7 +1,6 @@
-using InfiniContext.Cli.Tasks;
 using InfiniContext.Core.Tasks;
 
-namespace InfiniContext.Cli.Issues;
+namespace InfiniContext.Core.Issues;
 
 /// <summary>
 /// Pure parser for <c>/issue ...</c> REPL input. Returns a discriminated record the handler can
@@ -25,7 +24,7 @@ namespace InfiniContext.Cli.Issues;
 /// the title.
 /// </para>
 /// </summary>
-internal abstract record IssueCommand
+public abstract record IssueCommand
 {
     public sealed record Add(string Title, IssueKind Kind, string? Where) : IssueCommand;
     public sealed record List : IssueCommand;

@@ -1,7 +1,7 @@
 using System.Globalization;
 using InfiniContext.Core.Tasks;
 
-namespace InfiniContext.Cli.Issues;
+namespace InfiniContext.Core.Issues;
 
 /// <summary>
 /// Dispatches a parsed <see cref="IssueCommand"/> to <see cref="IssueService"/> and renders the
@@ -17,7 +17,7 @@ namespace InfiniContext.Cli.Issues;
 /// "current task" state of its own.
 /// </para>
 /// </summary>
-internal sealed class IssueCommandHandler
+public sealed class IssueCommandHandler
 {
     private readonly IssueService _service;
     private readonly TextWriter _output;

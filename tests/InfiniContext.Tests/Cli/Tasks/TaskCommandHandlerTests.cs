@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
-using InfiniContext.Cli.Tasks;
-using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Tasks;
+using InfiniContext.Core.LightModel;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Cli.Tasks;

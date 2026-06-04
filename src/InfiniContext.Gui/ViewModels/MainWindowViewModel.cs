@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Sessions;
+using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.Tasks;
 using InfiniContext.Gui.Services;
 
@@ -24,6 +25,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private readonly IUiDispatcher _dispatcher;
     private readonly IUiTimerFactory _timerFactory;
     private readonly TaskNodeViewModel _unattached = new(null);
+
+    /// <summary>The host-handled slash-commands, built from the single registration site shared
+    /// with the CLI (task 0015). Typed slash input is dispatched through this in
+    /// <see cref="SendToSessionAsync"/> before falling through to claude's stdin.</summary>
+    private readonly SlashCommandRegistry _slashCommands = SlashCommandRegistryFactory.Build();
 
     public ObservableCollection<TaskNodeViewModel> TaskNodes { get; } = new();
 
@@ -532,6 +538,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     private async Task SendToSessionAsync(SessionRowViewModel target, string text)
     {
+        // Host-handled slash-commands are intercepted here and routed through the shared registry
+        // (task 0015 slice E) instead of being sent to claude's stdin. Unknown slash-commands are
+        // forwarded to claude (it owns /clear, /compact, etc.), matching the CLI's D6 policy.
+        if (text.StartsWith('/') && await TryHandleSlashCommandAsync(target, text).ConfigureAwait(true))
+            return;
+
         // The row VM decides Idle vs glue-buffer (task 0012 finding #7 / docs/todo.md #9):
         // - Idle: writes to claude's stdin immediately. Returns true.
         // - Busy: appends to the row's pending-prompt bundle. Returns false. The actual stdin
@@ -550,6 +562,89 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = $"Send failed: {ex.Message}";
             target.Context.Transcript.Append($"\n[send failed: {ex.Message}]\n");
         }
+    }
+
+    /// <summary>
+    /// Resolve a typed <c>/</c>-command through the shared <see cref="SlashCommandRegistry"/> and
+    /// run it against <paramref name="target"/>. Returns true when the command was recognised and
+    /// handled (so the caller must NOT also send the text to claude); false for an unknown command,
+    /// which the caller forwards to claude verbatim (D6 - claude owns /clear, /compact, ...).
+    /// </summary>
+    private async Task<bool> TryHandleSlashCommandAsync(SessionRowViewModel target, string text)
+    {
+        var space = text.IndexOf(' ');
+        var head = space < 0 ? text : text[..space];
+        var argLine = space < 0 ? "" : text[(space + 1)..];
+
+        var cmd = _slashCommands.TryResolve(head);
+        if (cmd is null) return false; // unknown -> forward to claude
+
+        if (_host is null)
+        {
+            StatusText = $"{head} is unavailable (host not initialised).";
+            return true;
+        }
+
+        void Append(string s)
+        {
+            if (_dispatcher.CheckAccess()) target.Context.Transcript.Append(s);
+            else _dispatcher.Post(() => target.Context.Transcript.Append(s));
+        }
+
+        var renderer = new GuiSlashCommandRenderer(Append);
+        var writer = new TranscriptTextWriter(Append);
+        var ctx = BuildSlashContext(target, renderer, writer);
+        StatusText = $"Running {head}...";
+        try
+        {
+            await cmd.ExecuteAsync(ctx, argLine, CancellationToken.None).ConfigureAwait(true);
+            StatusText = $"{head} done.";
+        }
+        catch (Exception ex)
+        {
+            Append($"[{head.TrimStart('/')}] error: {ex.Message}\n");
+            StatusText = $"{head} failed: {ex.Message}";
+            _host.Logger.Warning(ex, "gui-slash: {Cmd} threw", head);
+        }
+        return true;
+    }
+
+    private SlashCommandContext BuildSlashContext(SessionRowViewModel target, ISlashCommandRenderer renderer, TextWriter writer)
+    {
+        void SetStatus(string s)
+        {
+            if (_dispatcher.CheckAccess()) StatusText = s;
+            else _dispatcher.Post(() => StatusText = s);
+        }
+
+        var actions = new GuiReplActions(
+            requestExit: () => SetStatus("/quit: close the window to exit the GUI."),
+            requestResume: sid => SetStatus($"/resume is not supported in the GUI (requested {sid})."),
+            requestSwitch: plan => SetStatus($"/task switch: spawn a session for task {plan.Task.Id:D4} \"{plan.Task.Title}\" from the tree."),
+            requestFocus: id => SetStatus($"/focus: select session {id:D} in the tree to focus it."));
+
+        return new SlashCommandContext(
+            Session: target.Context.Session,
+            Renderer: renderer,
+            Settings: _host!.Settings,
+            EffectiveSettingsJson: null,
+            GetApprovalMode: () => _host.CurrentApprovalMode,
+            SwitchApprovalMode: m => _host.SwitchApprovalMode(m),
+            TaskHandler: _host.CreateTaskCommandHandler(writer),
+            PrepareTaskSwitch: _host.TaskService is null
+                ? null
+                : (id, ct) => _host.TaskService.PrepareSwitchAsync(id, ct),
+            GetLastCostUsd: () => target.Context.LastCostUsd,
+            GetLastNumTurns: () => target.Context.LastNumTurns,
+            Actions: actions,
+            Registry: _slashCommands)
+        {
+            SessionManager = _host.SessionManager,
+            FocusedHostSessionId = target.Context.Id,
+            ActiveTaskId = target.Context.ActiveTaskId,
+            IssueHandler = _host.CreateIssueCommandHandler(writer),
+            TryEnterTask = null,
+        };
     }
 
     private async Task InterruptAsync()

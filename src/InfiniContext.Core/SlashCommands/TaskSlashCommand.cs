@@ -1,10 +1,8 @@
-using InfiniContext.Cli.Issues;
-using InfiniContext.Cli.Tasks;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.Sessions;
-using InfiniContext.Core.SlashCommands;
 using InfiniContext.Core.Tasks;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Façade slash-command for the <c>/task</c> sub-grammar. The actual parser lives in
@@ -14,7 +12,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// Class name is <c>TaskSlashCommand</c> rather than <c>TaskCommand</c> to avoid collision with
 /// the existing parser type. See <c>decisions.md</c> D12.
 /// </summary>
-internal sealed class TaskSlashCommand : ISlashCommand
+public sealed class TaskSlashCommand : ISlashCommand
 {
     public string Name => "/task";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/tasks" };

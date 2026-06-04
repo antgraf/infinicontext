@@ -1,7 +1,7 @@
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Stage 2B Phase 4b: <c>/resume &lt;session_id&gt;</c> is non-destructive — it opens a new
@@ -10,7 +10,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// (older tests), falls back to the destructive Stage-1 path of asking the outer loop to
 /// respawn (via <see cref="IReplActions.RequestResume"/>).
 /// </summary>
-internal sealed class ResumeCommand : ISlashCommand
+public sealed class ResumeCommand : ISlashCommand
 {
     public string Name => "/resume";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();

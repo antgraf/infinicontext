@@ -1,7 +1,7 @@
-using InfiniContext.Cli.Issues;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Facade slash-command for the <c>/issue</c> sub-grammar (issues.md feature, v1). The actual
@@ -14,7 +14,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// identical.
 /// </para>
 /// </summary>
-internal sealed class IssueSlashCommand : ISlashCommand
+public sealed class IssueSlashCommand : ISlashCommand
 {
     public string Name => "/issue";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();

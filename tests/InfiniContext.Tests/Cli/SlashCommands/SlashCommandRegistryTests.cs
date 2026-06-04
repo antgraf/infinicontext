@@ -1,4 +1,3 @@
-using InfiniContext.Cli.SlashCommands;
 using InfiniContext.Core.SlashCommands;
 using FluentAssertions;
 

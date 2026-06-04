@@ -1,5 +1,5 @@
 using System.Threading.Channels;
-using InfiniContext.Cli.Tasks;
+using InfiniContext.Core.Tasks;
 using InfiniContext.Cli.Ui;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.Events;
@@ -7,7 +7,6 @@ using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Mcp;
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.State;
-using InfiniContext.Core.Tasks;
 using FluentAssertions;
 using Serilog;
 using Spectre.Console.Testing;

@@ -1,8 +1,8 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
-internal sealed class StateCommand : ISlashCommand
+public sealed class StateCommand : ISlashCommand
 {
     public string Name => "/state";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();

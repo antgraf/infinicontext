@@ -1,6 +1,6 @@
 using Microsoft.Extensions.FileSystemGlobbing;
 
-namespace InfiniContext.Cli.Tasks;
+namespace InfiniContext.Core.Tasks;
 
 /// <summary>
 /// Expands the raw <c>--scope</c> CLI value (e.g. <c>"src/**/*.cs;tests/Foo.cs"</c>) into a flat
@@ -21,7 +21,7 @@ namespace InfiniContext.Cli.Tasks;
 /// on each platform and aligns with <c>ScopeResolver.PathComparer</c>.
 /// </para>
 /// </summary>
-internal static class ScopeGlobExpander
+public static class ScopeGlobExpander
 {
     public static IReadOnlyList<string> Expand(string? scopeArg, string repoRoot)
     {

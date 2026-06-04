@@ -1,6 +1,6 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Stage 2B Phase 4b: <c>/focus &lt;host-id-or-prefix&gt;</c> switches the focused pane to the
@@ -8,7 +8,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// True <c>Tab</c> keybinding requires <c>Console.ReadKey</c>-level input handling — deferred to
 /// Phase 4c+.
 /// </summary>
-internal sealed class FocusCommand : ISlashCommand
+public sealed class FocusCommand : ISlashCommand
 {
     public string Name => "/focus";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();
@@ -57,7 +57,7 @@ internal sealed class FocusCommand : ISlashCommand
 /// Stage 2B Phase 4b: <c>/next</c> cycles focus to the next active session (substitute for
 /// <c>Tab</c> until Phase 4c lifts input into <c>Console.ReadKey</c>).
 /// </summary>
-internal sealed class FocusNextCommand : ISlashCommand
+public sealed class FocusNextCommand : ISlashCommand
 {
     public string Name => "/next";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();
@@ -71,7 +71,7 @@ internal sealed class FocusNextCommand : ISlashCommand
 /// <summary>
 /// Stage 2B Phase 4b: <c>/prev</c> cycles focus backward (the complement of <c>/next</c>).
 /// </summary>
-internal sealed class FocusPrevCommand : ISlashCommand
+public sealed class FocusPrevCommand : ISlashCommand
 {
     public string Name => "/prev";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();
@@ -82,7 +82,7 @@ internal sealed class FocusPrevCommand : ISlashCommand
         FocusCycle.RunAsync(ctx, -1);
 }
 
-internal static class FocusCycle
+public static class FocusCycle
 {
     public static Task RunAsync(SlashCommandContext ctx, int direction)
     {

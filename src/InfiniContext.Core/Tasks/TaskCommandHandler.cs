@@ -2,14 +2,14 @@ using InfiniContext.Core.Mcp.Tasks;
 using InfiniContext.Core.Review;
 using InfiniContext.Core.Tasks;
 
-namespace InfiniContext.Cli.Tasks;
+namespace InfiniContext.Core.Tasks;
 
 /// <summary>
 /// Dispatches a parsed <see cref="TaskCommand"/> to <see cref="TaskService"/> and renders the
 /// outcome to <see cref="TextWriter"/>. Handler is the only place output formatting lives —
 /// the parser is presentation-agnostic and the service is logic-only.
 /// </summary>
-internal sealed class TaskCommandHandler
+public sealed class TaskCommandHandler
 {
     private readonly TaskService _service;
     private readonly TextWriter _output;

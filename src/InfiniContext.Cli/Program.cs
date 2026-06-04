@@ -1,8 +1,7 @@
 using InfiniContext.Cli;
-using InfiniContext.Cli.Issues;
-using InfiniContext.Cli.Tasks;
 using InfiniContext.Cli.Ui;
 using InfiniContext.Core.Configuration;
+using InfiniContext.Core.Issues;
 using InfiniContext.Core.LightModel;
 using InfiniContext.Core.Logging;
 using InfiniContext.Core.Mcp;

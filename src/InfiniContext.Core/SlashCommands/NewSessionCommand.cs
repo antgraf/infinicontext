@@ -1,14 +1,14 @@
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Stage 2B Phase 4b: <c>/n &lt;cwd&gt;</c> opens a new session in <see cref="SessionManager"/>.
 /// D11: the cwd argument is required — explicit only. The new session is auto-focused so the
 /// user immediately sees it in the active pane.
 /// </summary>
-internal sealed class NewSessionCommand : ISlashCommand
+public sealed class NewSessionCommand : ISlashCommand
 {
     public string Name => "/n";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/new" };

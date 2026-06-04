@@ -4,6 +4,47 @@
 
 - Task created.
 
+## 2026-06-03 (session: centralize slash-command registration; fix GUI "Unknown command")
+
+Follow-on bug from the same session: in the GUI, `/task` (and every host command) returned
+"Unknown command" because the GUI sent typed text straight to claude's stdin with no slash
+dispatch, while the CLI routed through `SlashCommandRegistry`. The command CLASSES also lived in
+`InfiniContext.Cli`, which the GUI can't reference - so they could never be shared. Fixed across
+three slices (the unfinished slices C/D/E of the task 0012 design):
+
+- **Slice C - promote to Core.** `git mv`'d the 14 command classes to `Core/SlashCommands/` and the
+  task/issue subsystem (`TaskCommand`, `TaskCommandHandler`, `ScopeGlobExpander`, `IssueCommand`,
+  `IssueCommandHandler`) to `Core/Tasks/` + `Core/Issues/`; made them `public`. Extracted
+  `RunArgs.TryParseApprovalMode` to a Core `ApprovalModeParser` (ApprovalCommand had an implicit
+  `InfiniContext.Cli` namespace dependency that only resolved while it lived under that namespace).
+  Added the `FileSystemGlobbing` package to Core (ScopeGlobExpander). Removed the now-redundant
+  `<Compile Include>` links from the test csproj (types come via the Core reference now).
+- **Slice D - single registration site + drift guard.** New `SlashCommandRegistryFactory.Build()`
+  in Core is the ONE place commands are registered; CLI's `MultiSessionHost` now calls it instead
+  of its inline list. Tightened `SlashCommandContext.TaskHandler`/`IssueHandler` from `object?` to
+  the concrete Core handler types. New `RegistrySnapshotTests` pins the 16-command set so adding a
+  command to the factory without the snapshot (or vice-versa) fails loudly.
+- **Slice E - GUI dispatch.** `SessionHost` now builds the review + issue stack (ported from
+  Program.cs) and exposes `CreateTaskCommandHandler`/`CreateIssueCommandHandler` factories.
+  New `GuiSlashCommandRenderer` (writes inline into the focused transcript) + `TranscriptTextWriter`
+  + `GuiReplActions`. `MainWindowViewModel` builds the registry via the factory and intercepts
+  `/`-input in `SendToSessionAsync`: registered commands run through the registry; unknown ones fall
+  through to claude (D6). New `MainWindowViewModelSlashTests` assert `/task`/`/help` are intercepted
+  and unknown/plain text is forwarded.
+
+### Working / known-limits in the GUI
+- Working: `/help`, `/task list|new|review|...`, `/issue`, `/cost`, `/state`, `/settings`,
+  `/approval`. `/task review` requires `--yes` (the handler's interactive confirmation reads a
+  `TextReader`, which the GUI leaves null; renderer prompt dialogs are a follow-up).
+- Status-only (follow-up): `IReplActions` in the GUI (`/quit`, `/resume`, `/task switch`, `/focus`)
+  currently surface a StatusText hint rather than driving focus/spawn - wiring them into the GUI's
+  focus/spawn model is a follow-up.
+
+### Verification
+- Build clean (Release; running GUI Debug build locks bin/Debug). Full suite 1069 passed / 0 failed
+  / 3 skipped (POSIX-only). `dotnet format --verify-no-changes` clean.
+- Not committed - awaiting operator direction on commit/push scope.
+
 ## 2026-06-03 (session: model upgrade + nudge hang)
 
 ### Issue 1 - model upgrade to Opus 4.8 + centralization (DONE)

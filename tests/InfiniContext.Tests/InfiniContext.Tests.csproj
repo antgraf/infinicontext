@@ -45,31 +45,14 @@
     <Compile Include="..\..\src\InfiniContext.Cli\RunArgs.cs" Link="Cli\RunArgs.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\CliFlagCatalog.cs" Link="Cli\CliFlagCatalog.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\ApprovalSinkFactory.cs" Link="Cli\ApprovalSinkFactory.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommand.cs" Link="Cli\Tasks\TaskCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\TaskCommandHandler.cs" Link="Cli\Tasks\TaskCommandHandler.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\Tasks\ScopeGlobExpander.cs" Link="Cli\Tasks\ScopeGlobExpander.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommand.cs" Link="Cli\Issues\IssueCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\Issues\IssueCommandHandler.cs" Link="Cli\Issues\IssueCommandHandler.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\HostResult.cs" Link="Cli\Ui\HostResult.cs" />
     <Compile Include="..\..\src\InfiniContext.Cli\Ui\MultiSessionHost.cs" Link="Cli\Ui\MultiSessionHost.cs" />
-    <!-- ISlashCommand, IReplActions, SlashCommandContext, SlashCommandRegistry were promoted to
-         InfiniContext.Core.SlashCommands in slice A of finding #14 (task 0012). Tests now consume
-         them through the normal Core project reference, not as link-compiled files. -->
+    <!-- ISlashCommand, IReplActions, SlashCommandContext, SlashCommandRegistry (slice A) and the
+         command classes + task/issue handlers (slice C, task 0015) now live in
+         InfiniContext.Core.SlashCommands / .Tasks / .Issues. Tests consume them through the normal
+         Core project reference. ConsoleSlashCommandRenderer stays CLI-only (Spectre-backed) and is
+         link-compiled because MultiSessionHost (also link-compiled) constructs it. -->
     <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ConsoleSlashCommandRenderer.cs" Link="Cli\SlashCommands\ConsoleSlashCommandRenderer.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\QuitCommand.cs" Link="Cli\SlashCommands\QuitCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\CostCommand.cs" Link="Cli\SlashCommands\CostCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\StateCommand.cs" Link="Cli\SlashCommands\StateCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\HelpCommand.cs" Link="Cli\SlashCommands\HelpCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\SettingsCommand.cs" Link="Cli\SlashCommands\SettingsCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ResumeCommand.cs" Link="Cli\SlashCommands\ResumeCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ApprovalCommand.cs" Link="Cli\SlashCommands\ApprovalCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\TaskSlashCommand.cs" Link="Cli\SlashCommands\TaskSlashCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\IssueSlashCommand.cs" Link="Cli\SlashCommands\IssueSlashCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\NewSessionCommand.cs" Link="Cli\SlashCommands\NewSessionCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\ListSessionsCommand.cs" Link="Cli\SlashCommands\ListSessionsCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FocusCommand.cs" Link="Cli\SlashCommands\FocusCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\BroadcastCommand.cs" Link="Cli\SlashCommands\BroadcastCommand.cs" />
-    <Compile Include="..\..\src\InfiniContext.Cli\SlashCommands\FlushSlashCommand.cs" Link="Cli\SlashCommands\FlushSlashCommand.cs" />
   </ItemGroup>
 
 </Project>

@@ -1,8 +1,8 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
-internal sealed class CostCommand : ISlashCommand
+public sealed class CostCommand : ISlashCommand
 {
     public string Name => "/cost";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();

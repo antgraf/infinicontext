@@ -1,7 +1,7 @@
 using System.Text;
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Renders the in-REPL help text from <see cref="SlashCommandRegistry"/>. With no arg, prints a
@@ -9,7 +9,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// prints the resolved command's <see cref="ISlashCommand.Details"/>. Unknown topics fall back
 /// to the summary plus a "no such topic" line (decisions.md D9).
 /// </summary>
-internal sealed class HelpCommand : ISlashCommand
+public sealed class HelpCommand : ISlashCommand
 {
     public string Name => "/help";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/?" };

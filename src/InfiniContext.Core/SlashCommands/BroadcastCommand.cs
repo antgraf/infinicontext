@@ -1,7 +1,7 @@
 using InfiniContext.Core.Sessions;
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
 /// <summary>
 /// Stage 2B Phase 6: <c>/broadcast &lt;targets&gt; &lt;text&gt;</c> fans one prompt out to multiple
@@ -13,7 +13,7 @@ namespace InfiniContext.Cli.SlashCommands;
 /// broadcast-able — they carry session-specific intent (D8). <c>/broadcast</c> only sends a
 /// free-form prompt.</para>
 /// </summary>
-internal sealed class BroadcastCommand : ISlashCommand
+public sealed class BroadcastCommand : ISlashCommand
 {
     public string Name => "/broadcast";
     public IReadOnlyList<string> Aliases { get; } = new[] { "/bcast" };

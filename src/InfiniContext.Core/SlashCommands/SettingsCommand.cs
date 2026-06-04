@@ -1,8 +1,8 @@
 using InfiniContext.Core.SlashCommands;
 
-namespace InfiniContext.Cli.SlashCommands;
+namespace InfiniContext.Core.SlashCommands;
 
-internal sealed class SettingsCommand : ISlashCommand
+public sealed class SettingsCommand : ISlashCommand
 {
     public string Name => "/settings";
     public IReadOnlyList<string> Aliases { get; } = Array.Empty<string>();
