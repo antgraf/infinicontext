@@ -35,11 +35,14 @@
     -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!--
-      Markdown rendering inside the transcript's per-turn cards. 12.0.0-a2 is the only build
-      that targets Avalonia 12 as of 2026-05-21 (the stable 11.x line is pinned to Avalonia 11).
-      Pre-release pin is intentional and will be lifted when whistyun ships a stable 12.x.
+      Markdown rendering inside the transcript's per-turn cards. The 12.0.0-aN line is the only
+      one targeting Avalonia 12 (the stable 11.x line is pinned to Avalonia 11); pre-release pin
+      is intentional and will be lifted when whistyun ships a stable 12.x. a3 minimum: a2's
+      DivideColorExtension publishes a raw Color into IBrush properties when its DynamicResource
+      leg unsets during detach - InvalidCastException, whistyun/Markdown.Avalonia#183, fixed in
+      a3 via PR #184 (task 0016).
     -->
-    <PackageReference Include="Markdown.Avalonia" Version="12.0.0-a2" />
+    <PackageReference Include="Markdown.Avalonia" Version="12.0.0-a3" />
   </ItemGroup>
 
 </Project>

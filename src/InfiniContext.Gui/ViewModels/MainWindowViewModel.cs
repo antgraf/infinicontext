@@ -460,13 +460,29 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             }
         }
 
+        SessionContext ctx;
         try
         {
             var spawning = taskId is { } stid ? $"Spawning under task {stid:D4} in {cwd}..." : $"Spawning claude in {cwd}...";
             // Only overwrite a "spawning without pointer" warning when we *do* have a pointer;
             // otherwise the warning stays visible long enough for the operator to notice it.
             if (firstUserMessage is not null || taskId is null) StatusText = spawning;
-            var ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
+            ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _host.Logger.Error(ex, "gui-main: spawn failed cwd={Cwd} task={TaskId}", cwd, taskId);
+            StatusText = $"Spawn failed: {ex.Message}";
+            ShowError?.Invoke($"Failed to spawn session: {ex.Message}\n\n{ex}");
+            return;
+        }
+
+        // Attach is UI work over an already-running session. Keep its failures out of the spawn
+        // catch: in the task 0016 repro, a rendering exception thrown while flipping focus was
+        // reported as "Failed to spawn session:" even though the claude child was alive and
+        // streaming - the operator had no way to tell the session existed.
+        try
+        {
             var row = AttachRowForContext(ctx, firstUserMessage);
             var driftSuffix = drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
             var warmingSuffix = firstUserMessage is not null ? " Warming up..." : "";
@@ -474,8 +490,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
         catch (Exception ex)
         {
-            StatusText = $"Spawn failed: {ex.Message}";
-            ShowError?.Invoke($"Failed to spawn session:\n\n{ex}");
+            _host.Logger.Error(ex, "gui-main: session {SessionId} spawned but UI attach failed", ctx.Id);
+            StatusText = $"Session spawned ({ctx.Id.ToString("N")[..8]}) but the UI failed to attach it: {ex.Message}";
+            ShowError?.Invoke($"Session spawned but the UI failed to attach it: {ex.Message}\n\n{ex}");
         }
     }
 
@@ -489,9 +506,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         var parent = ResolveParentNode(ctx.ActiveTaskId);
         parent.Sessions.Add(row);
         parent.IsExpanded = true;
-        FocusedSession = row;
+        // Route through SelectedNode first so the TreeView highlight and the derived pointers
+        // (FocusedSession + SelectedTaskNode, via OnSelectedNodeChanged) move together; the
+        // explicit FocusedSession assignment is a no-op then, but keeps headless tests (no
+        // TreeView binding) on the same path.
         SelectedNode = row;
-        row.IsFocused = true;
+        FocusedSession = row;
         // Render the seed (task pointer) prompt into the transcript and the per-turn tree so
         // the operator can SEE what was just sent to claude. Without this, the message area
         // shows only the (session ready) marker from system/init - leaving the operator
