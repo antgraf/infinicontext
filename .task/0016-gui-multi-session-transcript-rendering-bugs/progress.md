@@ -20,13 +20,6 @@
   - `MainWindowViewModel.AttachRowForContext`: selection routed through `SelectedNode` so the
     tree highlights the newly spawned session (D5).
   - `InfiniContext.Gui.csproj`: Markdown.Avalonia 12.0.0-a2 -> 12.0.0-a3 (upstream fix, D6).
-- Not yet done: manual GUI smoke test of the original repro (spawn two sessions under one task,
-  switch back and forth) - needs the operator or an interactive run; headless suite has no
-  Avalonia UI coverage for the view code-behind. Changes are uncommitted on branch
-  task/0013-gui-session-transfer.
-
-### Handoff to next session
-
-Run the manual repro: GUI -> "+" on a task twice, wait for warmup, switch sessions repeatedly.
-Expect: new session selected + focused on spawn, both transcripts render and survive switching,
-no "Failed to spawn session:" unless the process really failed. Then commit (operator approval).
+- Operator ran the manual repro (two sessions under one task, repeated switching): all works.
+- Committed as dea43e2 (plus ebfd342 flushing stale 0014/0015 artifacts) and pushed to
+  origin/task/0013-gui-session-transfer. Task complete.
