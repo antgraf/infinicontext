@@ -90,3 +90,51 @@ State of play for the next session:
    `InfiniContext.Cli` processes - do NOT kill, one is likely this session's sidecar). Work
    around it with `dotnet test tests/InfiniContext.Tests/InfiniContext.Tests.csproj
    -p:BuildProjectReferences=false` and per-project builds.
+
+### Reconciliation (next session, picking up handoff)
+
+Correcting the stale handoff above: **both fixes ARE committed** вЂ” they landed in
+`1eabde0 "Task 0014: GUI context-calculation + session-management bug fixes"` on branch
+`task/0013-gui-session-transfer`. The "nothing is committed" line was written during the
+hard-nudge flush *before* that commit. Verified the committed code matches the described
+fixes (`ContextPressureMonitor.cs` drives off per-call `AssistantEvent` usage; `MainWindow.axaml`
+wraps the transcript in a `ContentControl` keyed on `FocusedSession`).
+
+Re-ran the suite against built references (`-p:BuildProjectReferences=false`, full build still
+blocked by GUI DLL locks вЂ” operator had 4 `InfiniContext.Gui.exe` instances running, likely
+live-testing Bug 2): **1069 passed, 3 skipped** (the 3 skips are POSIX supervisor tests,
+expected on Windows). `ContextPressureMonitor` slice alone: 13/13.
+
+Remaining: **Bug 2 visual confirmation only.** No code work outstanding. The operator must run
+the auto-rotate / manual-spawn-on-same-task flow in the GUI (ideally with a successor whose
+first card has markdown вЂ” code fences, lists) and confirm the cross-session mixture/misrender
+is gone. This is the one piece that can't be asserted headlessly.
+
+### Bug 2 follow-up: the committed ContentControl fix was a recycler no-op (fix now in tree)
+
+The committed `ContentControl Content="{Binding FocusedSession}"` (from `1eabde0`) did **not**
+actually rebuild the subtree on a session flip. Avalonia's `ContentPresenter` recycles: two
+`SessionRowViewModel` instances share one `DataTemplate` -> same recycling key -> the presenter
+reuses the realized `ItemsControl` and only re-points its `DataContext`. That is the exact
+cross-session `ItemsSource` swap Bug 2 set out to kill - so against the alpha Markdown.Avalonia
+12.0.0-a2 visuals it still corrupted, and after repeated flips blanked the pane (operator's
+"newly-spawned session shows a blank, unresponsive transcript", diagnosed in task 0015 session).
+
+**Fix (uncommitted, in working tree):**
+- `MainWindow.axaml`: per-turn card extracted to a keyed `Window.Resources` resource
+  `TurnNodeTemplate`; the binding-driven `ContentControl` replaced by a named, empty host
+  `ContentControl Name="TranscriptHost"` (still inside the named `TranscriptScroll`, so auto-scroll
+  code-behind is untouched).
+- `MainWindow.axaml.cs`: new `RebuildTranscript(row)` called from `WatchSession` (which already
+  fires on every focus change + initial bind + close). It builds a BRAND-NEW `ItemsControl`
+  (ItemsSource = row.Turns, ItemTemplate = the `TurnNodeTemplate` resource) and assigns it to
+  `TranscriptHost.Content`. Content is then a realized `Control`, so the presenter hosts it verbatim
+  with zero container recycling - no previous session's containers/markdown visuals can leak in.
+  Streaming within one session still updates live via the `Turns` ObservableCollection (Content
+  reference is stable; only the collection mutates).
+
+**Verification this session (2026-06-03):** GUI project builds clean in Release (compiled-XAML pass
+OK); `dotnet format --verify-no-changes` clean on the GUI project. Two `InfiniContext.Gui` instances
+were still running the OLD build (pids 16008, 20432) - left untouched. Still **uncommitted** and
+still pending the same operator visual check (restart GUI on the new build -> spawn/flip -> confirm
+the focused session's transcript renders and no cross-session mixture/blanking).

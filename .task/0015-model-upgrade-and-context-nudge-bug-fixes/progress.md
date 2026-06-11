@@ -1,5 +1,36 @@
 # Progress
 
+## 2026-06-11 (session: reconcile Issue 3 vs task 0016)
+
+- **Issue 3 (GUI blank transcript) is SUPERSEDED by task 0016** ("gui-multi-session-transcript-
+  rendering-bugs"). The narrow `RebuildTranscript`-rebuilds-a-fresh-`ItemsControl` fix described in
+  the earlier 2026-06-11 entry below turned out to be insufficient: detaching realized
+  Markdown.Avalonia visuals on every focus switch tripped upstream bug Markdown.Avalonia#183 (a2's
+  converter publishes a raw `Color` where an `IBrush` is expected mid-detach), producing corrupted
+  renders, a blank second-session pane, and an `InvalidCastException` *inside* `RebuildTranscript`.
+- Task 0016 owns the current uncommitted working-tree GUI changes (`MainWindow.axaml`/`.axaml.cs`,
+  `MainWindowViewModel.cs`, `InfiniContext.Gui.csproj`): cached one-`ItemsControl`-per-session that
+  is never detached while the session lives, each wrapped in a `ThemeVariantScope` detach firewall,
+  plus Markdown.Avalonia a2 -> a3. See `.task/0016-.../progress.md` + `decisions.md`.
+- **Net for task 0015:** Issues 1 (Opus 4.8 model upgrade + centralization) and 2 (CLI nudge
+  auto-rotation hang) are committed in `44c6333`. Issue 3's GUI rendering work has moved to task
+  0016; nothing further to do for it under 0015. Task 0015 is code-complete pending an optional
+  `/task review`.
+
+## 2026-06-11 (session: re-verify in-tree state)
+
+- Re-confirmed the in-tree state for Issue 3 (GUI blank-transcript fix): Release build clean,
+  full suite 1069 passed / 0 failed / 3 skipped (POSIX-only), `dotnet format --verify-no-changes`
+  clean. Reviewed the `MainWindow.axaml` + `.axaml.cs` diff - `RebuildTranscript` is correctly
+  wired into `WatchSession` (fires on every focus change + initial bind) and hosts a freshly-built
+  `ItemsControl` as a realized `Control`, so no `ContentPresenter` recycling. Fix is sound and ready;
+  **still uncommitted, still gated on operator GUI verification** (rendering can't be asserted
+  headlessly - operator must restart the GUI, spawn a 2nd session, flip focus a few times, confirm
+  the focused transcript renders).
+- Logged `issues.md#0001`: the per-turn "Details" Expander uses `IsNotNull` on `Children.Count`
+  (an int, never null), so it's always visible even for childless turns. Pre-existing, preserved
+  verbatim through the template move; out of scope here.
+
 ## 2026-06-04
 
 - Task created.
@@ -43,7 +74,7 @@ three slices (the unfinished slices C/D/E of the task 0012 design):
 ### Verification
 - Build clean (Release; running GUI Debug build locks bin/Debug). Full suite 1069 passed / 0 failed
   / 3 skipped (POSIX-only). `dotnet format --verify-no-changes` clean.
-- Not committed - awaiting operator direction on commit/push scope.
+- Committed as `50bc122` ("Centralize slash-command registration; fix GUI 'Unknown command'").
 
 ## 2026-06-03 (session: model upgrade + nudge hang)
 
@@ -86,4 +117,36 @@ three slices (the unfinished slices C/D/E of the task 0012 design):
 - Build clean (Release - the running GUI Debug build locks `bin/Debug`, so Release is the workable
   config locally; it is also what CI uses).
 - Full suite: 1063 passed / 0 failed / 3 skipped (POSIX-only). `dotnet format --verify-no-changes` clean.
-- Not yet committed - awaiting operator review. Suggest a `/task review` before close.
+- Committed as `44c6333` ("Task 0015: Opus 4.8 upgrade + centralized model constants; fix CLI nudge
+  auto-rotation hang"). Suggest a `/task review` before close.
+
+## 2026-06-03 (session: GUI empty-transcript on session flip вЂ” task 0014 Bug 2 residual)
+
+### Issue 3 - newly-spawned/flipped GUI session shows a blank, unresponsive transcript (FIX IN TREE, needs GUI verify)
+- **Report:** operator spawned a session from the tree; it warmed up, then its chat pane went blank
+  and "didn't react to input (at least visually)"; an earlier session stayed fine.
+- **Diagnosis from the live GUI log** (`src/InfiniContext.Gui/bin/Debug/net10.0/logs/gui-20260603-225904.log`):
+  three concurrent sessions (host `7d07b92d` task 15, `8f39477c` task 14, `5ef9429d` task 15).
+  The blank one is `5ef9429d` (2nd spawn for task 15, focused after two flips). Log line 611-621:
+  operator sent "reply ok if you are functional" в†’ agent replied "Ok вЂ” I'm functional and ready"
+  and the turn completed (Sendingв†’Streamingв†’Idle). **So input WAS processed and the session WAS
+  alive; only rendering was dead.** Its `Turns` collection populated normally (init + assistant +
+  tool events all observed by `gui-row[5ef9429d]`). Pure view-layer bug.
+- **Root cause:** task 0014 Bug 2's committed fix wrapped the transcript in
+  `ContentControl Content="{Binding FocusedSession}"` expecting the presenter to rebuild the
+  subtree on a session flip. But Avalonia's `ContentPresenter` RECYCLES: two `SessionRowViewModel`
+  instances share one `DataTemplate` в†’ same recycling key в†’ it reuses the realized `ItemsControl`
+  and only re-points its `DataContext`. That is the exact cross-session ItemsSource swap 0014 set
+  out to kill вЂ” with the alpha Markdown.Avalonia 12.0.0-a2 visuals it corrupts and, after repeated
+  flips, blanks the pane. So 0014's fix was effectively a no-op against the recycler.
+- **Fix:** `MainWindow.axaml` - extracted the per-turn card to a keyed resource `TurnNodeTemplate`
+  and replaced the binding-driven `ContentControl` with a named host `TranscriptHost`.
+  `MainWindow.axaml.cs` `RebuildTranscript(row)` (called from `WatchSession`, which already fires on
+  every focus change + initial bind) builds a BRAND-NEW `ItemsControl` per focus change and assigns
+  it to `TranscriptHost.Content`. Content is then a realized `Control`, so the presenter hosts it
+  verbatim with zero container recycling вЂ” no previous session's containers/markdown visuals can
+  leak in. Streaming within one session still updates live via the `Turns` ObservableCollection.
+- **Verification:** Gui builds clean (Release; compiled-XAML pass OK). Full suite 1069/0/3.
+  `dotnet format --verify-no-changes` clean. **Not committed.** Rendering can't be asserted
+  headlessly (per 0014) вЂ” operator must restart the GUI (the live one runs the OLD build), spawn a
+  2nd session, flip focus a few times, and confirm the transcript renders for the focused session.
