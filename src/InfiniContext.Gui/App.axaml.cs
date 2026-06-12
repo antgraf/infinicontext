@@ -18,10 +18,16 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Defer the heavy bring-up (settings, logger, SessionManager) so the window paints
-            // immediately. The placeholder VM keeps the UI responsive; we swap to the live VM
-            // once SessionHost.StartAsync returns.
-            var window = new MainWindow { DataContext = new MainWindowViewModel() };
+            // Load the small GUI layout file synchronously before the window is shown so it opens at
+            // the persisted size AND on the persisted monitor from the first paint - no post-show
+            // resize or cross-monitor jump (task 0021). LoadAsync uses ConfigureAwait(false)
+            // throughout, so blocking the UI thread on this tiny file read can't deadlock against
+            // Avalonia's sync context. The heavy bring-up (SessionHost process spawn, logger,
+            // SessionManager) stays deferred below; the placeholder VM keeps the UI responsive and
+            // we swap to the live VM - carrying this same settings instance - once StartAsync returns.
+            var guiSettings = GuiSettings.LoadAsync().GetAwaiter().GetResult();
+
+            var window = new MainWindow { DataContext = new MainWindowViewModel(guiSettings) };
             desktop.MainWindow = window;
             desktop.ShutdownRequested += OnShutdownRequested;
 
@@ -31,7 +37,8 @@ public partial class App : Application
                 {
                     _mainVm = await MainWindowViewModel.CreateAsync(
                         AvaloniaUiDispatcher.Instance,
-                        AvaloniaUiTimerFactory.Instance);
+                        AvaloniaUiTimerFactory.Instance,
+                        guiSettings);
                     window.DataContext = _mainVm;
                 }
                 catch (Exception ex)

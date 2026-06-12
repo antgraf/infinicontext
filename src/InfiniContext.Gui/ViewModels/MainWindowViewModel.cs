@@ -59,6 +59,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     [ObservableProperty]
     private bool _windowMaximized;
 
+    /// <summary>Window top-left X in physical screen pixels (Avalonia <c>PixelPoint</c> space),
+    /// or null when never positioned. Persisted so the window reopens on the same monitor; the
+    /// View code-behind owns the actual <c>Window.Position</c> read/write (it's a plain CLR
+    /// property, not an AvaloniaProperty, so it can't be two-way bound like Width/Height) and
+    /// validates the saved point against connected screens before applying it. See
+    /// <see cref="GuiSettings.WindowX"/>.</summary>
+    [ObservableProperty]
+    private int? _windowX;
+
+    /// <summary>Window top-left Y in physical screen pixels. See <see cref="WindowX"/>.</summary>
+    [ObservableProperty]
+    private int? _windowY;
+
     /// <summary>Whichever tree item the operator clicked - <see cref="TaskNodeViewModel"/> or
     /// <see cref="SessionRowViewModel"/>. Two-way bound from <c>TreeView.SelectedItem</c>.</summary>
     [ObservableProperty]
@@ -221,6 +234,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     {
     }
 
+    /// <summary>Placeholder ctor seeded with already-loaded <see cref="GuiSettings"/>. App loads the
+    /// (small) layout file synchronously before showing the window and constructs the placeholder VM
+    /// through this so the window opens at the persisted size and on the persisted monitor from the
+    /// first paint - the live VM swaps in later with the same settings instance (task 0021).</summary>
+    public MainWindowViewModel(GuiSettings guiSettings)
+        : this(AvaloniaUiDispatcher.Instance, AvaloniaUiTimerFactory.Instance, guiSettings)
+    {
+    }
+
     /// <summary>Test-friendly ctor: takes the dispatcher + timer factory explicitly. No
     /// <see cref="SessionHost"/> attached, so spawn-related commands fail gracefully via the
     /// existing null-guards; tests exercising <see cref="FocusedSession"/> can construct a row
@@ -239,6 +261,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         _windowWidth = guiSettings.WindowWidth;
         _windowHeight = guiSettings.WindowHeight;
         _windowMaximized = guiSettings.WindowMaximized;
+        _windowX = guiSettings.WindowX;
+        _windowY = guiSettings.WindowY;
         NewTaskCommand = new AsyncRelayCommand(NewTaskAsync);
         SpawnSessionForTaskCommand = new AsyncRelayCommand<TaskNodeViewModel?>(SpawnSessionForTaskAsync);
         SendPromptCommand = new AsyncRelayCommand(SendPromptAsync, CanSendPrompt);
@@ -303,10 +327,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
-    public static async Task<MainWindowViewModel> CreateAsync(IUiDispatcher dispatcher, IUiTimerFactory timerFactory)
+    public static async Task<MainWindowViewModel> CreateAsync(
+        IUiDispatcher dispatcher, IUiTimerFactory timerFactory, GuiSettings? guiSettings = null)
     {
         var host = await SessionHost.StartAsync().ConfigureAwait(false);
-        var guiSettings = await GuiSettings.LoadAsync(logger: host.Logger).ConfigureAwait(false);
+        // App preloads gui-settings before Show (flicker-free placement) and hands the same instance
+        // back here; fall back to a load only when called without one (e.g. tests).
+        guiSettings ??= await GuiSettings.LoadAsync(logger: host.Logger).ConfigureAwait(false);
         var vm = new MainWindowViewModel(host, dispatcher, timerFactory, guiSettings);
         await vm.LoadTasksAsync().ConfigureAwait(false);
         return vm;
@@ -326,6 +353,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         _guiSettings.WindowWidth = WindowWidth;
         _guiSettings.WindowHeight = WindowHeight;
         _guiSettings.WindowMaximized = WindowMaximized;
+        // Position (physical pixels). Like Width/Height, OnClosed has already restored these from
+        // its last-Normal snapshot if the user closed while maximized, so what we persist is the
+        // windowed top-left to reopen at - on the same monitor - not the maximized origin.
+        _guiSettings.WindowX = WindowX;
+        _guiSettings.WindowY = WindowY;
         try
         {
             await _guiSettings.SaveAsync().ConfigureAwait(false);

@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Interactivity;
@@ -26,17 +27,36 @@ public partial class MainWindow : Window
     // to restore to on next un-maximize (task 0012 finding #6 follow-up).
     private double _lastNormalWidth;
     private double _lastNormalHeight;
+    // Window's most recent Normal-state top-left (physical pixels) - the source of truth for the
+    // restored position. Maintained by OnWindowPositionChanged (operator moves), the pre-show
+    // restore, and the OnOpened off-screen correction. While Maximized, Window.Position is the
+    // maximized origin, so OnClosed restores VM.WindowX/Y from this before SaveLayoutAsync persists
+    // the value to reopen at - on the monitor the operator last used (task 0021).
+    private PixelPoint? _lastNormalPosition;
+    // The placeholder VM (seeded from gui-settings before Show) and the live VM (swapped in after
+    // the async host bring-up) both carry the same persisted coordinates. We apply the initial
+    // Position exactly once, on the first attach, so the second attach can't yank the window back
+    // if the operator nudged it during the load (task 0021).
+    private bool _windowPlacementRestored;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         Closed += OnClosed;
+        // Post-show off-screen sanity check for the restored position. Screens isn't reliably
+        // populated before the window is realized, so the pre-show restore sets Position blind and
+        // Opened validates it once the display list exists (task 0021).
+        Opened += OnOpened;
         // WindowState two-way mapping (Avalonia's enum <-> VM bool). PropertyChanged fires on
         // every state transition; we update the VM, and the VM's persisted value is flushed by
         // SaveLayoutAsync on close. The reverse direction (VM bool seeded from gui-settings.json
         // on launch) is applied in OnDataContextChanged once the deferred VM lands.
         PropertyChanged += OnWindowPropertyChanged;
+        // Window.Position is a plain CLR property (not an AvaloniaProperty), so it can't be
+        // two-way bound like Width/Height - we track it through its dedicated event and persist
+        // via the VM. The initial value is restored pre-show in OnDataContextChanged (task 0021).
+        PositionChanged += OnWindowPositionChanged;
         // Any click in the session tree hands keyboard focus back to the prompt box (when a
         // session is focused). The FocusedSession hook in OnVmPropertyChanged covers selection
         // CHANGES, but re-clicking the already-selected row raises no PropertyChanged - focus
@@ -87,6 +107,17 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnWindowPositionChanged(object? sender, PixelPointEventArgs e)
+    {
+        if (_boundVm is null) return;
+        // Only Normal-state position is canonical (mirrors the Width/Height handling above). While
+        // Maximized, the top-left is the maximized origin, not the windowed position we restore to.
+        if (WindowState != WindowState.Normal) return;
+        _lastNormalPosition = e.Point;
+        _boundVm.WindowX = e.Point.X;
+        _boundVm.WindowY = e.Point.Y;
+    }
+
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
         // Detach the previous VM (DataContext can swap when the deferred CreateAsync VM lands
@@ -109,6 +140,23 @@ public partial class MainWindow : Window
         // them; OnClosed reads these into the VM before SaveLayoutAsync runs.)
         if (_lastNormalWidth == 0) _lastNormalWidth = _boundVm.WindowWidth;
         if (_lastNormalHeight == 0) _lastNormalHeight = _boundVm.WindowHeight;
+
+        // Restore the window onto the monitor it was last closed on, before applying maximized
+        // state so a maximize lands on the right display. On the first attach this runs against the
+        // placeholder VM before Show (App loads gui-settings synchronously and seeds it), so the
+        // window opens directly on the persisted monitor - no post-show jump. Position is applied
+        // here (not via a binding) because Window.Position is a plain CLR property (task 0021).
+        TryRestoreWindowPosition();
+
+        // Mirror the window's current Normal-state top-left into the (re)attached VM. On the live-VM
+        // swap this overwrites the file's original coordinates with whatever the window is actually
+        // at now (a since-applied off-screen correction, or an operator nudge during load), so
+        // SaveLayoutAsync on close persists reality rather than the stale loaded value.
+        if (_lastNormalPosition is { } current)
+        {
+            _boundVm.WindowX = current.X;
+            _boundVm.WindowY = current.Y;
+        }
 
         // Apply persisted maximized state. Width/Height are already two-way bound and applied
         // by the binding system before Show; only the WindowState enum needs a one-shot apply
@@ -176,6 +224,48 @@ public partial class MainWindow : Window
             // missed - subsequent new turns continue to scroll via OnTurnsChanged.
             ScrollToEndDeferred();
         }
+    }
+
+    /// <summary>Apply the persisted top-left once, on the first VM attach (pre-show). We don't
+    /// validate against <see cref="Screens"/> here because the platform display list isn't reliably
+    /// populated before the window is realized; <see cref="OnOpened"/> does the off-screen sanity
+    /// check once it is. Physical pixels, so there's no DIP conversion (task 0021).</summary>
+    private void TryRestoreWindowPosition()
+    {
+        if (_windowPlacementRestored) return;
+        if (_boundVm?.WindowX is not int x || _boundVm.WindowY is not int y) return;
+        _windowPlacementRestored = true;
+        var saved = new PixelPoint(x, y);
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Position = saved;
+        _lastNormalPosition = saved;
+    }
+
+    /// <summary>Post-show correction: now that the window is realized and <see cref="Screens"/> is
+    /// populated, pull it back onto a connected display if the restored top-left landed on a monitor
+    /// that's since been disconnected (or the layout changed). Without this the window could sit
+    /// off-screen and unreachable. Centers within the target screen's working area (task 0021).</summary>
+    private void OnOpened(object? sender, EventArgs e)
+    {
+        if (_boundVm is null) return;
+        // ScreenFromPoint returns null when the current top-left is on no connected display.
+        if (Screens is null || Screens.ScreenFromPoint(Position) is not null) return;
+
+        var target = Screens.Primary ?? Screens.All.FirstOrDefault();
+        if (target is null) return;
+
+        // WorkingArea and Position are both physical pixels; scale the DIP Width/Height to match.
+        var area = target.WorkingArea;
+        var pixelWidth = (int)(Width * target.Scaling);
+        var pixelHeight = (int)(Height * target.Scaling);
+        var corrected = new PixelPoint(
+            area.X + Math.Max(0, (area.Width - pixelWidth) / 2),
+            area.Y + Math.Max(0, (area.Height - pixelHeight) / 2));
+
+        Position = corrected;
+        _lastNormalPosition = corrected;
+        _boundVm.WindowX = corrected.X;
+        _boundVm.WindowY = corrected.Y;
     }
 
     private void FocusPromptBoxDeferred() =>
@@ -277,10 +367,19 @@ public partial class MainWindow : Window
         {
             if (_lastNormalWidth > 0) _boundVm.WindowWidth = _lastNormalWidth;
             if (_lastNormalHeight > 0) _boundVm.WindowHeight = _lastNormalHeight;
+            // Same maximized-close restore for position: persist the windowed top-left (on the
+            // right monitor), not the maximized origin the live Position now reports.
+            if (_lastNormalPosition is { } pos)
+            {
+                _boundVm.WindowX = pos.X;
+                _boundVm.WindowY = pos.Y;
+            }
         }
 
         if (_boundVm is not null) _boundVm.PropertyChanged -= OnVmPropertyChanged;
         WatchSession(null);
         PropertyChanged -= OnWindowPropertyChanged;
+        PositionChanged -= OnWindowPositionChanged;
+        Opened -= OnOpened;
     }
 }

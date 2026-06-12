@@ -43,6 +43,19 @@ public sealed class GuiSettings
     /// stays portable across Avalonia versions.</summary>
     public bool WindowMaximized { get; set; } = false;
 
+    /// <summary>X coordinate of the window's top-left at last close, in physical screen pixels
+    /// (Avalonia <c>PixelPoint</c> space), or null when never positioned. This is what makes the
+    /// window reopen on the monitor it was last on instead of always the primary. Stored in
+    /// physical pixels - not DIPs like <see cref="WindowWidth"/> - because it's a screen-space
+    /// coordinate. Deliberately not clamped on load: validity is screen-relative, so the View
+    /// checks the saved point against the currently connected displays before applying it (a
+    /// disconnected monitor falls back to OS default placement). Null is omitted from the JSON.</summary>
+    public int? WindowX { get; set; }
+
+    /// <summary>Y coordinate of the window's top-left at last close, in physical screen pixels.
+    /// See <see cref="WindowX"/>.</summary>
+    public int? WindowY { get; set; }
+
     public static class Defaults
     {
         public const double LeftColumnWidth = 340;
