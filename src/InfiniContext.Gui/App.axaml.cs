@@ -25,7 +25,14 @@ public partial class App : Application
             // Avalonia's sync context. The heavy bring-up (SessionHost process spawn, logger,
             // SessionManager) stays deferred below; the placeholder VM keeps the UI responsive and
             // we swap to the live VM - carrying this same settings instance - once StartAsync returns.
-            var guiSettings = GuiSettings.LoadAsync().GetAwaiter().GetResult();
+            // INFINICONTEXT__GUI__SETTINGSPATH redirects the layout file to a caller-chosen path
+            // (mirrors INFINICONTEXT__TASKS__DBPATH) so the UIA smoke harness can verify window
+            // placement against a temp file without disturbing the operator's real layout. LoadAsync
+            // stamps SourcePath on the instance, so the later SaveLayoutAsync writes back to the same
+            // path automatically - no need to thread it through the VM.
+            var settingsPathOverride = Environment.GetEnvironmentVariable("INFINICONTEXT__GUI__SETTINGSPATH");
+            if (string.IsNullOrWhiteSpace(settingsPathOverride)) settingsPathOverride = null;
+            var guiSettings = GuiSettings.LoadAsync(settingsPathOverride).GetAwaiter().GetResult();
 
             var window = new MainWindow { DataContext = new MainWindowViewModel(guiSettings) };
             desktop.MainWindow = window;

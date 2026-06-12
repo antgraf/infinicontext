@@ -97,25 +97,55 @@ public partial class MainWindow : Window
         }
         if (e.Property == WidthProperty || e.Property == HeightProperty)
         {
-            // Only treat Normal-state dimensions as canonical. While Maximized, Width/Height are
-            // screen dims and don't reflect what the operator wants restored to on next launch.
-            if (WindowState == WindowState.Normal)
-            {
-                if (e.Property == WidthProperty) _lastNormalWidth = Width;
-                else _lastNormalHeight = Height;
-            }
+            // Capture is deferred (see QueueNormalGeometryCapture) because a maximize fires these
+            // size changes a few ms before WindowState flips to Maximized - a synchronous capture
+            // here would record the screen dimensions as the windowed size (task 0021).
+            QueueNormalGeometryCapture();
         }
     }
 
     private void OnWindowPositionChanged(object? sender, PixelPointEventArgs e)
     {
         if (_boundVm is null) return;
-        // Only Normal-state position is canonical (mirrors the Width/Height handling above). While
-        // Maximized, the top-left is the maximized origin, not the windowed position we restore to.
-        if (WindowState != WindowState.Normal) return;
-        _lastNormalPosition = e.Point;
-        _boundVm.WindowX = e.Point.X;
-        _boundVm.WindowY = e.Point.Y;
+        // Capture is deferred (see QueueNormalGeometryCapture): a maximize fires PositionChanged
+        // with the maximized origin a few ms BEFORE WindowState flips to Maximized, so a
+        // synchronous "WindowState == Normal" guard here still reads Normal and would record the
+        // (off-screen) maximized origin as the windowed top-left (task 0021).
+        QueueNormalGeometryCapture();
+    }
+
+    // Coalesced flag so a burst of position/size changes (a maximize fires several) queues exactly
+    // one capture per dispatcher turn.
+    private bool _normalGeometryCaptureQueued;
+
+    /// <summary>Queue a deferred capture of the windowed (Normal-state) geometry. A maximize fires
+    /// its PositionChanged and Width/Height changes a few ms BEFORE <see cref="Window.WindowState"/>
+    /// flips to Maximized (confirmed by trace, task 0021), so a synchronous "is it Normal?" check at
+    /// event time still reads Normal and captures the maximized origin / screen size as if windowed.
+    /// That poisoned snapshot was persisted and, being off-screen, recentred the window onto the
+    /// primary on next launch. Posting to a later dispatcher turn lets the synchronous WindowState
+    /// flip land first, so <see cref="CaptureNormalGeometry"/> sees the true state and skips while
+    /// maximized.</summary>
+    private void QueueNormalGeometryCapture()
+    {
+        if (_boundVm is null || _normalGeometryCaptureQueued) return;
+        _normalGeometryCaptureQueued = true;
+        Dispatcher.UIThread.Post(CaptureNormalGeometry, DispatcherPriority.Background);
+    }
+
+    private void CaptureNormalGeometry()
+    {
+        _normalGeometryCaptureQueued = false;
+        // By now any in-flight maximize has flipped WindowState, so a still-Normal window is
+        // genuinely windowed. Position has no two-way binding, so the VM is updated here; Width/
+        // Height ARE two-way bound, so only the _lastNormal* snapshots (which OnClosed reads back
+        // into the VM on a maximized close) need refreshing.
+        if (_boundVm is null || WindowState != WindowState.Normal) return;
+        _lastNormalPosition = Position;
+        _boundVm.WindowX = Position.X;
+        _boundVm.WindowY = Position.Y;
+        if (Width > 0) _lastNormalWidth = Width;
+        if (Height > 0) _lastNormalHeight = Height;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -141,11 +171,16 @@ public partial class MainWindow : Window
         if (_lastNormalWidth == 0) _lastNormalWidth = _boundVm.WindowWidth;
         if (_lastNormalHeight == 0) _lastNormalHeight = _boundVm.WindowHeight;
 
-        // Restore the window onto the monitor it was last closed on, before applying maximized
-        // state so a maximize lands on the right display. On the first attach this runs against the
-        // placeholder VM before Show (App loads gui-settings synchronously and seeds it), so the
-        // window opens directly on the persisted monitor - no post-show jump. Position is applied
-        // here (not via a binding) because Window.Position is a plain CLR property (task 0021).
+        // Restore the window onto the monitor it was last closed on. On the first attach this runs
+        // against the placeholder VM before Show (App loads gui-settings synchronously and seeds
+        // it), so the window opens directly on the persisted monitor - no post-show jump. Position
+        // is applied here (not via a binding) because Window.Position is a plain CLR property. The
+        // persisted maximized state is deliberately NOT applied here - it's deferred to OnOpened,
+        // after the window is realized on this monitor. A maximize computed pre-show has no realized
+        // screen, so Avalonia maximizes against the primary monitor and treats the manual Position
+        // as a literal origin offset; a window saved maximized (especially on a secondary monitor)
+        // then came up maximized-but-offset on the wrong display until a manual un/re-maximize
+        // toggle recomputed it (task 0021).
         TryRestoreWindowPosition();
 
         // Mirror the window's current Normal-state top-left into the (re)attached VM. On the live-VM
@@ -157,12 +192,6 @@ public partial class MainWindow : Window
             _boundVm.WindowX = current.X;
             _boundVm.WindowY = current.Y;
         }
-
-        // Apply persisted maximized state. Width/Height are already two-way bound and applied
-        // by the binding system before Show; only the WindowState enum needs a one-shot apply
-        // because the VM stores a bool (Normal vs Maximized only - we don't restore Minimized).
-        if (_boundVm.WindowMaximized && WindowState != WindowState.Maximized)
-            WindowState = WindowState.Maximized;
 
         // Wire OS folder picker (Avalonia StorageProvider is window-bound, hence the late wire).
         _boundVm.FolderPicker = async () =>
@@ -241,31 +270,48 @@ public partial class MainWindow : Window
         _lastNormalPosition = saved;
     }
 
-    /// <summary>Post-show correction: now that the window is realized and <see cref="Screens"/> is
-    /// populated, pull it back onto a connected display if the restored top-left landed on a monitor
-    /// that's since been disconnected (or the layout changed). Without this the window could sit
-    /// off-screen and unreachable. Centers within the target screen's working area (task 0021).</summary>
+    /// <summary>Post-show placement finalization, run once the window is realized and
+    /// <see cref="Screens"/> is populated. Two steps in order: (1) off-screen correction - pull the
+    /// window back onto a connected display if the restored top-left landed on a monitor that's
+    /// since been disconnected (or the layout changed), so it can't sit off-screen and unreachable;
+    /// (2) apply the persisted maximized state. The maximize is deferred to here (not the pre-show
+    /// VM attach) because it needs a realized screen to maximize against - applied pre-show it
+    /// ignores the manual Position and maximizes on the primary, producing the maximized-but-offset
+    /// wrong-monitor bug. By now Position has established the target monitor, so the maximize snaps
+    /// to that monitor's working area (task 0021).</summary>
     private void OnOpened(object? sender, EventArgs e)
     {
         if (_boundVm is null) return;
-        // ScreenFromPoint returns null when the current top-left is on no connected display.
-        if (Screens is null || Screens.ScreenFromPoint(Position) is not null) return;
 
-        var target = Screens.Primary ?? Screens.All.FirstOrDefault();
-        if (target is null) return;
+        // (1) Off-screen correction. ScreenFromPoint returns null when the current top-left is on
+        // no connected display; recenter on the primary's working area before any maximize so a
+        // maximize can't target a vanished monitor.
+        if (Screens is not null && Screens.ScreenFromPoint(Position) is null)
+        {
+            var target = Screens.Primary ?? Screens.All.FirstOrDefault();
+            if (target is not null)
+            {
+                // WorkingArea and Position are both physical pixels; scale the DIP Width/Height to match.
+                var area = target.WorkingArea;
+                var pixelWidth = (int)(Width * target.Scaling);
+                var pixelHeight = (int)(Height * target.Scaling);
+                var corrected = new PixelPoint(
+                    area.X + Math.Max(0, (area.Width - pixelWidth) / 2),
+                    area.Y + Math.Max(0, (area.Height - pixelHeight) / 2));
 
-        // WorkingArea and Position are both physical pixels; scale the DIP Width/Height to match.
-        var area = target.WorkingArea;
-        var pixelWidth = (int)(Width * target.Scaling);
-        var pixelHeight = (int)(Height * target.Scaling);
-        var corrected = new PixelPoint(
-            area.X + Math.Max(0, (area.Width - pixelWidth) / 2),
-            area.Y + Math.Max(0, (area.Height - pixelHeight) / 2));
+                Position = corrected;
+                _lastNormalPosition = corrected;
+                _boundVm.WindowX = corrected.X;
+                _boundVm.WindowY = corrected.Y;
+            }
+        }
 
-        Position = corrected;
-        _lastNormalPosition = corrected;
-        _boundVm.WindowX = corrected.X;
-        _boundVm.WindowY = corrected.Y;
+        // (2) Apply persisted maximized state now that the window is realized on the target monitor.
+        // The VM stores a bool (Normal vs Maximized only - we don't restore Minimized); Width/Height
+        // are already applied via their two-way binding, and _lastNormalPosition holds the windowed
+        // top-left so a later un-maximize (and OnClosed) restores to the right monitor.
+        if (_boundVm.WindowMaximized && WindowState != WindowState.Maximized)
+            WindowState = WindowState.Maximized;
     }
 
     private void FocusPromptBoxDeferred() =>

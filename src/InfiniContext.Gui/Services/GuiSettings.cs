@@ -56,6 +56,13 @@ public sealed class GuiSettings
     /// See <see cref="WindowX"/>.</summary>
     public int? WindowY { get; set; }
 
+    /// <summary>The on-disk path this instance was loaded from (set by <see cref="LoadAsync"/>), so
+    /// <see cref="SaveAsync"/> writes back to the same file without the caller re-threading the
+    /// path. Lets a non-default path (e.g. the <c>INFINICONTEXT__GUI__SETTINGSPATH</c> override for
+    /// hermetic UIA verification) survive the load->save round-trip. Not serialized.</summary>
+    [JsonIgnore]
+    public string? SourcePath { get; set; }
+
     public static class Defaults
     {
         public const double LeftColumnWidth = 340;
@@ -84,7 +91,7 @@ public sealed class GuiSettings
 
         if (!File.Exists(resolved))
         {
-            return new GuiSettings();
+            return new GuiSettings { SourcePath = resolved };
         }
 
         try
@@ -94,22 +101,23 @@ public sealed class GuiSettings
             if (loaded is null)
             {
                 log.Warning("gui-settings: {Path} deserialized to null; using defaults", resolved);
-                return new GuiSettings();
+                return new GuiSettings { SourcePath = resolved };
             }
             loaded.Clamp();
+            loaded.SourcePath = resolved;
             return loaded;
         }
         catch (Exception ex)
         {
             log.Warning(ex, "gui-settings: {Path} could not be parsed; using defaults", resolved);
-            return new GuiSettings();
+            return new GuiSettings { SourcePath = resolved };
         }
     }
 
     /// <summary>Atomic write (temp + rename), same shape as <c>SessionIndex.SaveAsync</c>.</summary>
     public async Task SaveAsync(string? path = null)
     {
-        var resolved = path ?? DefaultPath();
+        var resolved = path ?? SourcePath ?? DefaultPath();
         Clamp();
 
         var dir = Path.GetDirectoryName(resolved);

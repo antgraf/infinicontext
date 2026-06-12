@@ -67,6 +67,27 @@ public class GuiSettingsTests
         loaded.WindowY.Should().BeNull();
     }
 
+    [Fact]
+    public async Task SourcePath_from_load_makes_save_write_back_to_same_file()
+    {
+        using var temp = new TempDir();
+        var path = Path.Combine(temp.Path, "custom-gui-settings.json");
+        await File.WriteAllTextAsync(path, """
+            { "version": 1, "windowX": -1920, "windowY": 50 }
+            """, TestContext.Current.CancellationToken);
+
+        // Load from the explicit path, mutate, then save with NO path argument. The instance must
+        // remember where it came from (SourcePath) and write back there - this is what lets the
+        // INFINICONTEXT__GUI__SETTINGSPATH override survive the VM's path-less SaveLayoutAsync call.
+        var loaded = await GuiSettings.LoadAsync(path);
+        loaded.SourcePath.Should().Be(path);
+        loaded.WindowX = -100;
+        await loaded.SaveAsync();
+
+        var reloaded = await GuiSettings.LoadAsync(path);
+        reloaded.WindowX.Should().Be(-100);
+    }
+
     private sealed class TempDir : IDisposable
     {
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"cp-gui-settings-{Guid.NewGuid():N}");
