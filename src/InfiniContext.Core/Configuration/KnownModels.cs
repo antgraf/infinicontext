@@ -26,6 +26,11 @@ public static class KnownModels
     /// reused here.</summary>
     public const string Reviewer = "claude-sonnet-4-6";
 
+    /// <summary>The 1M-context variant <c>claude</c> reports for the reviewer model (Claude Code
+    /// offers Sonnet as separate 200K/1M entries, so <c>system/init</c> can carry the suffixed id).
+    /// Used as a context-window map key, exactly like <see cref="MainLargeContext"/>.</summary>
+    public const string ReviewerLargeContext = Reviewer + "[1m]";
+
     /// <summary>Fable 5 вЂ” a newer, large-context model offered as a selectable option in the GUI
     /// model dropdowns (task 0016). NOT the shipped default (<see cref="Main"/> stays Opus 4.8 вЂ”
     /// switching the default away is explicitly out of scope). Specifics flagged for awareness:
@@ -42,8 +47,8 @@ public static class KnownModels
     /// </summary>
     public static IReadOnlyList<ModelCatalogEntry> Catalog { get; } = new[]
     {
-        new ModelCatalogEntry(Main, "Opus 4.8", 200_000),
-        new ModelCatalogEntry(Reviewer, "Sonnet 4.6", 200_000),
+        new ModelCatalogEntry(Main, "Opus 4.8", 1_000_000),
+        new ModelCatalogEntry(Reviewer, "Sonnet 4.6", 1_000_000),
         new ModelCatalogEntry(Light, "Haiku 4.5", 200_000),
         new ModelCatalogEntry(Fable, "Fable 5", 1_000_000),
     };

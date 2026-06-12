@@ -170,9 +170,10 @@ public static class InfiniContextSettingsLoader
         if (s.Models.Light.Cli.ThinkingMaxOutputTokens is < 64 or > 16384)
             errors.Add($"models.light.cli.thinkingMaxOutputTokens must be in [64, 16384], got {s.Models.Light.Cli.ThinkingMaxOutputTokens}.");
         // Catalog: each offered model needs a usable id + label for the GUI dropdowns. A missing
-        // ModelContextWindows key is deliberately NOT validated here вЂ” it falls back to the default
-        // threshold pair (ResolveThresholds), which is a legitimate outcome for an operator-added
-        // model, and there is no soft-warning channel in this loader.
+        // ModelContextWindows key is deliberately NOT validated here вЂ” the monitor then waits for
+        // claude's self-reported result.modelUsage contextWindow before nudging, which is a
+        // legitimate outcome for an operator-added model, and there is no soft-warning channel in
+        // this loader.
         for (var i = 0; i < s.Models.Available.Count; i++)
         {
             var entry = s.Models.Available[i];

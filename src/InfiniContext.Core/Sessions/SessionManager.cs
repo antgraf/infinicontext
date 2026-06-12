@@ -168,16 +168,20 @@ public sealed class SessionManager : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(request);
         ThrowIfDisposed();
 
-        // Task 0012 finding #2: pick the threshold pair based on the resolved model's window.
-        // 1M-context models flush at 45/65 (faster) so the agent has runway to summarise before
-        // claude's own auto-compact wipes context; 200k-context models stay at 60/85.
-        var effectiveModel = request.Model ?? _settings.Session.Model;
-        var (softPct, hardPct) = _settings.Tasks.ResolveThresholds(effectiveModel);
+        // Task 0012 finding #2: 1M-context models flush at 45/65 (faster) so the agent has runway
+        // to summarise before claude's own auto-compact wipes context; 200k-context models stay
+        // at 60/85. The monitor selects the pair from the window it resolves at runtime
+        // (settings map keyed by the init-reported model, or claude's self-reported
+        // result.modelUsage contextWindow) — not from the spawn-time model id, which is null for
+        // a default spawn and would otherwise pin the small-context pair (task 0018 follow-up).
         var pressure = new ContextPressureMonitor(
-            softPct,
-            hardPct,
+            _settings.Tasks.SoftThresholdPct,
+            _settings.Tasks.HardThresholdPct,
             _settings.Tasks.ModelContextWindows,
-            _logger);
+            _logger,
+            _settings.Tasks.SoftThresholdPctLargeContext,
+            _settings.Tasks.HardThresholdPctLargeContext,
+            _settings.Tasks.LargeContextWindowTokens);
 
         IClaudeSession? sessionRef = null;
         SessionContext? ctxRef = null;
@@ -243,7 +247,9 @@ public sealed class SessionManager : IAsyncDisposable
             request.ActiveTaskId)
         {
             Cwd = request.Cwd,
-            Model = effectiveModel,
+            // Task 0016: what the GUI shows as the session's model — the explicit request wins,
+            // else the settings default (null = claude's own default model).
+            Model = request.Model ?? _settings.Session.Model,
         };
         ctxRef = ctx;
         var createdAt = _clock();

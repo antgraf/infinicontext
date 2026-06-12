@@ -326,30 +326,13 @@ public sealed record TasksOptions
     public IReadOnlyDictionary<string, int> ModelContextWindows { get; init; } =
         new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            [KnownModels.Reviewer] = 200_000,
-            [KnownModels.Main] = 200_000,
+            [KnownModels.Reviewer] = 1_000_000,
+            [KnownModels.ReviewerLargeContext] = 1_000_000,
+            [KnownModels.Main] = 1_000_000,
             [KnownModels.MainLargeContext] = 1_000_000,
             [KnownModels.Light] = 200_000,
             [KnownModels.Fable] = 1_000_000,
         };
-
-    /// <summary>
-    /// Task 0012 finding #2: pick the soft/hard threshold pair appropriate for the resolved
-    /// model. Returns the large-context pair when the model's window meets or exceeds
-    /// <see cref="LargeContextWindowTokens"/> and the cutoff is positive; otherwise the default
-    /// pair. Pure function over the settings record.
-    /// </summary>
-    public (int Soft, int Hard) ResolveThresholds(string? modelId)
-    {
-        if (LargeContextWindowTokens > 0
-            && modelId is not null
-            && ModelContextWindows.TryGetValue(modelId, out var window)
-            && window >= LargeContextWindowTokens)
-        {
-            return (SoftThresholdPctLargeContext, HardThresholdPctLargeContext);
-        }
-        return (SoftThresholdPct, HardThresholdPct);
-    }
 
     /// <summary>
     /// Resolve <see cref="DbPath"/> against the per-user default. Pure function — does no I/O.

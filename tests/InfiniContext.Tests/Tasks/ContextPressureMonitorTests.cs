@@ -205,6 +205,90 @@ public class ContextPressureMonitorTests
     }
 
     [Fact]
+    public void Large_window_selects_the_large_context_pair()
+    {
+        // Task 0018 follow-up: a default spawn names no model, so the pair must follow the window
+        // the monitor resolves at runtime - 1M => the tighter 45/65, not the spawn-time 60/85.
+        var monitor = NewLargeAwareMonitor(out var soft, out var hard);
+        Init(monitor);
+
+        Turn(monitor, used: 500_000, window: 1_000_000); // 50% - soft under the 45 large threshold
+        Turn(monitor, used: 700_000, window: 1_000_000); // 70% - hard under the 65 large threshold
+
+        soft.Should().ContainSingle().Which.UsedFraction.Should().BeApproximately(0.50, 0.001);
+        hard.Should().ContainSingle().Which.UsedFraction.Should().BeApproximately(0.70, 0.001);
+    }
+
+    [Fact]
+    public void Small_window_keeps_the_default_pair_when_the_large_pair_is_configured()
+    {
+        var monitor = NewLargeAwareMonitor(out var soft, out var hard);
+        Init(monitor);
+
+        Turn(monitor, used: 100_000, window: 200_000); // 50% - below the default 60 soft
+        soft.Should().BeEmpty();
+
+        // 65% would be a HARD crossing under the large pair; on a 200k window it must be the
+        // default pair's soft-only.
+        Turn(monitor, used: 130_000, window: 200_000);
+        soft.Should().ContainSingle();
+        hard.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Self_reported_window_upgrade_switches_to_the_large_pair()
+    {
+        // The settings map carries a stale 200k for the model, but claude itself reports a 1M
+        // window in result.modelUsage - the authoritative source wins and the large pair applies.
+        var settingsWindows = new Dictionary<string, int> { [Model] = 200_000 };
+        var monitor = new ContextPressureMonitor(
+            softThresholdPct: 60,
+            hardThresholdPct: 85,
+            settingsWindows: settingsWindows,
+            softThresholdPctLargeContext: 45,
+            hardThresholdPctLargeContext: 65,
+            largeContextWindowTokens: 1_000_000);
+        var soft = new List<ContextPressureCrossing>();
+        monitor.SoftCrossed += c => soft.Add(c);
+        Init(monitor);
+        WindowResult(monitor, window: 1_000_000);
+
+        Assistant(monitor, used: 500_000); // 50% of 1M - soft fires only under the large pair
+
+        soft.Should().ContainSingle().Which.WindowTokens.Should().Be(1_000_000);
+    }
+
+    [Fact]
+    public void Zero_cutoff_disables_the_large_context_pair()
+    {
+        var monitor = new ContextPressureMonitor(
+            softThresholdPct: 60,
+            hardThresholdPct: 85,
+            softThresholdPctLargeContext: 45,
+            hardThresholdPctLargeContext: 65,
+            largeContextWindowTokens: 0);
+        var soft = new List<ContextPressureCrossing>();
+        monitor.SoftCrossed += c => soft.Add(c);
+        Init(monitor);
+
+        Turn(monitor, used: 500_000, window: 1_000_000); // 50% - silent under the default 60/85
+
+        soft.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Constructor_validates_the_large_pair_only_when_the_cutoff_is_positive()
+    {
+        FluentActions.Invoking(() => new ContextPressureMonitor(60, 85, largeContextWindowTokens: 1_000_000))
+            .Should().Throw<ArgumentOutOfRangeException>("a positive cutoff requires a valid large pair");
+        FluentActions.Invoking(() => new ContextPressureMonitor(
+                60, 85, softThresholdPctLargeContext: 65, hardThresholdPctLargeContext: 45, largeContextWindowTokens: 1_000_000))
+            .Should().Throw<ArgumentException>();
+        FluentActions.Invoking(() => new ContextPressureMonitor(60, 85))
+            .Should().NotThrow("an omitted/zero cutoff disables the large pair entirely");
+    }
+
+    [Fact]
     public void Constructor_validates_thresholds()
     {
         FluentActions.Invoking(() => new ContextPressureMonitor(0, 85))
@@ -218,8 +302,22 @@ public class ContextPressureMonitorTests
     }
 
     private static ContextPressureMonitor NewMonitor(out List<ContextPressureCrossing> soft, out List<ContextPressureCrossing> hard)
+        => Capture(new ContextPressureMonitor(softThresholdPct: 60, hardThresholdPct: 85), out soft, out hard);
+
+    /// <summary>The production shape (task 0018 follow-up): both pairs configured, selection
+    /// driven by the resolved window against the 1M cutoff.</summary>
+    private static ContextPressureMonitor NewLargeAwareMonitor(out List<ContextPressureCrossing> soft, out List<ContextPressureCrossing> hard)
+        => Capture(
+            new ContextPressureMonitor(
+                softThresholdPct: 60,
+                hardThresholdPct: 85,
+                softThresholdPctLargeContext: 45,
+                hardThresholdPctLargeContext: 65,
+                largeContextWindowTokens: 1_000_000),
+            out soft, out hard);
+
+    private static ContextPressureMonitor Capture(ContextPressureMonitor monitor, out List<ContextPressureCrossing> soft, out List<ContextPressureCrossing> hard)
     {
-        var monitor = new ContextPressureMonitor(softThresholdPct: 60, hardThresholdPct: 85);
         var sList = new List<ContextPressureCrossing>();
         var hList = new List<ContextPressureCrossing>();
         monitor.SoftCrossed += c => sList.Add(c);

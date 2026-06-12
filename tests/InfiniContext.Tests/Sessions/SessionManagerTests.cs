@@ -256,6 +256,9 @@ public class SessionManagerTests
         // auto-rotate to a fresh session bound to the same task.
         var factory = new RecordingSessionFactory();
         await using var mgr = NewManager(factory);
+        // Deliberately no model on the spawn request (the default-session shape): the monitor
+        // must still pick the large-context 45/65 pair from the window it resolves at runtime
+        // via the init-reported model id (task 0018 follow-up).
         var ctx = await mgr.CreateAsync(NewRequest(activeTaskId: 99));
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.None, "no nudge has fired yet");
 
@@ -277,16 +280,18 @@ public class SessionManagerTests
                 ["model"] = "claude-opus-4-8",
             },
         });
-        observer(BuildAssistantEvent(sid, used: 130_000)); // 65% тАФ soft
+        // Opus 4.8 is a 1M-context model, so the large-context threshold pair applies
+        // (soft 45% / hard 65%). Drive the monitor against the 1M window accordingly.
+        observer(BuildAssistantEvent(sid, used: 500_000)); // 50%тАФ soft
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Soft);
 
-        observer(BuildAssistantEvent(sid, used: 180_000)); // 90% тАФ hard
+        observer(BuildAssistantEvent(sid, used: 700_000)); // 70%тАФ hard
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Hard, "hard escalates over soft");
     }
 
     // Task 0014: context occupancy is measured per API call from each assistant event's
     // message.usage, not from the summed result.usage. The window resolves from the manager's
-    // default ModelContextWindows map (claude-opus-4-8 -> 200_000), so no modelUsage is needed.
+    // default ModelContextWindows map (claude-opus-4-8 -> 1_000_000), so no modelUsage is needed.
     private static AssistantEvent BuildAssistantEvent(Guid sessionId, int used)
     {
         var raw = new System.Text.Json.Nodes.JsonObject

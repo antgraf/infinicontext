@@ -33,11 +33,22 @@ namespace InfiniContext.Core.Tasks;
 /// the threshold (e.g. via <c>/compact</c>), but we intentionally do not re-arm — the design
 /// calls for "no flapping" in §13.
 /// </para>
+///
+/// <para>
+/// Task 0012 finding #2 / task 0018 follow-up: the soft/hard percentage pair is selected per
+/// check from the *resolved window*, not from the model id the host requested at spawn. When the
+/// optional large-context pair is configured (cutoff &gt; 0) and the resolved window meets the
+/// cutoff, the tighter pair applies (default 45/65 vs 60/85) — so a default spawn with no model
+/// named still nudges early once <c>system/init</c> or a <c>result</c> reveals a 1M-window model.
+/// </para>
 /// </summary>
 public sealed class ContextPressureMonitor
 {
     private readonly double _softFraction;
     private readonly double _hardFraction;
+    private readonly double _softFractionLargeContext;
+    private readonly double _hardFractionLargeContext;
+    private readonly long _largeContextWindowTokens;
     private readonly IReadOnlyDictionary<string, int> _windowsBySettings;
     private readonly ILogger _logger;
 
@@ -50,18 +61,35 @@ public sealed class ContextPressureMonitor
     /// <c>modelUsage[&lt;active model&gt;].contextWindow</c>. Reset on a new session id.</summary>
     private long? _windowFromResult;
 
+    /// <summary>
+    /// The large-context pair is opt-in: leave <paramref name="largeContextWindowTokens"/> at 0
+    /// and every window uses the default pair (the pre-0018 behavior all existing call sites get
+    /// for free). When the cutoff is positive the large pair must be a valid pair too.
+    /// </summary>
     public ContextPressureMonitor(
         int softThresholdPct,
         int hardThresholdPct,
         IReadOnlyDictionary<string, int>? settingsWindows = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        int softThresholdPctLargeContext = 0,
+        int hardThresholdPctLargeContext = 0,
+        long largeContextWindowTokens = 0)
     {
         if (softThresholdPct is <= 0 or >= 100) throw new ArgumentOutOfRangeException(nameof(softThresholdPct), "Must be in (0, 100).");
         if (hardThresholdPct is <= 0 or >= 100) throw new ArgumentOutOfRangeException(nameof(hardThresholdPct), "Must be in (0, 100).");
         if (softThresholdPct >= hardThresholdPct) throw new ArgumentException("softThresholdPct must be strictly less than hardThresholdPct.");
+        if (largeContextWindowTokens > 0)
+        {
+            if (softThresholdPctLargeContext is <= 0 or >= 100) throw new ArgumentOutOfRangeException(nameof(softThresholdPctLargeContext), "Must be in (0, 100) when largeContextWindowTokens is positive.");
+            if (hardThresholdPctLargeContext is <= 0 or >= 100) throw new ArgumentOutOfRangeException(nameof(hardThresholdPctLargeContext), "Must be in (0, 100) when largeContextWindowTokens is positive.");
+            if (softThresholdPctLargeContext >= hardThresholdPctLargeContext) throw new ArgumentException("softThresholdPctLargeContext must be strictly less than hardThresholdPctLargeContext.");
+        }
 
         _softFraction = softThresholdPct / 100.0;
         _hardFraction = hardThresholdPct / 100.0;
+        _softFractionLargeContext = softThresholdPctLargeContext / 100.0;
+        _hardFractionLargeContext = hardThresholdPctLargeContext / 100.0;
+        _largeContextWindowTokens = largeContextWindowTokens;
         _windowsBySettings = settingsWindows ?? new Dictionary<string, int>(StringComparer.Ordinal);
         _logger = logger ?? Log.Logger;
     }
@@ -139,10 +167,16 @@ public sealed class ContextPressureMonitor
             return;
         }
 
+        // Pick the pair from the window actually in effect, not from the spawn-time model id:
+        // a default spawn (no --model) resolves to whatever claude reports in init/result.
+        var (softFraction, hardFraction) = _largeContextWindowTokens > 0 && window.Value >= _largeContextWindowTokens
+            ? (_softFractionLargeContext, _hardFractionLargeContext)
+            : (_softFraction, _hardFraction);
+
         var fraction = (double)used / window.Value;
         var crossing = new ContextPressureCrossing(used, window.Value, fraction, _activeModel);
 
-        if (!_hardCrossed && fraction >= _hardFraction)
+        if (!_hardCrossed && fraction >= hardFraction)
         {
             _hardCrossed = true;
             // Implies soft is also crossed — flag it so a later soft check doesn't fire after hard.
@@ -152,7 +186,7 @@ public sealed class ContextPressureMonitor
                 used, window.Value, fraction, _activeModel ?? "<unknown>");
             HardCrossed?.Invoke(crossing);
         }
-        else if (!_softCrossed && fraction >= _softFraction)
+        else if (!_softCrossed && fraction >= softFraction)
         {
             _softCrossed = true;
             _logger.Information(
