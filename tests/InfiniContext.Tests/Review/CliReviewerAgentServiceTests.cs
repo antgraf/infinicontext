@@ -130,7 +130,7 @@ public class CliReviewerAgentServiceTests
     {
         // CliLightModelInvocation is the shared argv builder; passing the reviewer model id
         // through it produces an argv that requests that model. This is the contract that lets
-        // us reuse the spawn machinery тАФ `--model <reviewerModel>` is what makes a "reviewer"
+        // us reuse the spawn machinery — `--model <reviewerModel>` is what makes a "reviewer"
         // distinct from a "light model" invocation.
         var argv = CliLightModelInvocation.BuildArgv("claude-opus-4-7", "you are a code reviewer");
 

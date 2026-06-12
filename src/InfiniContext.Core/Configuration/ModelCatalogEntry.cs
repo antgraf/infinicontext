@@ -9,7 +9,7 @@ namespace InfiniContext.Core.Configuration;
 ///
 /// <para>The catalog is static-first by design (see task 0016 / the 0015 centralization win): a new
 /// model is one edit to <see cref="KnownModels.Catalog"/> rather than an HTTP call to the Anthropic
-/// Models API вЂ” the host spawns the <c>claude</c> CLI and has no API-key/HTTP path. A live
+/// Models API — the host spawns the <c>claude</c> CLI and has no API-key/HTTP path. A live
 /// Models-API fetch is a possible follow-on, not a gate.</para>
 /// </summary>
 /// <param name="Id">Anthropic model id passed to <c>claude --model</c> (e.g. <c>claude-opus-4-8</c>).</param>

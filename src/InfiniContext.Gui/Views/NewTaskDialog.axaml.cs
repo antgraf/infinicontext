@@ -89,5 +89,5 @@ public partial class NewTaskDialog : Window
 /// <param name="HomeCwd">Home folder for the task. Must exist and be writable.</param>
 /// <param name="Description">Free-form description that becomes <c>description.md</c>.</param>
 /// <param name="Model">Chosen per-task default model id, or <c>null</c> for the host default
-/// (no per-task pin вЂ” spawn falls back to the settings model chain).</param>
+/// (no per-task pin — spawn falls back to the settings model chain).</param>
 public sealed record NewTaskRequest(string HomeCwd, string Description, string? Model = null);

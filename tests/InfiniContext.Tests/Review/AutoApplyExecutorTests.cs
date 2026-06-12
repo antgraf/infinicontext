@@ -220,7 +220,7 @@ public class AutoApplyExecutorTests
         result.GateReversionReason.Should().Contain("StreamJsonParser");
         fx.Read("src/Foo.cs").Should().Be("original"); // reverted
         // Baseline test ran (1 call); post-apply test did NOT (post-apply build failed first).
-        runner.TestCalls.Should().Be(1); // baseline ran, post-apply did not because build failed тЖТ test never ran
+        runner.TestCalls.Should().Be(1); // baseline ran, post-apply did not because build failed → test never ran
     }
 
     [Fact]
@@ -482,7 +482,7 @@ public class AutoApplyExecutorTests
         fx.WriteFile("src/Foo.cs", "alpha beta");
 
         // Two findings on the same file: first replaces "alpha", second tries to replace "alpha"
-        // again тАФ but it's no longer there after the first edit.
+        // again — but it's no longer there after the first edit.
         var findings = new[]
         {
             NewEditFinding("src/Foo.cs", "alpha", "gamma"),

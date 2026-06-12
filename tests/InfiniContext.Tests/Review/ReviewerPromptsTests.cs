@@ -66,7 +66,7 @@ public class ReviewerPromptsTests
     public void Reviewer_system_prompts_instruct_json_only_output(ReviewerRole role)
     {
         var prompt = ReviewerPrompts.SystemFor(role);
-        // "Output ONLY ... JSON ..." or similar тАФ the prompt must steer away from prose preambles.
+        // "Output ONLY ... JSON ..." or similar — the prompt must steer away from prose preambles.
         prompt.Should().MatchRegex(@"Output ONLY.*JSON");
     }
 

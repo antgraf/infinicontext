@@ -262,7 +262,7 @@ public class SessionManagerTests
         var ctx = await mgr.CreateAsync(NewRequest(activeTaskId: 99), TestContext.Current.CancellationToken);
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.None, "no nudge has fired yet");
 
-        // Drive the monitor through the same observer SessionManager passes to the factory тАФ
+        // Drive the monitor through the same observer SessionManager passes to the factory —
         // that's the wire that the manager's CreateAsync subscribes against.
         var observer = factory.LastObserver!;
         var sid = Guid.NewGuid();
@@ -282,10 +282,10 @@ public class SessionManagerTests
         });
         // Opus 4.8 is a 1M-context model, so the large-context threshold pair applies
         // (soft 45% / hard 65%). Drive the monitor against the 1M window accordingly.
-        observer(BuildAssistantEvent(sid, used: 500_000)); // 50%тАФ soft
+        observer(BuildAssistantEvent(sid, used: 500_000)); // 50%— soft
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Soft);
 
-        observer(BuildAssistantEvent(sid, used: 700_000)); // 70%тАФ hard
+        observer(BuildAssistantEvent(sid, used: 700_000)); // 70%— hard
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.Hard, "hard escalates over soft");
     }
 

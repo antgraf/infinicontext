@@ -608,7 +608,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// <summary>Inspector "Apply (respawn)" handler. claude's <c>--model</c> is fixed for the
     /// process's life, so changing a running session's model means killing it and spawning a
     /// fresh one in the same cwd/task with the selected model. Transcript history does NOT carry
-    /// across вЂ” a task-bound respawn re-seeds via the task pointer, a free session starts clean.
+    /// across — a task-bound respawn re-seeds via the task pointer, a free session starts clean.
     /// The button is gated on <see cref="CanApplyModel"/>; clicking it IS the operator's
     /// confirmation (the inspector hint warns about the respawn).</summary>
     private async Task ApplyModelAsync()

@@ -31,8 +31,8 @@ public static class KnownModels
     /// Used as a context-window map key, exactly like <see cref="MainLargeContext"/>.</summary>
     public const string ReviewerLargeContext = Reviewer + "[1m]";
 
-    /// <summary>Fable 5 вЂ” a newer, large-context model offered as a selectable option in the GUI
-    /// model dropdowns (task 0016). NOT the shipped default (<see cref="Main"/> stays Opus 4.8 вЂ”
+    /// <summary>Fable 5 — a newer, large-context model offered as a selectable option in the GUI
+    /// model dropdowns (task 0016). NOT the shipped default (<see cref="Main"/> stays Opus 4.8 —
     /// switching the default away is explicitly out of scope). Specifics flagged for awareness:
     /// 1M context, ~2x Opus 4.8 cost, new tokenizer (~30% more tokens per the 0015 discussion).</summary>
     public const string Fable = "claude-fable-5";

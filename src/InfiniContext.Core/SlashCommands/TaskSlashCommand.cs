@@ -238,7 +238,7 @@ public sealed class TaskSlashCommand : ISlashCommand
     /// <summary>
     /// Shared plan-loading + error-printing path for <c>/task switch</c> and <c>/task spawn</c>
     /// (arch-012). Returns <c>null</c> when the task subsystem is unavailable, when the task
-    /// doesn't resolve, or when <see cref="SlashCommandContext.PrepareTaskSwitch"/> threw ╤--
+    /// doesn't resolve, or when <see cref="SlashCommandContext.PrepareTaskSwitch"/> threw —
     /// the user-facing message is already printed in each of those cases. <paramref name="verb"/>
     /// is the user-visible operation name ("switch" / "spawn") used in error strings.
     /// </summary>

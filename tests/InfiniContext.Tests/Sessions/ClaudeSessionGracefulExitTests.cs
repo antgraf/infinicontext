@@ -9,7 +9,7 @@ namespace InfiniContext.Tests.Sessions;
 /// <summary>
 /// Stage 3 bug A. Exercises <see cref="ClaudeSession.RequestGracefulExitAsync"/> against a real
 /// FakeClaude child: closing stdin while the child is blocked on a read must let it exit naturally
-/// (EOF в†’ exit code 0), driving the standard <c>Exited</c> transition вЂ” the same path the agent's
+/// (EOF → exit code 0), driving the standard <c>Exited</c> transition — the same path the agent's
 /// <c>session_exit</c> tool reaches through the sidecar. Distinct from DisposeAsync, which kills.
 /// </summary>
 public class ClaudeSessionGracefulExitTests
@@ -22,7 +22,7 @@ public class ClaudeSessionGracefulExitTests
         var sessionId = "00000000-0000-0000-0000-000000000eee";
 
         // init, then block on stdin. Closing stdin (graceful exit) yields EOF, which FakeClaude's
-        // wait-stdin reads as null and returns 0 вЂ” a clean exit, NOT a kill.
+        // wait-stdin reads as null and returns 0 — a clean exit, NOT a kill.
         var script = new JsonObject
         {
             ["actions"] = new JsonArray

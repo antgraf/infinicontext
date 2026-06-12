@@ -3,7 +3,7 @@ name: CI (macOS)
 # Stage 2B Phase 8 / D37: macOS runs are manual-only because private-repo macos-latest minutes
 # bill at 10x the windows-latest rate. Trigger this workflow whenever Phase 7's macOS-specific
 # code (`PosixSignalSupervisor`, `FileSystemNaming`, [MacOnlyFact] tests) is touched, or before
-# any release that needs to declare the "killing the host cleans up child processes тАФ verified
+# any release that needs to declare the "killing the host cleans up child processes — verified
 # on macOS" exit criterion green. The 3 MacOnly tests light up here for the first time.
 
 on:
@@ -37,7 +37,7 @@ jobs:
       - name: Restore
         run: dotnet restore InfiniContext.slnx
 
-      # No `dotnet format --verify-no-changes` here тАФ the Windows CI owns the formatting gate so we
+      # No `dotnet format --verify-no-changes` here — the Windows CI owns the formatting gate so we
       # don't burn 10x-billed macOS minutes on a cosmetic check.
 
       - name: Build

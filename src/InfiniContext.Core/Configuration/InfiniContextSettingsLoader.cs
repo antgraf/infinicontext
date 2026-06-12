@@ -86,12 +86,12 @@ public static class InfiniContextSettingsLoader
 
         // Microsoft.Extensions.Configuration APPENDS to (rather than replaces) a pre-populated
         // read-only collection when binding a JSON array. Binding `models.available` over the
-        // in-code KnownModels.Catalog default would therefore concatenate the two вЂ” and because
+        // in-code KnownModels.Catalog default would therefore concatenate the two — and because
         // the committed settings.json mirrors the catalog, a normal load would silently double it.
         // Re-bind that one section into a fresh list so a configured array REPLACES the default
         // whenever any layer supplies it. (Dictionaries like tasks.modelContextWindows merge by
         // key, which is the intended per-model override semantics, so they're deliberately left
-        // alone вЂ” only the array needs this.)
+        // alone — only the array needs this.)
         var availableSection = configuration.GetSection("models:available");
         if (availableSection.Exists())
         {
@@ -170,7 +170,7 @@ public static class InfiniContextSettingsLoader
         if (s.Models.Light.Cli.ThinkingMaxOutputTokens is < 64 or > 16384)
             errors.Add($"models.light.cli.thinkingMaxOutputTokens must be in [64, 16384], got {s.Models.Light.Cli.ThinkingMaxOutputTokens}.");
         // Catalog: each offered model needs a usable id + label for the GUI dropdowns. A missing
-        // ModelContextWindows key is deliberately NOT validated here вЂ” the monitor then waits for
+        // ModelContextWindows key is deliberately NOT validated here — the monitor then waits for
         // claude's self-reported result.modelUsage contextWindow before nudging, which is a
         // legitimate outcome for an operator-added model, and there is no soft-warning channel in
         // this loader.

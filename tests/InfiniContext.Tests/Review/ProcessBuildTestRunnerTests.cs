@@ -7,7 +7,7 @@ namespace InfiniContext.Tests.Review;
 
 public class ProcessBuildTestRunnerTests
 {
-    // These tests don't actually spawn `dotnet` тАФ that would be slow and brittle. They verify
+    // These tests don't actually spawn `dotnet` — that would be slow and brittle. They verify
     // option defaults, argument validation, and the "Process.Start returns null" handling that's
     // exercised by passing an empty argv (forces ArgumentException at psi.Start). Real
     // build/test invocation is covered by step 12's dogfood run, not here.
@@ -62,7 +62,7 @@ public class ProcessBuildTestRunnerTests
         // is covered by the supervisor's own tests, not here.
         var supervisor = new RecordingSupervisor();
         // Point at a temp directory that's empty so `dotnet build` exits quickly with a clear
-        // "no project" failure тАФ we don't care about the outcome, only that Attach happened.
+        // "no project" failure — we don't care about the outcome, only that Attach happened.
         var temp = Path.Combine(Path.GetTempPath(), $"pbtr-attach-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
         try
@@ -77,7 +77,7 @@ public class ProcessBuildTestRunnerTests
             try { Directory.Delete(temp, recursive: true); } catch { }
         }
 
-        // The runner disposes the Process before returning, so don't introspect Attached[0] тАФ
+        // The runner disposes the Process before returning, so don't introspect Attached[0] —
         // the count alone proves Attach was called on the dotnet child.
         supervisor.Attached.Should().HaveCount(1);
     }

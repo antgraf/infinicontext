@@ -212,7 +212,7 @@ public sealed class ScopeResolver
     /// Filenames that are always secrets, regardless of extension. sec-002 expanded the list to
     /// the unambiguous wins (AWS / netrc / npm / pypi / git-credentials / kubeconfig / htpasswd)
     /// and left the false-positive-prone ones out (e.g. <c>appsettings.Development.json</c>,
-    /// <c>*.crt</c>, the project's own <c>settings.json</c>) ╤-- those need a product call paired
+    /// <c>*.crt</c>, the project's own <c>settings.json</c>) — those need a product call paired
     /// with the configurable seam (arch-011) and aren't taken in v1.
     /// </summary>
     private static readonly string[] SecretFilenames =

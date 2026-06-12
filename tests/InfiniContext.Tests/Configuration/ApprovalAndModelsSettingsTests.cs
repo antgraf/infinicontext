@@ -83,7 +83,7 @@ public class ApprovalAndModelsSettingsTests
     public void Every_catalog_id_resolves_a_context_window()
     {
         // A catalog entry whose id isn't in ModelContextWindows would silently fall back to the
-        // default (small-context) threshold pair вЂ” wrong for a large-context model like Fable.
+        // default (small-context) threshold pair — wrong for a large-context model like Fable.
         // Keep the two in sync: the threshold map must cover every offered model.
         var windows = InfiniContextSettings.Defaults.Tasks.ModelContextWindows;
         foreach (var entry in KnownModels.Catalog)

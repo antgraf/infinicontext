@@ -55,7 +55,7 @@ public sealed class SessionContext : IAsyncDisposable
     /// <summary>Effective model id the session was spawned with (<c>request.Model ??
     /// settings.Session.Model</c>), or null when neither was set and claude picked its own
     /// default. Surfaced so per-session UI can show the running model and offer a respawn-to-
-    /// change affordance. Fixed for the process's life вЂ” claude's <c>--model</c> can't be changed
+    /// change affordance. Fixed for the process's life — claude's <c>--model</c> can't be changed
     /// in-flight, so changing it means killing and re-spawning the session.</summary>
     public string? Model { get; init; }
 

@@ -288,7 +288,7 @@ public sealed class ClaudeSession : IClaudeSession
     /// <summary>
     /// Closes the child's stdin without killing the process. Claude finishes the current turn (if
     /// any), then exits naturally via EOF. The state machine sees the standard <c>Exited</c>
-    /// transition through the stdout drain loop's finally block вЂ” so <c>AutoRotationService</c> fires
+    /// transition through the stdout drain loop's finally block — so <c>AutoRotationService</c> fires
     /// if a rotation reason was armed by a context-pressure nudge.
     ///
     /// <para>

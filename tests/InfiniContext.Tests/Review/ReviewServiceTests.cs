@@ -322,7 +322,7 @@ public class ReviewServiceTests
     [Fact]
     public async Task RunReviewAsync_passing_same_instance_to_both_channels_still_works()
     {
-        // The convenience ctor (single-arg) forwards to ctor(reviewer, reviewer, ...) тАФ verify
+        // The convenience ctor (single-arg) forwards to ctor(reviewer, reviewer, ...) — verify
         // the single-instance path keeps prior semantics: one instance sees all six calls.
         var both = AllReviewersEmpty();
         both.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();

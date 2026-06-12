@@ -236,7 +236,7 @@ public sealed class ApprovalChannel : IAsyncDisposable
             var req = SessionExitRequest.FromJson(obj);
             // Fire-and-forget is load-bearing: the agent's tool result must return BEFORE stdin
             // closes, or claude may die before reading it. Deferring the close to the threadpool
-            // lets this method reply {ok:true} on the pipe first. See design.md В§"Sequence diagram".
+            // lets this method reply {ok:true} on the pipe first. See design.md §"Sequence diagram".
             _ = Task.Run(() => _onSessionExit(req, _cts.Token));
             return new SessionExitResponse(true);
         }

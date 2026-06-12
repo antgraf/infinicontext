@@ -143,8 +143,8 @@ public class MultiSessionHostTests
     {
         // Issue 0013 (task 0005): when a task-bound session exits and a context-pressure nudge
         // fired during its life, the host must auto-spawn a fresh session on the same task.
-        // The MVP reuses the SwitchPlan primitive тАФ Program.cs's outer loop already respawns
-        // on it тАФ so we assert that HostResult.SwitchPlan is populated for the same task id.
+        // The MVP reuses the SwitchPlan primitive — Program.cs's outer loop already respawns
+        // on it — so we assert that HostResult.SwitchPlan is populated for the same task id.
         var fake = new FakeSession();
         await using var ctx = BuildContext(fake, activeTaskId: 7);
         ctx.MarkRotationReason(InfiniContext.Core.Sessions.RotationReason.Hard);
@@ -169,9 +169,9 @@ public class MultiSessionHostTests
         var hostRun = host.RunAsync();
 
         // Move state out of Idle so the input loop is parked on _exitSignal (not on
-        // ReadLineAsync тАФ which would never wake on our StringReader).
+        // ReadLineAsync — which would never wake on our StringReader).
         fake.State.BeginSend();
-        fake.State.HandleProcessExit(0); // OnStateTransition тЖТ TryStartAutoRotation тЖТ AutoRotateAsync
+        fake.State.HandleProcessExit(0); // OnStateTransition → TryStartAutoRotation → AutoRotateAsync
         fake.SignalExit(); // unblock the host's post-loop drain immediately
 
         var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -186,7 +186,7 @@ public class MultiSessionHostTests
     public async Task Soft_nudge_then_session_exit_also_auto_rotates_via_SwitchPlan()
     {
         // Issue 0013: soft nudge ("finish current sub-task and exit cleanly so a fresh session
-        // can resume") is also a handoff signal тАФ if the agent obeys and exits, the host
+        // can resume") is also a handoff signal — if the agent obeys and exits, the host
         // should auto-rotate just like for hard. Mirrors the hard-nudge test; only the reason
         // and the console label differ.
         var fake = new FakeSession();
@@ -254,9 +254,9 @@ public class MultiSessionHostTests
         var hostRun = host.RunAsync();
 
         // Wait until the input loop is genuinely blocked inside ReadLineAsync (the production hang
-        // point) before driving the exit вЂ” the session went Idle, so the loop is at the prompt.
+        // point) before driving the exit — the session went Idle, so the loop is at the prompt.
         await input.ReadLineCalled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        fake.State.HandleProcessExit(0); // Exited в†’ rotation в†’ RequestSwitch в†’ _exitSignal
+        fake.State.HandleProcessExit(0); // Exited → rotation → RequestSwitch → _exitSignal
         fake.SignalExit();
 
         var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -273,7 +273,7 @@ public class MultiSessionHostTests
         // SwitchPlan, no rotation banner. This is what the user's `/quit` looks like.
         var fake = new FakeSession();
         await using var ctx = BuildContext(fake, activeTaskId: 7);
-        // No MarkRotationReason тАФ explicitly testing the baseline.
+        // No MarkRotationReason — explicitly testing the baseline.
 
         var input = new StringReader("");
         var console = new TestConsole();
@@ -307,7 +307,7 @@ public class MultiSessionHostTests
     public async Task Auto_rotation_refused_when_guard_cap_is_hit()
     {
         // Drain the guard's budget for task 11 before the host even starts, so when the
-        // session exits with a hard nudge the host can't rotate тАФ it falls back to a normal
+        // session exits with a hard nudge the host can't rotate — it falls back to a normal
         // exit and writes a "[task] auto-rotation refused" line to the console.
         var fake = new FakeSession();
         await using var ctx = BuildContext(fake, activeTaskId: 11);
@@ -316,7 +316,7 @@ public class MultiSessionHostTests
         var guard = new AutoRotationGuard(maxRotations: 2, window: TimeSpan.FromMinutes(5));
         guard.TryRegister(11).Should().BeTrue();
         guard.TryRegister(11).Should().BeTrue();
-        // Cap is now at 2/2 тАФ the next attempt (the host's) must be refused.
+        // Cap is now at 2/2 — the next attempt (the host's) must be refused.
 
         var input = new StringReader("");
         var console = new TestConsole();

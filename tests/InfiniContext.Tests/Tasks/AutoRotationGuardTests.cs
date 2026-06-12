@@ -26,7 +26,7 @@ public class AutoRotationGuardTests
     [Fact]
     public void TryRegister_refusal_does_not_record_a_new_entry()
     {
-        // A rejected attempt must not push the window forward тАФ otherwise the operator could
+        // A rejected attempt must not push the window forward — otherwise the operator could
         // never exit the cap state by waiting (every refused call would extend the cap window).
         var now = DateTimeOffset.UnixEpoch;
         var guard = new AutoRotationGuard(maxRotations: 1, window: TimeSpan.FromMinutes(5), clock: () => now);

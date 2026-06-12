@@ -103,7 +103,7 @@ public class AutoRotationServiceTests
         service.AutoRotationProposed += _ => fired = true;
 
         await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
-        // No MarkRotationReason call тАФ baseline.
+        // No MarkRotationReason call — baseline.
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 

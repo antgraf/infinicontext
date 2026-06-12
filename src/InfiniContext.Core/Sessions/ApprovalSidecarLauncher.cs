@@ -99,7 +99,7 @@ internal sealed class ApprovalSidecarLauncher : IAsyncDisposable
             allowed.Add(ApprovalSidecarContract.FullyQualifiedLockReleaseToolName);
         }
         // Allowlist session_exit so claude dispatches it straight to the sidecar (auto-honored)
-        // instead of routing it through the approval-prompt tool вЂ” the host treats the call itself
+        // instead of routing it through the approval-prompt tool — the host treats the call itself
         // as the agent's "I am done" signal, so there's nothing to approve.
         if (onSessionExit is not null)
         {
