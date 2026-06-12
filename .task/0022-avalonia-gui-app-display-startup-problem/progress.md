@@ -58,3 +58,6 @@
     redirected handles. Sidecar branch excluded; GUI unaffected. Compiles clean (Release).
 - Build: Core + CLI compile clean in Release. Full Debug build + `dotnet test` BLOCKED by
   the running GUI (PID 30484) + VS locking Core.dll - must close them, then run the suite.
+- Committed + pushed as 177ec14 on task/0013-gui-session-transfer (format gate passed).
+  Branch is not main and has no PR, so ci.yml will NOT auto-run yet. To gate properly:
+  close the running GUI/VS and run `dotnet test InfiniContext.slnx`, and/or open a PR.
