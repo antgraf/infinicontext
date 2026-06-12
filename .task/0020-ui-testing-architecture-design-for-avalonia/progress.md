@@ -26,6 +26,59 @@
 
 - Migration committed and pushed on branch task/0013-gui-session-transfer: 1c303f2 (tests/ + decisions.md line), 982d77a (task 0020 artifacts). CI still pending: ci.yml has no manual trigger (PR or push-to-main only; branch is 18 commits ahead of main, so a PR carries tasks 0013-0021, operator's call); ci-macos.yml dispatch was blocked by the session permission hook (auto-deny on `gh workflow run`) -- operator must dispatch it once, ref task/0013-gui-session-transfer (or main after merge).
 
+- **CI acceptance closed (both remaining items green).** Migration commit 1c303f2 reached main (ancestor of cf3df48). ci.yml run 27438597399 on main @ cf3df48: success (2026-06-12 19:37 UTC). ci-macos.yml dispatch run 27441695512, headSha exactly cf3df48: success, job "build + test (macos-latest)" green (2026-06-12 20:38 UTC, operator-dispatched). Residual caveat: the MacOnlyFact executed-on-mac / skipped-on-win log pattern could not be eyeballed from this session -- the permission hook auto-denies gh log fetches -- but the green full-suite run at the exact migration-bearing commit satisfies the criterion as written. Operator can spot-check the run log in the browser if they want the skip-pattern confirmation on record.
+
+- **Phases 1 + 2 POC implemented** (operator: "Implement test projects as designed. Add a couple
+  of simple tests just as POC."). Three new projects, all green locally:
+  - GUI prep (partial P1 + the design 5.2 fallback): App.axaml IS an Application document, so
+    the predicted StyleInclude fallback was needed -- style list extracted to
+    src/InfiniContext.Gui/Styles/AppStyles.axaml, included from both App.axaml and the headless
+    TestApp. AutomationIds added for the POC control set plus LogFilePathLabel (footer log path;
+    doubles as the UIA harness's "live VM has replaced the placeholder" readiness beacon).
+    Id table started at docs/gui-automation-ids.md (public test contract; P1 remainder listed
+    there). InternalsVisibleTo for the new headless assembly added to Gui AND Core (the linked
+    SessionContextFactory drives internal SessionContext members).
+  - tests/InfiniContext.Gui.HeadlessTests (xunit.v3 3.2.2 + Avalonia.Headless.XUnit 12.0.3
+    pinned == GUI Avalonia): TestApp/TestAppBuilder bootstrap, TestRig, linked doubles from
+    InfiniContext.Tests (FakeClaudeSession/SessionContextFactory/TestUiTimer; NOT
+    SynchronousUiDispatcher -- real Dispatcher.UIThread). 2 POC tests: realize MainWindow under
+    production styles + Send/prompt gating; KeyTextInput -> VM -> Ctrl+Enter -> FakeClaudeSession
+    delivery (the 0017 focus-contract surface). Both passed first run. Runs inside plain
+    `dotnet test InfiniContext.slnx`, so ci.yml picks it up with zero workflow edits.
+  - tests/InfiniContext.Gui.UiaDriver (FlaUI.UIA3 5.0.0) + tests/InfiniContext.Gui.UiaTests:
+    GuiAppHarness (hermetic icx-smoke env contract + INFINICONTEXT__* stripping + temp sandbox
+    cwd + pinned 960x600 window), MainWindowPage/NewTaskDialogPage page objects, DumpTree.
+    UiaFact skips unless ICX_UIA_TESTS=1 (Windows-only). 2 POC tests green locally: automation-id
+    contract on launch; New-task dialog open/cancel. NO session spawn in UIA tests until P3
+    (session-index override) lands -- documented on the harness.
+  - **Findings worth keeping:** (a) FlaUI 5.x needs TFM net10.0-windows, plain net10.0 silently
+    falls back to .NET Framework assets (NU1701). (b) Avalonia 12 exposes an owned modal as a
+    child Window of its OWNER in the UIA tree, not as a desktop top-level -- desktop-scoped
+    searches time out; FindNewTaskWindow comment records it. (c) The headless KeyPressQwerty
+    Ctrl+Enter -> TextBox KeyBinding -> AsyncRelayCommand chain works as designed.
+  - ci-uia.yml added (workflow_dispatch only, windows-latest, ICX_UIA_TESTS=1, trx artifact
+    upload; mirrors the ci-macos pattern per design 6.4). slnx updated with all 3 projects.
+  - Verification: full suite 1110 total / 1107 passed / 3 skipped (count grew with main since
+    the migration baseline); UIA suite reports 2 skipped in a plain run (gate works);
+    `dotnet format --verify-no-changes` clean after one format pass.
+  - Deferred (unchanged from design): P1 remainder, P3, UiaProbe tool (Phase 3), seed lists
+    5.5/6.3 beyond the POC pairs. Logged issues.md#0002: mojibake already committed in
+    NewTaskDialog.axaml.cs:92 doc comment.
+  - Remaining: commit (operator), and one green ci-uia.yml dispatch (operator must trigger;
+    the session permission hook auto-denies `gh workflow run`).
+
+- **Mojibake sweep (issues.md#0002) executed and resolved.** 29 files across src/tests/docs/
+  .github restored to intended Unicode via PowerShell byte-exact writes; .task/ history left
+  as-is on purpose (quoted bug examples + append-only logs). Details in issues.md#0002
+  resolution. Verified: build clean, 1110/1107/3 suite green, format gate clean. Committed
+  and pushed together with the Phase 1+2 POC work (operator instruction).
+
 ### Handoff to next session
 
-Deliverables complete: design.md (rev 2) + plan-xunit-v3-migration.md. Phase 0.5 (xunit v3 migration) is EXECUTED in the working tree, verified locally, awaiting commit + CI (ci.yml and one ci-macos.yml dispatch) to close acceptance criteria 2-3. Then: Phase 0 (P1-P4) as follow-up task, Phases 1 and 2 in parallel. Note issues.md#0001 (host mojibake bug) -- worth its own host-side fix task.
+Design + migration acceptance COMPLETE (see above); Phases 1 and 2 now have working POC
+skeletons in the working tree (3 new projects, 4 POC tests, ci-uia.yml), verified locally,
+awaiting commit. Next: (1) operator commits + dispatches ci-uia.yml once; (2) grow the seed
+test lists (design 5.5 / 6.3) on the new skeletons; (3) P3 session-index override before any
+UIA test spawns sessions; (4) P1 remainder per docs/gui-automation-ids.md; (5) UiaProbe
+(Phase 3). Note issues.md#0001 (host mojibake, resolved/diagnosed) and #0002 (mojibake baked
+into committed source -- cheap repo-wide sweep candidate).
