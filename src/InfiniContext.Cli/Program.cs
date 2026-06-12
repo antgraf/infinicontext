@@ -30,6 +30,24 @@ if (args.Length >= 2 && args[0] == "--mcp-approval-server")
     return await ApprovalSidecarHost.RunAsync(pipeName, sidecarLogging.Logger, connectTimeoutSeconds: sidecarSettings.Mcp.SidecarConnectTimeoutSeconds);
 }
 
+// Console host display boundary: pin stdout/stdin to UTF-8 so non-ASCII transcript content
+// (em-dash, arrows, the StatusGlyph badges, CJK, ...) renders correctly instead of mojibake on
+// a non-UTF-8 Windows console code page (OEM/ANSI on e.g. a Cyrillic locale - the same root
+// cause as the artifact/sidecar boundary issues). The sidecar branch above is intentionally
+// excluded: it manages its own raw UTF-8 std streams and reserves stdout for JSON-RPC. Set
+// before any Console/AnsiConsole write so Spectre.Console picks up the UTF-8 writer. Guarded -
+// setting the encoding throws when the handle is redirected/closed (tests, pipes), and a
+// display-only concern must never block host startup.
+try
+{
+    Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    Console.InputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+}
+catch (Exception)
+{
+    // Redirected or no console attached - keep the inherited encoding; impact is display-only.
+}
+
 if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
 {
     PrintUsage(Console.Out);

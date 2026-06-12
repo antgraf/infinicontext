@@ -55,8 +55,18 @@ public static class ApprovalSidecarHost
         };
         var pipeLock = new SemaphoreSlim(1, 1);
 
-        var stdin = Console.In;
-        var stdout = Console.Out;
+        // MCP stdio transport with claude MUST be UTF-8 (MCP spec). Console.In/Console.Out honor
+        // Console.InputEncoding/OutputEncoding, which default to the Windows console code page
+        // (OEM/ANSI on a non-UTF-8 locale, e.g. CP866/CP1251) - NOT UTF-8. Any non-ASCII in a
+        // JSON-RPC payload (e.g. a Write/Edit tool's content forwarded for approval) would then
+        // mojibake. Open the raw std streams and wrap them in UTF-8 ourselves, exactly as the
+        // host<->sidecar pipe above does (UTF8Encoding, no BOM).
+        var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+        {
+            AutoFlush = true,
+            NewLine = "\n",
+        };
 
         var server = new McpServer(stdin, stdout, ApprovalSidecarContract.ServerName, ApprovalSidecarContract.ServerVersion, logger);
 
