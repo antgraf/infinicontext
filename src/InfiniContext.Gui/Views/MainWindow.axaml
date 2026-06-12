@@ -59,6 +59,7 @@
           <StackPanel Spacing="2" IsVisible="{Binding HasOperatorMessage}">
             <TextBlock Text="{Binding OperatorLabel}" FontSize="11" Opacity="0.7" />
             <md:MarkdownScrollViewer Markdown="{Binding UserPrompt, Mode=OneWay}"
+                                     SelectionEnabled="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Disabled" />
           </StackPanel>
@@ -70,6 +71,7 @@
           <StackPanel Spacing="2" IsVisible="{Binding HasHeadline}">
             <TextBlock Text="{Binding AgentLabel}" FontSize="11" Opacity="0.7" />
             <md:MarkdownScrollViewer Markdown="{Binding Headline, Mode=OneWay}"
+                                     SelectionEnabled="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Disabled" />
           </StackPanel>
