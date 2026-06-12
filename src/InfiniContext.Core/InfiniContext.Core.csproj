@@ -22,6 +22,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="InfiniContext.Tests" />
+    <!-- The headless GUI suite link-compiles InfiniContext.Tests' SessionContextFactory, which
+         drives internal SessionContext members (RaiseEventObserved, LastNumTurns). -->
+    <InternalsVisibleTo Include="InfiniContext.Gui.HeadlessTests" />
   </ItemGroup>
 
 </Project>

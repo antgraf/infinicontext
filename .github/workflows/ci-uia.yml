@@ -1,0 +1,61 @@
+name: CI (UIA)
+
+# Task 0020 design.md section 6.4: UIA end-to-end tests are manual-only at first. They launch the
+# real InfiniContext.Gui.exe on the runner's interactive desktop and are expected to be flakier
+# than ci.yml (1024x768 desktop, foreground-window policing). Dispatch whenever the UIA suite or
+# the GUI's automation-id contract (docs/gui-automation-ids.md) changes, and before GUI releases.
+# Promote to PR-triggered-on-GUI-paths only after a few weeks of green manual runs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + uia-test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'InfiniContext.slnx') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore InfiniContext.slnx
+
+      # No format gate (Windows ci.yml owns it), no coverage (design.md section 6.4).
+
+      - name: Build
+        run: dotnet build InfiniContext.slnx --configuration Release --no-restore
+
+      - name: UIA tests
+        env:
+          ICX_UIA_TESTS: '1'
+        run: >
+          dotnet test tests/InfiniContext.Gui.UiaTests/InfiniContext.Gui.UiaTests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=uia-test-results.trx"
+          --results-directory uia-results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uia-results
+          path: uia-results
+          if-no-files-found: ignore

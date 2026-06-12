@@ -6,6 +6,9 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/InfiniContext.Tests/InfiniContext.Tests.csproj" />
+    <Project Path="tests/InfiniContext.Gui.HeadlessTests/InfiniContext.Gui.HeadlessTests.csproj" />
+    <Project Path="tests/InfiniContext.Gui.UiaDriver/InfiniContext.Gui.UiaDriver.csproj" />
+    <Project Path="tests/InfiniContext.Gui.UiaTests/InfiniContext.Gui.UiaTests.csproj" />
     <Project Path="tests/FakeClaude/FakeClaude.csproj" />
   </Folder>
   <Folder Name="/tools/">

@@ -13,8 +13,8 @@
         CanResize="True">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,12,0,0">
-      <Button Name="CancelButton" Content="Cancel" />
-      <Button Name="CreateButton" Content="Create" Classes="accent" IsDefault="True" />
+      <Button Name="CancelButton" AutomationProperties.AutomationId="CancelButton" Content="Cancel" />
+      <Button Name="CreateButton" AutomationProperties.AutomationId="CreateButton" Content="Create" Classes="accent" IsDefault="True" />
     </StackPanel>
 
     <StackPanel Spacing="10">
@@ -25,14 +25,14 @@
       <StackPanel Spacing="3">
         <TextBlock Text="Home folder" FontSize="11" Opacity="0.7" />
         <Grid ColumnDefinitions="*,Auto">
-          <TextBox Grid.Column="0" Name="HomeCwdBox" PlaceholderText="Pick a folder..." />
-          <Button Grid.Column="1" Name="BrowseButton" Content="Browse..." Margin="6,0,0,0" />
+          <TextBox Grid.Column="0" Name="HomeCwdBox" AutomationProperties.AutomationId="HomeCwdBox" PlaceholderText="Pick a folder..." />
+          <Button Grid.Column="1" Name="BrowseButton" AutomationProperties.AutomationId="BrowseButton" Content="Browse..." Margin="6,0,0,0" />
         </Grid>
       </StackPanel>
 
       <StackPanel Spacing="3">
         <TextBlock Text="Default model" FontSize="11" Opacity="0.7" />
-        <ComboBox Name="ModelBox" HorizontalAlignment="Stretch">
+        <ComboBox Name="ModelBox" AutomationProperties.AutomationId="ModelBox" HorizontalAlignment="Stretch">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="vm:ModelChoice">
               <TextBlock Text="{Binding Label}" />
@@ -45,12 +45,12 @@
 
       <StackPanel Spacing="3">
         <TextBlock Text="Description" FontSize="11" Opacity="0.7" />
-        <TextBox Name="DescriptionBox" AcceptsReturn="True" TextWrapping="Wrap"
+        <TextBox Name="DescriptionBox" AutomationProperties.AutomationId="DescriptionBox" AcceptsReturn="True" TextWrapping="Wrap"
                  MinHeight="120"
                  PlaceholderText="Describe what the task should accomplish. The agent will read this from description.md when it starts." />
       </StackPanel>
 
-      <TextBlock Name="ErrorLabel" Foreground="#FFB00000" FontSize="11" IsVisible="False" TextWrapping="Wrap" />
+      <TextBlock Name="ErrorLabel" AutomationProperties.AutomationId="ErrorLabel" Foreground="#FFB00000" FontSize="11" IsVisible="False" TextWrapping="Wrap" />
     </StackPanel>
   </DockPanel>
 </Window>

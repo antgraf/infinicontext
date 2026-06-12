@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="InfiniContext.Tests" />
+    <InternalsVisibleTo Include="InfiniContext.Gui.HeadlessTests" />
   </ItemGroup>
 
   <ItemGroup>

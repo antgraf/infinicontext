@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- xunit.v3 test projects are self-contained executables (matches InfiniContext.Tests). -->
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MUST stay pinned to the GUI's exact Avalonia version (design.md section 3 #6):
+         a Headless/GUI version split produces runtime type-identity errors, not compile errors.
+         Bump together with src/InfiniContext.Gui/InfiniContext.Gui.csproj or not at all. -->
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.0.3" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
+    <PackageReference Include="FluentAssertions" Version="7.2.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\InfiniContext.Gui\InfiniContext.Gui.csproj" />
+  </ItemGroup>
+
+  <!--
+    The view-model test doubles are link-compiled from InfiniContext.Tests (the repo convention
+    for sharing pure-logic sources). SynchronousUiDispatcher is deliberately NOT linked: headless
+    tests run on a real Avalonia Dispatcher.UIThread, so VMs get the production
+    AvaloniaUiDispatcher and async unwinds happen via Dispatcher.UIThread.RunJobs().
+  -->
+  <ItemGroup>
+    <Compile Include="..\InfiniContext.Tests\Gui\FakeClaudeSession.cs" Link="Doubles\FakeClaudeSession.cs" />
+    <Compile Include="..\InfiniContext.Tests\Gui\SessionContextFactory.cs" Link="Doubles\SessionContextFactory.cs" />
+    <Compile Include="..\InfiniContext.Tests\Gui\TestUiTimer.cs" Link="Doubles\TestUiTimer.cs" />
+  </ItemGroup>
+
+</Project>

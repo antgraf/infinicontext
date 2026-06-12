@@ -3,6 +3,8 @@
              x:Class="InfiniContext.Gui.App"
              RequestedThemeVariant="Default">
   <Application.Styles>
-    <FluentTheme />
+    <!-- The actual style list lives in Styles/AppStyles.axaml so the headless test host can
+         load the identical theme by reference (task 0020). Add app-wide styles there. -->
+    <StyleInclude Source="avares://InfiniContext.Gui/Styles/AppStyles.axaml" />
   </Application.Styles>
 </Application>

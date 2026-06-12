@@ -144,7 +144,10 @@
 
     <!-- Footer / log path -->
     <Border DockPanel.Dock="Bottom" Padding="12,4" Background="{DynamicResource SystemBaseLowColor}">
-      <TextBlock Text="{Binding LogFilePath}" FontSize="11" Opacity="0.7" />
+      <!-- AutomationId doubles as the UIA harness's "host is ready" beacon: the placeholder VM
+           leaves LogFilePath empty; the live VM (post-CreateAsync) always carries the per-run
+           log path. GuiAppHarness.WaitForHostReady polls this label's UIA Name (task 0020). -->
+      <TextBlock AutomationProperties.AutomationId="LogFilePathLabel" Text="{Binding LogFilePath}" FontSize="11" Opacity="0.7" />
     </Border>
 
     <Grid>
@@ -161,10 +164,11 @@
       <Border Grid.Column="0" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,0,1,0">
         <DockPanel>
           <Border DockPanel.Dock="Top" Padding="8">
-            <Button Content="+ New task" Command="{Binding NewTaskCommand}" HorizontalAlignment="Stretch"
+            <Button Name="NewTaskButton" AutomationProperties.AutomationId="NewTaskButton"
+                    Content="+ New task" Command="{Binding NewTaskCommand}" HorizontalAlignment="Stretch"
                     ToolTip.Tip="Create a new InfiniContext task. (Stub - dialog wiring lands in the next slice.)" />
           </Border>
-          <TreeView Name="SessionTree"
+          <TreeView Name="SessionTree" AutomationProperties.AutomationId="SessionTree"
                     ItemsSource="{Binding TaskNodes}"
                     SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
                     BorderThickness="0">
@@ -323,7 +327,7 @@
         <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource SystemBaseLowColor}" BorderThickness="0,1,0,0" Padding="8">
           <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
             <TextBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                     Name="PromptBox"
+                     Name="PromptBox" AutomationProperties.AutomationId="PromptBox"
                      Text="{Binding PromptText, Mode=TwoWay}"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
@@ -337,8 +341,10 @@
             </TextBox>
             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" HorizontalAlignment="Right">
               <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScroll, Mode=TwoWay}" VerticalAlignment="Center" FontSize="11" />
-              <Button Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
-              <Button Name="SendButton" Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent"
+              <Button Name="InterruptButton" AutomationProperties.AutomationId="InterruptButton"
+                      Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
+              <Button Name="SendButton" AutomationProperties.AutomationId="SendButton"
+                      Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent"
                       ToolTip.Tip="{Binding SendButtonTooltip}" />
             </StackPanel>
           </Grid>

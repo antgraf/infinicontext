@@ -1,0 +1,11 @@
+<!--
+  The application's style list, factored out of App.axaml so the headless test host
+  (tests/InfiniContext.Gui.HeadlessTests TestApp) can load the SAME production theme by
+  reference. App.axaml is an <Application> document and therefore not StyleInclude-loadable;
+  this <Styles> document is (design.md section 5.2 fallback, task 0020). Add new app-wide
+  styles HERE, not in App.axaml, or headless view tests will diverge from the real app.
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <FluentTheme />
+</Styles>

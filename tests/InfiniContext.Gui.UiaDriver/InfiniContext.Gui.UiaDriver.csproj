@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net10.0-windows (not plain net10.0): FlaUI 5.x ships its modern assets for
+         netX.0-windows only; a plain TFM silently falls back to the .NET Framework assets
+         (NU1701). UIA is Windows-only by design, so the -windows pin costs nothing. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- In-process .NET UIA3 wrapper - chosen over the Avalonia docs' Appium/WinAppDriver route
+         because WinAppDriver is unmaintained and needs a server + Developer Mode
+         (design.md section 3 #4). Drives the real InfiniContext.Gui.exe from outside, so this
+         project deliberately references nothing from src/. -->
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+
+  <!-- Repo-root discovery, link-compiled from InfiniContext.Tests per the repo convention for
+       sharing pure-logic sources (the fixture helpers it also carries are unused here). -->
+  <ItemGroup>
+    <Compile Include="..\InfiniContext.Tests\TestPaths.cs" Link="TestPaths.cs" />
+  </ItemGroup>
+
+</Project>
