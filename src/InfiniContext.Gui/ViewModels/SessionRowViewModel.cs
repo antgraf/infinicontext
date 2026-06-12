@@ -301,6 +301,13 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private TurnNodeViewModel? _hostCommandTurn;
     private TurnContentItemViewModel? _hostCommandContent;
 
+    /// <summary>True while a host slash-command card is open on this row (between
+    /// <see cref="BeginHostCommandTurn"/> and <see cref="EndHostCommandTurn"/>). The dispatcher
+    /// reads it to reject a second concurrent command on the same session - the card uses single
+    /// <c>_hostCommandTurn</c>/<c>_hostCommandContent</c> fields, so overlapping commands would
+    /// clobber each other's output (task 0017). Toggled on the UI thread inside Begin/End.</summary>
+    public bool HostCommandRunning { get; private set; }
+
     /// <summary>Open a card for a host slash-command invocation. <paramref name="commandLine"/> is
     /// the full text the operator typed (e.g. "/task review"); it shows in the Operator block and
     /// labels the output child. Feed output with <see cref="AppendHostCommandOutput"/>, then close
@@ -324,6 +331,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             Turns.Add(turn);
             _hostCommandTurn = turn;
             _hostCommandContent = content;
+            HostCommandRunning = true;
         }
         if (_dispatcher.CheckAccess()) Apply();
         else _dispatcher.Post(Apply);
@@ -355,6 +363,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             if (_hostCommandTurn is { } t) t.IsInProgress = false;
             _hostCommandTurn = null;
             _hostCommandContent = null;
+            HostCommandRunning = false;
         }
         if (_dispatcher.CheckAccess()) Apply();
         else _dispatcher.Post(Apply);

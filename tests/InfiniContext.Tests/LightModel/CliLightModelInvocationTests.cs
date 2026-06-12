@@ -1,3 +1,4 @@
+using System.Text;
 using InfiniContext.Core.Configuration;
 using InfiniContext.Core.LightModel;
 using FluentAssertions;
@@ -108,5 +109,67 @@ public class CliLightModelInvocationTests
     public void StripJsonFence_leaves_text_alone_when_no_fence()
     {
         CliLightModelInvocation.StripJsonFence("plain text response").Should().Be("plain text response");
+    }
+
+    // ----- Turn-text assembly across thinking + text events (task 0017) -----
+
+    private static string AssembleTurn(params string[] lines)
+    {
+        var sb = new StringBuilder();
+        var sawAssistant = false;
+        foreach (var line in lines)
+            if (CliLightModelChild.TryConsumeTurnLine(line, sb, ref sawAssistant))
+                break;
+        sawAssistant.Should().BeTrue("the turn produced at least one assistant event");
+        return sb.ToString();
+    }
+
+    [Fact]
+    public void TryConsumeTurnLine_keeps_text_after_a_separate_thinking_event()
+    {
+        // Root cause of the "(no output)" review (task 0017): with extended thinking on, claude emits
+        // the thinking as its OWN assistant event (no text block) before the answer event. The old
+        // "first assistant event wins" logic captured that thinking event -> empty -> skipped the real
+        // answer. Accumulating across events must now yield the answer JSON.
+        var text = AssembleTurn(
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"let me reason...\",\"signature\":\"abc\"}]}}",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"{\\\"findings\\\":[]}\"}]}}",
+            "{\"type\":\"result\",\"is_error\":false}");
+
+        text.Should().Be("{\"findings\":[]}", "the answer after the thinking event must survive");
+    }
+
+    [Fact]
+    public void TryConsumeTurnLine_concatenates_multiple_text_events()
+    {
+        var text = AssembleTurn(
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"foo\"}]}}",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"bar\"}]}}",
+            "{\"type\":\"result\",\"is_error\":false}");
+
+        text.Should().Be("foobar");
+    }
+
+    [Fact]
+    public void TryConsumeTurnLine_throws_on_error_result()
+    {
+        var sb = new StringBuilder();
+        var sawAssistant = false;
+        var act = () => CliLightModelChild.TryConsumeTurnLine(
+            "{\"type\":\"result\",\"is_error\":true,\"result\":\"model overloaded\"}", sb, ref sawAssistant);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*model overloaded*");
+    }
+
+    [Fact]
+    public void TryConsumeTurnLine_signals_completion_only_on_result()
+    {
+        var sb = new StringBuilder();
+        var sawAssistant = false;
+        CliLightModelChild.TryConsumeTurnLine(
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"x\"}]}}",
+            sb, ref sawAssistant).Should().BeFalse("assistant events do not end the turn");
+        CliLightModelChild.TryConsumeTurnLine("{\"type\":\"result\",\"is_error\":false}", sb, ref sawAssistant)
+            .Should().BeTrue("the result event ends the turn");
     }
 }

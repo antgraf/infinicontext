@@ -164,7 +164,8 @@
             <Button Content="+ New task" Command="{Binding NewTaskCommand}" HorizontalAlignment="Stretch"
                     ToolTip.Tip="Create a new InfiniContext task. (Stub - dialog wiring lands in the next slice.)" />
           </Border>
-          <TreeView ItemsSource="{Binding TaskNodes}"
+          <TreeView Name="SessionTree"
+                    ItemsSource="{Binding TaskNodes}"
                     SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
                     BorderThickness="0">
             <TreeView.DataTemplates>
@@ -337,7 +338,7 @@
             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" HorizontalAlignment="Right">
               <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScroll, Mode=TwoWay}" VerticalAlignment="Center" FontSize="11" />
               <Button Content="Interrupt (Esc)" Command="{Binding InterruptCommand}" />
-              <Button Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent"
+              <Button Name="SendButton" Content="Send (Ctrl+Enter)" Command="{Binding SendPromptCommand}" Classes="accent"
                       ToolTip.Tip="{Binding SendButtonTooltip}" />
             </StackPanel>
           </Grid>

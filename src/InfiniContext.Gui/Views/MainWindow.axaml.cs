@@ -2,6 +2,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -36,6 +37,23 @@ public partial class MainWindow : Window
         // SaveLayoutAsync on close. The reverse direction (VM bool seeded from gui-settings.json
         // on launch) is applied in OnDataContextChanged once the deferred VM lands.
         PropertyChanged += OnWindowPropertyChanged;
+        // Any click in the session tree hands keyboard focus back to the prompt box (when a
+        // session is focused). The FocusedSession hook in OnVmPropertyChanged covers selection
+        // CHANGES, but re-clicking the already-selected row raises no PropertyChanged - focus
+        // would stay on the TreeItem and typing would be silently swallowed (task 0017).
+        // handledEventsToo because TreeViewItem handles pointer events for selection.
+        this.FindControl<TreeView>("SessionTree")?.AddHandler(
+            PointerReleasedEvent,
+            (_, _) => { if (_boundVm?.FocusedSession is not null) FocusPromptBoxDeferred(); },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        // After a mouse-click send, hand focus straight back to the box so the operator can
+        // type the next message without re-clicking (Ctrl+Enter sends never lose it).
+        this.FindControl<Button>("SendButton")?.AddHandler(
+            Button.ClickEvent,
+            (_, _) => FocusPromptBoxDeferred(),
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
     }
 
     private void OnWindowPropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
@@ -126,6 +144,14 @@ public partial class MainWindow : Window
             dialog.SetModelChoices(_boundVm.BuildModelChoices());
             return await dialog.ShowAsync(this);
         };
+
+        // Confirmation modal for the /task review cost guard. The VM stays free of Avalonia Window
+        // references; the View hosts the dialog and returns the operator's yes/no (task 0017).
+        _boundVm.ConfirmReview = async message =>
+        {
+            var dialog = new ConfirmDialog(message);
+            return await dialog.ShowAsync(this);
+        };
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -137,6 +163,12 @@ public partial class MainWindow : Window
             // exchange first. (Auto-scroll respected; if the user disabled it, we leave them
             // where they were in the previous transcript.)
             if (_boundVm?.AutoScroll == true) ScrollToEndDeferred();
+            // Land keyboard focus in the prompt box. Focusing a session happens by clicking in
+            // the TreeView ("+" spawn or row select), which leaves keyboard focus on the
+            // TreeItem - typing then goes nowhere, PromptText stays empty, and Send (gated on
+            // non-empty text) reads as "always disabled for every session" (task 0017). Deferred
+            // to Input priority so it runs after the click's own focus handling.
+            if (_boundVm?.FocusedSession is not null) FocusPromptBoxDeferred();
         }
         else if (e.PropertyName == nameof(MainWindowViewModel.AutoScroll) && _boundVm?.AutoScroll == true)
         {
@@ -145,6 +177,11 @@ public partial class MainWindow : Window
             ScrollToEndDeferred();
         }
     }
+
+    private void FocusPromptBoxDeferred() =>
+        Dispatcher.UIThread.Post(
+            () => this.FindControl<TextBox>("PromptBox")?.Focus(),
+            DispatcherPriority.Input);
 
     private void WatchSession(SessionRowViewModel? row)
     {

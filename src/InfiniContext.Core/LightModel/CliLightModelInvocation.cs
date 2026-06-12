@@ -229,38 +229,62 @@ internal sealed class CliLightModelChild : IAsyncDisposable
             _writeLock.Release();
         }
 
-        string? assistantText = null;
+        var assistant = new StringBuilder();
+        var sawAssistant = false;
         string? raw;
         while ((raw = await _process.StandardOutput.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
         {
-            if (raw.Length == 0) continue;
-
-            JsonNode? node;
-            try { node = JsonNode.Parse(raw); }
-            catch (JsonException) { continue; }
-            if (node is not JsonObject obj) continue;
-
-            var type = obj["type"]?.GetValue<string>();
-            if (type == "assistant" && assistantText is null)
-            {
-                assistantText = ExtractAssistantText(obj);
-            }
-            else if (type == "result")
-            {
-                var isError = obj["is_error"]?.GetValue<bool>() ?? false;
-                if (isError)
-                {
-                    var errText = obj["result"]?.ToString() ?? "<no detail>";
-                    throw new InvalidOperationException($"cli-light-model returned error: {Truncate(errText)}");
-                }
-                break;
-            }
+            if (TryConsumeTurnLine(raw, assistant, ref sawAssistant)) break; // result event reached
         }
 
-        if (assistantText is null)
+        if (!sawAssistant)
             throw new InvalidOperationException("cli-light-model: stream ended before assistant text was produced");
 
-        return assistantText;
+        return assistant.ToString();
+    }
+
+    /// <summary>
+    /// Consume one NDJSON line of a turn, appending any assistant <c>text</c> blocks to
+    /// <paramref name="assistant"/>. Returns <c>true</c> when the terminating <c>result</c> event is
+    /// reached (caller stops reading); throws when that result carries <c>is_error=true</c>.
+    ///
+    /// <para>Accumulates across <em>every</em> assistant event rather than capturing only the first.
+    /// This matters with extended thinking on: <c>claude</c> emits the thinking as its own assistant
+    /// event (<c>content:[{type:"thinking"}]</c>, no text block) <em>before</em> the answer event. The
+    /// old "first assistant event wins" logic captured the thinking event, got an empty string from
+    /// <see cref="ExtractAssistantText"/>, and then skipped the real answer - so every thinking-enabled
+    /// caller (notably the <c>/task review</c> reviewer agents) returned empty output with no error,
+    /// which surfaced as "(no output)" findings (task 0017). Non-thinking callers were unaffected
+    /// because they emit a single text event. Breaking on <c>result</c> (not stdout EOF) is required so
+    /// the long-lived reused child doesn't block waiting for the next turn.</para>
+    /// </summary>
+    internal static bool TryConsumeTurnLine(string raw, StringBuilder assistant, ref bool sawAssistant)
+    {
+        if (string.IsNullOrEmpty(raw)) return false;
+
+        JsonNode? node;
+        try { node = JsonNode.Parse(raw); }
+        catch (JsonException) { return false; }
+        if (node is not JsonObject obj) return false;
+
+        var type = obj["type"]?.GetValue<string>();
+        if (type == "assistant")
+        {
+            assistant.Append(ExtractAssistantText(obj));
+            sawAssistant = true;
+            return false;
+        }
+        if (type == "result")
+        {
+            var isError = obj["is_error"]?.GetValue<bool>() ?? false;
+            if (isError)
+            {
+                var errText = obj["result"]?.ToString() ?? "<no detail>";
+                throw new InvalidOperationException($"cli-light-model returned error: {Truncate(errText)}");
+            }
+            return true;
+        }
+        return false;
     }
 
     private static string ExtractAssistantText(JsonObject assistantEvent)

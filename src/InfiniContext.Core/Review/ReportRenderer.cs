@@ -143,6 +143,18 @@ public static class ReportRenderer
         AppendReviewerList(sb, f);
         AppendLocation(sb, f);
         AppendIfPresent(sb, "Why", f.Why ?? f.Summary);
+        // Also surface Summary when it carries information beyond Why. Synthesized reviewer-failure
+        // findings put the ACTUAL error in Summary (e.g. "Reviewer 'X' did not produce output: ...")
+        // while Why is a generic explanation; the old `Why ?? Summary` collapse hid that error
+        // whenever Why was set, leaving the report unable to explain why a review came back empty
+        // (task 0017). The `Why is not null` guard avoids double-printing when Why already fell back
+        // to Summary above.
+        if (f.Why is not null
+            && !string.IsNullOrWhiteSpace(f.Summary)
+            && !string.Equals(f.Why, f.Summary, StringComparison.Ordinal))
+        {
+            AppendIfPresent(sb, "Detail", f.Summary);
+        }
         AppendFixSummary(sb, f, label: "Suggested fix");
         AppendConfidence(sb, f);
         if (!string.IsNullOrEmpty(f.ConsolidatorNote))

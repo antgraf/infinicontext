@@ -285,6 +285,42 @@ public class ReportRendererTests
     }
 
     [Fact]
+    public void Render_awaiting_surfaces_summary_detail_when_it_differs_from_why()
+    {
+        // Task 0017: a synthesized reviewer-failure finding puts the real error in Summary while Why
+        // is a generic explanation. The old `Why ?? Summary` collapse dropped Summary, so the report
+        // couldn't say WHY a review came back empty. Both must now render.
+        var report = EmptyReport() with
+        {
+            Awaiting = new[]
+            {
+                F("w-1") with
+                {
+                    Why = "The reviewer failed before emitting; see raw output.",
+                    Summary = "Reviewer 'security' did not produce output: cli-light-model returned error: overloaded",
+                },
+            },
+        };
+
+        var md = ReportRenderer.Render(report);
+        md.Should().Contain("- Why: The reviewer failed before emitting");
+        md.Should().Contain("- Detail: Reviewer 'security' did not produce output: cli-light-model returned error: overloaded");
+    }
+
+    [Fact]
+    public void Render_awaiting_does_not_duplicate_summary_when_it_equals_why()
+    {
+        var report = EmptyReport() with
+        {
+            Awaiting = new[] { F("w-1") with { Why = "same text", Summary = "same text" } },
+        };
+
+        var md = ReportRenderer.Render(report);
+        md.Should().Contain("- Why: same text");
+        md.Should().NotContain("- Detail:");
+    }
+
+    [Fact]
     public void Render_includes_coordinator_note_when_present()
     {
         var report = EmptyReport() with

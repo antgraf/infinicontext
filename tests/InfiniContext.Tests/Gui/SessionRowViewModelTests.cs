@@ -572,4 +572,21 @@ public class SessionRowViewModelTests
             .Which.Children.Should().ContainSingle()
             .Which.Detail.Should().Be("(no output)");
     }
+
+    [Fact]
+    public void HostCommandRunning_tracks_the_open_card_so_the_dispatcher_can_block_re_entry()
+    {
+        // Task 0017: the dispatcher reads HostCommandRunning to reject a second concurrent command
+        // on the same session (the card uses single _hostCommandTurn/_hostCommandContent fields, so
+        // overlapping commands would clobber each other). It must be false before, true while a card
+        // is open, and false again after it closes.
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        row.HostCommandRunning.Should().BeFalse("no command has started yet.");
+        row.BeginHostCommandTurn("/task review");
+        row.HostCommandRunning.Should().BeTrue("a command card is open.");
+        row.EndHostCommandTurn();
+        row.HostCommandRunning.Should().BeFalse("the card has closed; a new command may start.");
+    }
 }

@@ -93,6 +93,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     /// referencing Avalonia Window types directly. Returns null when the operator cancels.</summary>
     public Func<Task<Views.NewTaskRequest?>>? NewTaskPrompt { get; set; }
 
+    /// <summary>Callback the View provides to pop a modal yes/no confirmation. Returns true to
+    /// proceed, false to cancel. Wired to <see cref="Views.ConfirmDialog"/>; left null in
+    /// headless/test contexts, where the review confirmation reader then answers "no" and the
+    /// handler reports cancellation rather than spawning agents. Used by the <c>/task review</c>
+    /// cost guard (task 0017).</summary>
+    public Func<string, Task<bool>>? ConfirmReview { get; set; }
+
     [ObservableProperty]
     private string _promptText = "";
 
@@ -667,7 +674,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         // Host-handled slash-commands are intercepted here and routed through the shared registry
         // (task 0015 slice E) instead of being sent to claude's stdin. Unknown slash-commands are
         // forwarded to claude (it owns /clear, /compact, etc.), matching the CLI's D6 policy.
-        if (text.StartsWith('/') && await TryHandleSlashCommandAsync(target, text).ConfigureAwait(true))
+        if (text.StartsWith('/') && TryHandleSlashCommand(target, text))
             return;
 
         // The row VM decides Idle vs glue-buffer (task 0012 finding #7 / docs/todo.md #9):
@@ -682,6 +689,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = sentNow
                 ? $"Sent to {target.ShortId}."
                 : $"Queued to {target.ShortId} ({target.QueuedPromptCount} pending, will glue on next Idle).";
+            _host?.Logger.Information(
+                "gui-main: operator send target={Row} len={Len} sentNow={SentNow} queued={Queued}",
+                target.ShortId, text.Length, sentNow, target.QueuedPromptCount);
         }
         catch (Exception ex)
         {
@@ -692,11 +702,20 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     /// <summary>
     /// Resolve a typed <c>/</c>-command through the shared <see cref="SlashCommandRegistry"/> and
-    /// run it against <paramref name="target"/>. Returns true when the command was recognised and
-    /// handled (so the caller must NOT also send the text to claude); false for an unknown command,
-    /// which the caller forwards to claude verbatim (D6 - claude owns /clear, /compact, ...).
+    /// dispatch it against <paramref name="target"/>. Returns true when the command was recognised
+    /// (so the caller must NOT also send the text to claude); false for an unknown command, which
+    /// the caller forwards to claude verbatim (D6 - claude owns /clear, /compact, ...).
+    ///
+    /// <para>Recognition is synchronous and the actual run is <em>detached</em> (fire-and-forget
+    /// via <see cref="RunHostSlashCommandAsync"/>). This is deliberate: <see cref="SendPromptCommand"/>
+    /// is a single window-level <c>AsyncRelayCommand</c>, so awaiting a long command here held its
+    /// <c>IsRunning</c> flag for the whole run and disabled the one Send button for <em>every</em>
+    /// session - not just this one (task 0017, reported against <c>/task review</c>, which spawns 6
+    /// sub-Claude agents and runs for minutes). Detaching frees the Send command immediately; output
+    /// still streams into the row's card, and the per-row <see cref="SessionRowViewModel.HostCommandRunning"/>
+    /// guard blocks a second concurrent command on the same session.</para>
     /// </summary>
-    private async Task<bool> TryHandleSlashCommandAsync(SessionRowViewModel target, string text)
+    private bool TryHandleSlashCommand(SessionRowViewModel target, string text)
     {
         var space = text.IndexOf(' ');
         var head = space < 0 ? text : text[..space];
@@ -711,16 +730,30 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             return true;
         }
 
-        // Route command output into the focused row's Turns surface (the central pane renders
-        // Turns, not the raw TranscriptModel fragment stream) so the operator can actually see it.
-        // Earlier this appended to target.Context.Transcript, which nothing in the view binds -
-        // the output vanished and the operator saw only the status-strip "<cmd> done." line
-        // (task 0017, reported against /task review). The row marshals to the UI thread itself.
+        if (target.HostCommandRunning)
+        {
+            StatusText = $"{target.ShortId} is already running a command - wait for it to finish.";
+            return true; // recognised; do not forward to claude
+        }
+
+        _ = RunHostSlashCommandAsync(target, cmd, head, argLine, text);
+        return true;
+    }
+
+    /// <summary>Execute a resolved host slash-command against <paramref name="target"/>, streaming
+    /// output into its Turns surface (the central pane renders Turns, not the raw TranscriptModel
+    /// fragment stream the older code appended to - that output was invisible, the original task
+    /// 0017 symptom). Runs detached from <see cref="SendPromptCommand"/> (see
+    /// <see cref="TryHandleSlashCommand"/>), so it must catch its own exceptions rather than
+    /// faulting an unobserved task. The row marshals card mutations to the UI thread itself.</summary>
+    private async Task RunHostSlashCommandAsync(
+        SessionRowViewModel target, ISlashCommand cmd, string head, string argLine, string fullText)
+    {
         var renderer = new GuiSlashCommandRenderer(target.AppendHostCommandOutput);
         var writer = new TranscriptTextWriter(target.AppendHostCommandOutput);
         var ctx = BuildSlashContext(target, renderer, writer);
         StatusText = $"Running {head}...";
-        target.BeginHostCommandTurn(text);
+        target.BeginHostCommandTurn(fullText);
         try
         {
             await cmd.ExecuteAsync(ctx, argLine, CancellationToken.None).ConfigureAwait(true);
@@ -730,13 +763,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             target.AppendHostCommandOutput($"[{head.TrimStart('/')}] error: {ex.Message}\n");
             StatusText = $"{head} failed: {ex.Message}";
-            _host.Logger.Warning(ex, "gui-slash: {Cmd} threw", head);
+            _host!.Logger.Warning(ex, "gui-slash: {Cmd} threw", head);
         }
         finally
         {
             target.EndHostCommandTurn();
         }
-        return true;
     }
 
     private SlashCommandContext BuildSlashContext(SessionRowViewModel target, ISlashCommandRenderer renderer, TextWriter writer)
@@ -760,7 +792,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             EffectiveSettingsJson: null,
             GetApprovalMode: () => _host.CurrentApprovalMode,
             SwitchApprovalMode: m => _host.SwitchApprovalMode(m),
-            TaskHandler: _host.CreateTaskCommandHandler(writer),
+            TaskHandler: _host.CreateTaskCommandHandler(writer, BuildConfirmReader()),
             PrepareTaskSwitch: _host.TaskService is null
                 ? null
                 : (id, ct) => _host.TaskService.PrepareSwitchAsync(id, ct),
@@ -777,6 +809,30 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         };
     }
 
+    /// <summary>Message shown in the <c>/task review</c> confirmation dialog. The scope (file
+    /// count) is already echoed into the command card by the handler; this explains the cost.</summary>
+    private const string ReviewConfirmMessage =
+        "Run the multi-agent review?\n\n" +
+        "This spawns 6 sub-Claude agents (5 reviewers + 1 coordinator) against the resolved scope " +
+        "and incurs real API cost. Findings land in a review-*.md report; high-confidence fixes " +
+        "auto-apply through a build + test gate.";
+
+    /// <summary>Interactive confirmation reader for the task handler. Today only <c>/task review</c>'s
+    /// cost guard reads it (see <c>TaskCommandHandler</c>): when the handler calls
+    /// <c>ReadLineAsync</c>, this shows <see cref="ConfirmReview"/> on the UI thread and answers
+    /// "y"/"n". The handler runs its awaits with <c>ConfigureAwait(false)</c>, so the read can land
+    /// on a thread-pool thread - <see cref="IUiDispatcher.InvokeAsync"/> marshals the modal back onto
+    /// the UI thread. A null <see cref="ConfirmReview"/> (headless/test) answers "no" so no agents
+    /// spawn without an explicit operator yes.</summary>
+    private TextReader BuildConfirmReader() => new ConfirmTextReader(async _ =>
+    {
+        if (ConfirmReview is null) return false;
+        var confirmed = false;
+        await _dispatcher.InvokeAsync(async () =>
+            confirmed = await ConfirmReview(ReviewConfirmMessage).ConfigureAwait(true)).ConfigureAwait(false);
+        return confirmed;
+    });
+
     private async Task InterruptAsync()
     {
         var target = FocusedSession;
@@ -792,7 +848,26 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
     }
 
-    partial void OnPromptTextChanged(string value) => SendPromptCommand.NotifyCanExecuteChanged();
+    /// <summary>Tracks the last <see cref="CanSendPrompt"/> value logged by
+    /// <see cref="OnPromptTextChanged"/> so the log records transitions, not every keystroke.</summary>
+    private bool _lastLoggedCanSend;
+
+    partial void OnPromptTextChanged(string value)
+    {
+        SendPromptCommand.NotifyCanExecuteChanged();
+        // Transition-only trace: "did the operator's typing actually reach the VM, and which
+        // gate is blocking Send?" - the decisive datum for any future "Send button is disabled"
+        // report (task 0017: keystrokes after a tree click never reached the box, so no such
+        // line ever appeared and the box-empty gate was the culprit).
+        var canSend = CanSendPrompt();
+        if (canSend != _lastLoggedCanSend)
+        {
+            _lastLoggedCanSend = canSend;
+            _host?.Logger.Debug(
+                "gui-main: prompt-text len={Len} canSend={CanSend} focused={Row} isReady={IsReady} isAlive={IsAlive}",
+                value.Length, canSend, FocusedSession?.ShortId, FocusedSession?.IsReady, FocusedSession?.IsAlive);
+        }
+    }
 
     private void OnSessionClosed(Guid id)
     {
