@@ -52,6 +52,13 @@ public sealed class SessionContext : IAsyncDisposable
     /// session rows without reaching into private manager state.</summary>
     public string? Cwd { get; init; }
 
+    /// <summary>Effective model id the session was spawned with (<c>request.Model ??
+    /// settings.Session.Model</c>), or null when neither was set and claude picked its own
+    /// default. Surfaced so per-session UI can show the running model and offer a respawn-to-
+    /// change affordance. Fixed for the process's life вЂ” claude's <c>--model</c> can't be changed
+    /// in-flight, so changing it means killing and re-spawning the session.</summary>
+    public string? Model { get; init; }
+
     /// <summary>Cost-in-USD reported by the most recent <c>ResultEvent</c>, or null if no turn
     /// has completed yet. Populated by <see cref="SessionManager"/> from the
     /// <see cref="SessionTranscriptReader"/>'s event stream so the host UI doesn't have to

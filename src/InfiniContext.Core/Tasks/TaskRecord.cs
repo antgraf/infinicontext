@@ -12,6 +12,7 @@ namespace InfiniContext.Core.Tasks;
 /// <param name="Status">Lifecycle state.</param>
 /// <param name="ParentTaskId">If this task was forked from another, the parent's id; otherwise null.</param>
 /// <param name="BaseCommitSha">Git HEAD SHA captured at <see cref="TaskService.CreateAsync"/> time, used by <c>/task review</c> as the base of the diff range that defines "the work attributable to this task". Null when the home_cwd wasn't a git repo at create time, or for tasks created before <see cref="Migrations.Migration_002_AddBaseCommitSha"/>.</param>
+/// <param name="DefaultModel">Model id a session inherits when spawned for this task, unless the spawn request overrides it. Null when no per-task model was chosen (fall back to <c>settings.Session.Model</c> / <c>settings.Models.Main.Id</c>), or for tasks created before <see cref="Migrations.Migration_003_AddDefaultModel"/>.</param>
 public sealed record TaskRecord(
     int Id,
     string HomeCwd,
@@ -20,4 +21,5 @@ public sealed record TaskRecord(
     long LastActiveAtUnixMs,
     TaskItemStatus Status,
     int? ParentTaskId,
-    string? BaseCommitSha = null);
+    string? BaseCommitSha = null,
+    string? DefaultModel = null);

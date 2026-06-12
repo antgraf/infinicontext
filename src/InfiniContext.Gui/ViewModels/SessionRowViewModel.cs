@@ -28,6 +28,9 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     public Guid Id => Context.Id;
     public string ShortId => Context.Id.ToString("N").Substring(0, 8);
     public string Cwd => Context.Cwd ?? "<no cwd>";
+    /// <summary>The effective model this session is running, for the inspector. Fixed for the
+    /// session's life (claude's <c>--model</c> can't change in-flight).</summary>
+    public string ModelDisplay => Context.Model ?? "(host default)";
     public TranscriptViewModel Transcript { get; }
 
     /// <summary>Per-turn structured view of the conversation.</summary>
@@ -280,6 +283,78 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 turn.IsQueued = true;
                 _queuedTurns.Enqueue(turn);
             }
+        }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
+    }
+
+    // --- Host slash-command output (task 0017) ----------------------------------------------
+    // Host slash-commands (/task, /issue, /approval, ...) write plain text through a callback.
+    // The central pane renders Turns, NOT the raw TranscriptModel fragment stream, so routing
+    // that output to Context.Transcript left it invisible: the operator saw only the status-strip
+    // "<cmd> done." line and concluded the command "did nothing" (task 0017, reported against
+    // /task review). These three methods surface the output as its own card in the Turns surface
+    // - the typed command in the Operator block, the accumulated output in an expanded System
+    // child (monospace + selectable, matching the Details rendering of every other event). The
+    // card is independent of the claude turn machinery: no ResultEvent closes it, so
+    // EndHostCommandTurn is what stops its in-progress spinner.
+    private TurnNodeViewModel? _hostCommandTurn;
+    private TurnContentItemViewModel? _hostCommandContent;
+
+    /// <summary>Open a card for a host slash-command invocation. <paramref name="commandLine"/> is
+    /// the full text the operator typed (e.g. "/task review"); it shows in the Operator block and
+    /// labels the output child. Feed output with <see cref="AppendHostCommandOutput"/>, then close
+    /// with <see cref="EndHostCommandTurn"/>.</summary>
+    public void BeginHostCommandTurn(string commandLine)
+    {
+        void Apply()
+        {
+            var content = new TurnContentItemViewModel(TurnContentKind.System, commandLine, "")
+            {
+                IsExpanded = true,
+            };
+            // Headline blank so the (filtered) "thinking..." placeholder doesn't render an Agent
+            // block; IsExpanded true so the Details expander shows the output without a click.
+            var turn = new TurnNodeViewModel(commandLine)
+            {
+                Headline = "",
+                IsExpanded = true,
+            };
+            turn.Children.Add(content);
+            Turns.Add(turn);
+            _hostCommandTurn = turn;
+            _hostCommandContent = content;
+        }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
+    }
+
+    /// <summary>Append a fragment of host-command output to the open card (see
+    /// <see cref="BeginHostCommandTurn"/>). Fragments already carry their own newlines, so they
+    /// are concatenated verbatim. No-op when no card is open.</summary>
+    public void AppendHostCommandOutput(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        void Apply()
+        {
+            if (_hostCommandContent is { } c) c.Detail += text;
+        }
+        if (_dispatcher.CheckAccess()) Apply();
+        else _dispatcher.Post(Apply);
+    }
+
+    /// <summary>Close the open host-command card: stop its in-progress spinner and, if the command
+    /// produced no output, leave a "(no output)" marker so the card doesn't read as an empty stub.
+    /// Safe to call when no card is open.</summary>
+    public void EndHostCommandTurn()
+    {
+        void Apply()
+        {
+            if (_hostCommandContent is { } c && string.IsNullOrEmpty(c.Detail))
+                c.Detail = "(no output)";
+            if (_hostCommandTurn is { } t) t.IsInProgress = false;
+            _hostCommandTurn = null;
+            _hostCommandContent = null;
         }
         if (_dispatcher.CheckAccess()) Apply();
         else _dispatcher.Post(Apply);

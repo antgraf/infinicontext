@@ -243,6 +243,7 @@ public sealed class SessionManager : IAsyncDisposable
             request.ActiveTaskId)
         {
             Cwd = request.Cwd,
+            Model = effectiveModel,
         };
         ctxRef = ctx;
         var createdAt = _clock();

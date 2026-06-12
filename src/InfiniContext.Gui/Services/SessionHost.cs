@@ -377,24 +377,49 @@ public sealed class SessionHost : IAsyncDisposable
         string cwd,
         int? activeTaskId = null,
         string? firstUserMessage = null,
+        string? model = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cwd);
         var ctx = await _sessionManager.CreateAsync(
-            new SpawnRequest
-            {
-                Cwd = cwd,
-                // Fall back to the configured main model id when session.model is unset, so the
-                // GUI pins KnownModels.Main rather than letting claude pick its own default.
-                Model = Settings.Session.Model ?? Settings.Models.Main.Id,
-                IncludePartialMessages = Settings.Session.IncludePartialMessages,
-                ActiveTaskId = activeTaskId,
-                FirstUserMessage = firstUserMessage,
-            },
+            BuildSpawnRequest(Settings, cwd, activeTaskId, firstUserMessage, model),
             ct).ConfigureAwait(false);
         SessionCreated?.Invoke(ctx);
         return ctx;
     }
+
+    /// <summary>Build the <see cref="SpawnRequest"/> for a GUI session spawn. Pure function of
+    /// settings + the per-spawn arguments so the settings-to-request mapping (model precedence
+    /// chain, <c>session.extraArgs</c> passthrough) is unit-testable without standing up a host.</summary>
+    public static SpawnRequest BuildSpawnRequest(
+        InfiniContextSettings settings,
+        string cwd,
+        int? activeTaskId = null,
+        string? firstUserMessage = null,
+        string? model = null) => new()
+        {
+            Cwd = cwd,
+            // Precedence: explicit per-spawn model (e.g. a task's default_model or a
+            // respawn-to-change request) > session.model setting > configured main model id.
+            // Falling back to KnownModels.Main pins the model rather than letting claude pick
+            // its own default.
+            Model = ResolveModel(settings, model),
+            IncludePartialMessages = settings.Session.IncludePartialMessages,
+            ExtraArgs = settings.Session.ExtraArgs,
+            ActiveTaskId = activeTaskId,
+            FirstUserMessage = firstUserMessage,
+        };
+
+    /// <summary>Resolve the effective model id for a spawn: an explicit choice wins, else the
+    /// configured session model, else the pinned main model id. Blank explicit values are treated
+    /// as "unset" so a null/empty task default falls through to the settings chain.</summary>
+    public string ResolveModel(string? explicitModel) => ResolveModel(Settings, explicitModel);
+
+    /// <summary>Static core of <see cref="ResolveModel(string?)"/>; see there for the chain.</summary>
+    public static string ResolveModel(InfiniContextSettings settings, string? explicitModel) =>
+        string.IsNullOrWhiteSpace(explicitModel)
+            ? settings.Session.Model ?? settings.Models.Main.Id
+            : explicitModel.Trim();
 
     public async Task CloseSessionAsync(Guid id)
     {

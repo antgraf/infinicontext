@@ -84,6 +84,22 @@ public static class InfiniContextSettingsLoader
         var settings = new InfiniContextSettings();
         configuration.Bind(settings);
 
+        // Microsoft.Extensions.Configuration APPENDS to (rather than replaces) a pre-populated
+        // read-only collection when binding a JSON array. Binding `models.available` over the
+        // in-code KnownModels.Catalog default would therefore concatenate the two вЂ” and because
+        // the committed settings.json mirrors the catalog, a normal load would silently double it.
+        // Re-bind that one section into a fresh list so a configured array REPLACES the default
+        // whenever any layer supplies it. (Dictionaries like tasks.modelContextWindows merge by
+        // key, which is the intended per-model override semantics, so they're deliberately left
+        // alone вЂ” only the array needs this.)
+        var availableSection = configuration.GetSection("models:available");
+        if (availableSection.Exists())
+        {
+            var available = new List<ModelCatalogEntry>();
+            availableSection.Bind(available);
+            settings = settings with { Models = settings.Models with { Available = available } };
+        }
+
         var errors = new List<string>();
         Validate(settings, errors);
         if (errors.Count > 0) throw new InfiniContextSettingsException(errors);
@@ -153,6 +169,20 @@ public static class InfiniContextSettingsLoader
             errors.Add($"models.light.cli.maxOutputTokens must be in [16, 8192], got {s.Models.Light.Cli.MaxOutputTokens}.");
         if (s.Models.Light.Cli.ThinkingMaxOutputTokens is < 64 or > 16384)
             errors.Add($"models.light.cli.thinkingMaxOutputTokens must be in [64, 16384], got {s.Models.Light.Cli.ThinkingMaxOutputTokens}.");
+        // Catalog: each offered model needs a usable id + label for the GUI dropdowns. A missing
+        // ModelContextWindows key is deliberately NOT validated here вЂ” it falls back to the default
+        // threshold pair (ResolveThresholds), which is a legitimate outcome for an operator-added
+        // model, and there is no soft-warning channel in this loader.
+        for (var i = 0; i < s.Models.Available.Count; i++)
+        {
+            var entry = s.Models.Available[i];
+            if (string.IsNullOrWhiteSpace(entry.Id))
+                errors.Add($"models.available[{i}].id must not be empty.");
+            if (string.IsNullOrWhiteSpace(entry.DisplayName))
+                errors.Add($"models.available[{i}].displayName must not be empty.");
+            if (entry.ContextWindowTokens <= 0)
+                errors.Add($"models.available[{i}].contextWindowTokens must be positive, got {entry.ContextWindowTokens}.");
+        }
 
         // MCP
         if (s.Mcp.SidecarConnectTimeoutSeconds is < 1 or > 120)

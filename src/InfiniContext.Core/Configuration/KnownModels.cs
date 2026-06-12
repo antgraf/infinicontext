@@ -25,4 +25,26 @@ public static class KnownModels
     /// id: reviewers reason rather than classify, so the Haiku light model is deliberately not
     /// reused here.</summary>
     public const string Reviewer = "claude-sonnet-4-6";
+
+    /// <summary>Fable 5 вЂ” a newer, large-context model offered as a selectable option in the GUI
+    /// model dropdowns (task 0016). NOT the shipped default (<see cref="Main"/> stays Opus 4.8 вЂ”
+    /// switching the default away is explicitly out of scope). Specifics flagged for awareness:
+    /// 1M context, ~2x Opus 4.8 cost, new tokenizer (~30% more tokens per the 0015 discussion).</summary>
+    public const string Fable = "claude-fable-5";
+
+    /// <summary>
+    /// Curated, static list of models the operator can pick from in the GUI (per-session dropdown
+    /// and the task-creation default). Single source of truth for the selectable set: adding a model
+    /// is one edit here. <see cref="ModelsOptions.Available"/> defaults to this list and is the
+    /// operator-facing override surface (settings.json / settings.user.json). Each entry's
+    /// <see cref="ModelCatalogEntry.ContextWindowTokens"/> mirrors the <see cref="TasksOptions.ModelContextWindows"/>
+    /// fallback map so context-pressure thresholds resolve correctly for every offered model.
+    /// </summary>
+    public static IReadOnlyList<ModelCatalogEntry> Catalog { get; } = new[]
+    {
+        new ModelCatalogEntry(Main, "Opus 4.8", 200_000),
+        new ModelCatalogEntry(Reviewer, "Sonnet 4.6", 200_000),
+        new ModelCatalogEntry(Light, "Haiku 4.5", 200_000),
+        new ModelCatalogEntry(Fable, "Fable 5", 1_000_000),
+    };
 }

@@ -18,6 +18,7 @@ public static class MigrationRunner
     [
         new Migration_001_InitialSchema(),
         new Migration_002_AddBaseCommitSha(),
+        new Migration_003_AddDefaultModel(),
     ];
 
     /// <summary>

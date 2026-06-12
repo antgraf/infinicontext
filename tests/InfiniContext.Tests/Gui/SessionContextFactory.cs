@@ -17,7 +17,7 @@ internal sealed class SessionContextFactory
     public SessionContext Context { get; }
     public PendingApprovalSlot ApprovalSlot { get; }
 
-    public SessionContextFactory(int? activeTaskId = null, string? cwd = null)
+    public SessionContextFactory(int? activeTaskId = null, string? cwd = null, string? model = null)
     {
         var pressure = new ContextPressureMonitor(softThresholdPct: 75, hardThresholdPct: 85);
         var injector = new ThresholdInjector((_, __) => Task.CompletedTask);
@@ -36,6 +36,7 @@ internal sealed class SessionContextFactory
             activeTaskId: activeTaskId)
         {
             Cwd = cwd,
+            Model = model,
         };
     }
 

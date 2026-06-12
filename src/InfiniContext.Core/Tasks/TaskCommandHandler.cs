@@ -141,7 +141,7 @@ public sealed class TaskCommandHandler
     {
         var homeCwd = ResolveHome(home);
         Directory.CreateDirectory(homeCwd);
-        var record = await _service.CreateAsync(homeCwd, description, ct).ConfigureAwait(false);
+        var record = await _service.CreateAsync(homeCwd, description, ct: ct).ConfigureAwait(false);
         var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
         Write($"[task] created {record.Id:D4} \"{record.Title}\"\n");
         Write($"       folder: {folder.Path}\n");

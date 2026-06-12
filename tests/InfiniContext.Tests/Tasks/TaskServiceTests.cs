@@ -38,6 +38,35 @@ public class TaskServiceTests
     }
 
     [Fact]
+    public async Task Create_persists_default_model_when_supplied()
+    {
+        await using var fixture = await TaskServiceFixture.OpenAsync();
+        fixture.LightModel.QueueTitle("Use Fable");
+
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: "claude-fable-5");
+
+        record.DefaultModel.Should().Be("claude-fable-5");
+        var roundtrip = await fixture.Store.GetAsync(record.Id);
+        roundtrip!.DefaultModel.Should().Be("claude-fable-5");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Create_stores_null_default_model_when_blank_or_missing(string? model)
+    {
+        await using var fixture = await TaskServiceFixture.OpenAsync();
+        fixture.LightModel.QueueTitle("No model");
+
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: model);
+
+        record.DefaultModel.Should().BeNull();
+        var roundtrip = await fixture.Store.GetAsync(record.Id);
+        roundtrip!.DefaultModel.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Create_sanitizes_quoted_or_overlong_light_model_titles()
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();

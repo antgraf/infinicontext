@@ -366,6 +366,28 @@
           <Separator Margin="0,4" />
           <TextBlock Text="Focused session" FontSize="11" Opacity="0.6" />
           <TextBlock Text="{Binding FocusedSession.Cwd, FallbackValue='(no session focused)'}" TextWrapping="Wrap" Opacity="0.85" />
+
+          <Separator Margin="0,4" />
+          <TextBlock Text="Model" FontSize="11" Opacity="0.6" />
+          <TextBlock Text="{Binding FocusedSession.ModelDisplay, FallbackValue='(no session focused)'}"
+                     TextWrapping="Wrap" Opacity="0.85" />
+          <ComboBox HorizontalAlignment="Stretch"
+                    ItemsSource="{Binding InspectorModelChoices}"
+                    SelectedItem="{Binding SelectedInspectorModel, Mode=TwoWay}"
+                    IsEnabled="{Binding FocusedSession.IsAlive, FallbackValue=False}">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ModelChoice">
+                <TextBlock Text="{Binding Label}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <Button Content="Apply (respawn)" HorizontalAlignment="Stretch"
+                  Command="{Binding ApplyModelCommand}"
+                  ToolTip.Tip="Changing the model kills this session and spawns a fresh one in the same folder/task. Transcript history does not carry across." />
+          <TextBlock FontSize="10" Opacity="0.6" TextWrapping="Wrap"
+                     Text="claude's model is fixed for a session's life. Applying a different model respawns the session (a task-bound session re-seeds from its pointer; transcript history is not preserved)." />
+
+          <Separator Margin="0,4" />
           <TextBlock FontSize="11" Opacity="0.7" TextWrapping="Wrap"
                      Text="Phase 3B. Tool calls park in the focused session's approval banner above the transcript; auto-mode (light-model safety review) wiring lands in a later slice." />
         </StackPanel>

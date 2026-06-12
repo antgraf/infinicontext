@@ -125,6 +125,17 @@ public sealed record ModelsOptions
 {
     public MainModelOptions Main { get; init; } = new();
     public LightModelOptions Light { get; init; } = new();
+
+    /// <summary>
+    /// Curated set of models the operator can pick from in the GUI (per-session dropdown and the
+    /// task-creation default). Defaults to <see cref="KnownModels.Catalog"/>; overridable in
+    /// <c>settings.json</c> / <c>settings.user.json</c>. The GUI binds to this list, not to
+    /// <see cref="KnownModels"/> directly, so an operator can curate the offered set without a code
+    /// change. Each entry's <see cref="ModelCatalogEntry.ContextWindowTokens"/> should have a
+    /// matching <see cref="TasksOptions.ModelContextWindows"/> key so context-pressure thresholds
+    /// resolve correctly; a missing key falls back to default thresholds (not a hard error).
+    /// </summary>
+    public IReadOnlyList<ModelCatalogEntry> Available { get; init; } = KnownModels.Catalog;
 }
 
 public sealed record MainModelOptions
@@ -319,6 +330,7 @@ public sealed record TasksOptions
             [KnownModels.Main] = 200_000,
             [KnownModels.MainLargeContext] = 1_000_000,
             [KnownModels.Light] = 200_000,
+            [KnownModels.Fable] = 1_000_000,
         };
 
     /// <summary>

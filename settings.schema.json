@@ -241,6 +241,30 @@
               }
             }
           }
+        },
+        "available": {
+          "type": "array",
+          "description": "Curated set of models the operator can pick from in the GUI (per-session dropdown and the task-creation default). Defaults to the built-in catalog. The GUI binds to this list, so curate the offered set here without a code change.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "displayName", "contextWindowTokens"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Anthropic model id passed to claude --model (e.g. claude-opus-4-8)."
+              },
+              "displayName": {
+                "type": "string",
+                "description": "Short label shown in the GUI dropdowns (e.g. Opus 4.8)."
+              },
+              "contextWindowTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Total context window in tokens. Should match a tasks.modelContextWindows key so context-pressure thresholds resolve correctly; a missing key falls back to the default threshold pair."
+              }
+            }
+          }
         }
       }
     },

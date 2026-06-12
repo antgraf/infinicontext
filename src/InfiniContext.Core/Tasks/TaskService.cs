@@ -41,8 +41,11 @@ public sealed class TaskService
     /// Create a new task. Calls the light model to derive a short title from
     /// <paramref name="description"/>, allocates an id, scaffolds the folder, writes the
     /// caller-supplied description text into <c>description.md</c>, and persists the row.
+    /// <paramref name="defaultModel"/>, when non-null, is the model id sessions spawned for this
+    /// task inherit unless their spawn request overrides it; null leaves the task on the host
+    /// default (<c>settings.Session.Model</c> / <c>settings.Models.Main.Id</c>).
     /// </summary>
-    public async Task<TaskRecord> CreateAsync(string homeCwd, string description, CancellationToken ct = default)
+    public async Task<TaskRecord> CreateAsync(string homeCwd, string description, string? defaultModel = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(homeCwd);
         ArgumentException.ThrowIfNullOrWhiteSpace(description);
@@ -80,10 +83,14 @@ public sealed class TaskService
         var baseSha = await GitHead.TryResolveAsync(homeCwd, ct).ConfigureAwait(false);
 
         var nowMs = _clock().ToUnixTimeMilliseconds();
-        var record = new TaskRecord(id, homeCwd, title, nowMs, nowMs, TaskItemStatus.InProgress, ParentTaskId: null, BaseCommitSha: baseSha);
+        var record = new TaskRecord(id, homeCwd, title, nowMs, nowMs, TaskItemStatus.InProgress, ParentTaskId: null, BaseCommitSha: baseSha, DefaultModel: NormalizeModel(defaultModel));
         await _store.CreateAsync(record, ct).ConfigureAwait(false);
         return record;
     }
+
+    /// <summary>Trim and null-out a blank model id so the column stores NULL rather than "".</summary>
+    private static string? NormalizeModel(string? model)
+        => string.IsNullOrWhiteSpace(model) ? null : model.Trim();
 
     /// <summary>
     /// Fork an existing task: allocate a new id, create a new folder, copy all <c>.md</c> files

@@ -13,7 +13,7 @@ public class MigrationRunnerTests
 
         var applied = await MigrationRunner.ApplyAsync(conn);
 
-        applied.Should().Equal(new[] { 1, 2 });
+        applied.Should().Equal(new[] { 1, 2, 3 });
         var tables = await ObjectNamesAsync(conn);
         tables.Should().BeEquivalentTo(new[] { "__migrations", "idx_tasks_last_active", "task_id_seq", "tasks" });
         // Sequence is initialised and ready to hand out 1 first.
@@ -36,6 +36,23 @@ public class MigrationRunnerTests
             cols.Add((r.GetString(1), r.GetString(2), r.GetInt32(3) != 0));
 
         cols.Should().Contain(c => c.Name == "base_commit_sha" && c.Type == "TEXT" && !c.NotNull);
+    }
+
+    [Fact]
+    public async Task Migration_003_adds_default_model_column_to_tasks()
+    {
+        await using var conn = await OpenInMemoryAsync();
+        await MigrationRunner.ApplyAsync(conn);
+
+        // PRAGMA table_info returns one row per column: (cid, name, type, notnull, dflt_value, pk).
+        var cols = new List<(string Name, string Type, bool NotNull)>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(tasks);";
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            cols.Add((r.GetString(1), r.GetString(2), r.GetInt32(3) != 0));
+
+        cols.Should().Contain(c => c.Name == "default_model" && c.Type == "TEXT" && !c.NotNull);
     }
 
     [Fact]

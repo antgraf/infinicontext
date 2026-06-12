@@ -123,6 +123,7 @@ public partial class MainWindow : Window
         _boundVm.NewTaskPrompt = async () =>
         {
             var dialog = new NewTaskDialog();
+            dialog.SetModelChoices(_boundVm.BuildModelChoices());
             return await dialog.ShowAsync(this);
         };
     }

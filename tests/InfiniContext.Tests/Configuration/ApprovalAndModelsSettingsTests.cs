@@ -62,7 +62,108 @@ public class ApprovalAndModelsSettingsTests
             ["claude-opus-4-8"] = 200_000,
             ["claude-opus-4-8[1m]"] = 1_000_000,
             ["claude-haiku-4-5"] = 200_000,
+            ["claude-fable-5"] = 1_000_000,
         });
+    }
+
+    [Fact]
+    public void Model_catalog_is_non_empty_and_contains_main()
+    {
+        KnownModels.Catalog.Should().NotBeEmpty();
+        KnownModels.Catalog.Should().Contain(m => m.Id == KnownModels.Main,
+            "the GUI dropdowns must always offer the shipped default model");
+        KnownModels.Catalog.Should().OnlyContain(
+            m => !string.IsNullOrWhiteSpace(m.Id)
+              && !string.IsNullOrWhiteSpace(m.DisplayName)
+              && m.ContextWindowTokens > 0);
+    }
+
+    [Fact]
+    public void Every_catalog_id_resolves_a_context_window()
+    {
+        // A catalog entry whose id isn't in ModelContextWindows would silently fall back to the
+        // default (small-context) threshold pair вЂ” wrong for a large-context model like Fable.
+        // Keep the two in sync: the threshold map must cover every offered model.
+        var windows = InfiniContextSettings.Defaults.Tasks.ModelContextWindows;
+        foreach (var entry in KnownModels.Catalog)
+        {
+            windows.Should().ContainKey(entry.Id,
+                $"catalog model '{entry.Id}' needs a ModelContextWindows entry for correct thresholds");
+            windows[entry.Id].Should().Be(entry.ContextWindowTokens,
+                $"catalog and threshold-map context windows for '{entry.Id}' must agree");
+        }
+    }
+
+    [Fact]
+    public void Available_models_default_to_the_catalog()
+    {
+        InfiniContextSettings.Defaults.Models.Available.Should().BeEquivalentTo(KnownModels.Catalog);
+    }
+
+    [Fact]
+    public void Available_models_round_trip_from_json()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            {
+              "models": {
+                "available": [
+                  { "id": "claude-opus-4-8", "displayName": "Opus 4.8", "contextWindowTokens": 200000 },
+                  { "id": "claude-fable-5", "displayName": "Fable 5", "contextWindowTokens": 1000000 }
+                ]
+              }
+            }
+            """);
+
+        var result = Load(temp.Path);
+
+        result.Settings.Models.Available.Should().BeEquivalentTo(new[]
+        {
+            new ModelCatalogEntry("claude-opus-4-8", "Opus 4.8", 200_000),
+            new ModelCatalogEntry("claude-fable-5", "Fable 5", 1_000_000),
+        });
+    }
+
+    [Fact]
+    public void Available_model_with_blank_id_is_rejected()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            { "models": { "available": [ { "id": "", "displayName": "X", "contextWindowTokens": 200000 } ] } }
+            """);
+
+        var act = () => Load(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+           .Which.Errors.Should().Contain(e => e.Contains("models.available[0].id"));
+    }
+
+    [Fact]
+    public void Available_model_with_blank_display_name_is_rejected()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            { "models": { "available": [ { "id": "claude-opus-4-8", "displayName": "", "contextWindowTokens": 200000 } ] } }
+            """);
+
+        var act = () => Load(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+           .Which.Errors.Should().Contain(e => e.Contains("models.available[0].displayName"));
+    }
+
+    [Fact]
+    public void Available_model_with_non_positive_context_window_is_rejected()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            { "models": { "available": [ { "id": "claude-opus-4-8", "displayName": "Opus 4.8", "contextWindowTokens": 0 } ] } }
+            """);
+
+        var act = () => Load(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+           .Which.Errors.Should().Contain(e => e.Contains("models.available[0].contextWindowTokens"));
     }
 
     [Fact]

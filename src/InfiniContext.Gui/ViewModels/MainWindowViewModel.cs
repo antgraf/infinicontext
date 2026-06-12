@@ -116,6 +116,53 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         ApprovalMode.Ask, ApprovalMode.Deny, ApprovalMode.Allow, ApprovalMode.Auto,
     };
 
+    /// <summary>Curated model catalog backing both model pickers (new-task dialog + inspector).
+    /// Sourced from <c>settings.Models.Available</c> (operator-overridable) when a host is
+    /// attached, else the in-code <see cref="KnownModels.Catalog"/> so design-time / test VMs
+    /// still have something to bind.</summary>
+    public IReadOnlyList<ModelCatalogEntry> AvailableModels =>
+        _host?.Settings.Models.Available ?? KnownModels.Catalog;
+
+    /// <summary>Build the ComboBox item list for a model picker: a "Host default" sentinel
+    /// (null id) first, then one entry per <see cref="AvailableModels"/> row. Shared by the
+    /// new-task dialog and the inspector dropdown so both present identical choices.</summary>
+    public IReadOnlyList<ModelChoice> BuildModelChoices()
+    {
+        var choices = new List<ModelChoice>(AvailableModels.Count + 1)
+        {
+            new(null, "Host default"),
+        };
+        foreach (var m in AvailableModels)
+            choices.Add(new ModelChoice(m.Id, $"{m.DisplayName} ({m.Id})"));
+        return choices;
+    }
+
+    /// <summary>Items for the inspector's per-session model dropdown. Rebuilt lazily; identical
+    /// content to the new-task dialog's choices.</summary>
+    public IReadOnlyList<ModelChoice> InspectorModelChoices => BuildModelChoices();
+
+    /// <summary>The model choice currently selected in the inspector dropdown. Defaults to the
+    /// focused session's running model when focus changes. <see cref="ApplyModelCommand"/> is
+    /// enabled only when this differs from the focused session's current model.</summary>
+    [ObservableProperty]
+    private ModelChoice? _selectedInspectorModel;
+
+    partial void OnSelectedInspectorModelChanged(ModelChoice? value)
+    {
+        OnPropertyChanged(nameof(CanApplyModel));
+        ApplyModelCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>True while a focused session exists and the inspector dropdown selects a model
+    /// that differs from what the session is currently running. Drives the Apply button's
+    /// enablement and the "will respawn" hint visibility.</summary>
+    public bool CanApplyModel =>
+        FocusedSession is { IsAlive: true }
+        && SelectedInspectorModel is { } sel
+        && !string.Equals(NormalizeModelId(sel.Id), NormalizeModelId(FocusedSession.Context.Model), StringComparison.Ordinal);
+
+    private static string NormalizeModelId(string? id) => id ?? "";
+
     /// <summary>True while the focused session has a turn in flight (Sending/Streaming/
     /// Cancelling/Compacting). The XAML uses this to surface a "Agent busy - your next
     /// message will queue behind the in-flight turn" indicator in the status strip. Send
@@ -148,6 +195,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public IAsyncRelayCommand InterruptCommand { get; }
     public IAsyncRelayCommand<SessionRowViewModel?> SendContinueCommand { get; }
     public IAsyncRelayCommand<SessionRowViewModel?> SendWhatsNextCommand { get; }
+
+    /// <summary>Inspector "Apply (respawn)" button. Kills the focused session and spawns a fresh
+    /// one in the same cwd/task with <see cref="SelectedInspectorModel"/>. Enabled only when the
+    /// selection differs from the running model (see <see cref="CanApplyModel"/>).</summary>
+    public IAsyncRelayCommand ApplyModelCommand { get; }
 
     /// <summary>Canned prompt fired by the play button on a session row's action bar.</summary>
     public const string ContinuePromptText = "Continue with the task.";
@@ -186,6 +238,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
         SendContinueCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, ContinuePromptText));
         SendWhatsNextCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, WhatsNextPromptText));
+        ApplyModelCommand = new AsyncRelayCommand(ApplyModelAsync, () => CanApplyModel);
         // _unattached is added lazily on first free-session spawn and removed when emptied -
         // keeps the tree clean for users who only work via task-bound sessions.
     }
@@ -371,7 +424,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         StatusText = $"Creating task in {req.HomeCwd}...";
         try
         {
-            var record = await svc.CreateAsync(req.HomeCwd, req.Description).ConfigureAwait(true);
+            var record = await svc.CreateAsync(req.HomeCwd, req.Description, req.Model).ConfigureAwait(true);
             void Apply()
             {
                 // Prepend so the new task appears at the top of the tree, matching LoadTasksAsync's
@@ -410,10 +463,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
         string? cwd;
         int? taskId = null;
+        string? model = null;
         if (task is { IsSynthetic: false } realTask)
         {
             cwd = realTask.HomeCwd;
             taskId = realTask.TaskId;
+            // The task's per-task default model (null = host default). Resolved to the effective
+            // id inside SessionHost.CreateSessionAsync via the settings fallback chain.
+            model = realTask.Record?.DefaultModel;
         }
         else
         {
@@ -425,6 +482,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = "New session cancelled.";
             return;
         }
+
+        await SpawnIntoAsync(cwd, taskId, model).ConfigureAwait(true);
+    }
+
+    /// <summary>Spawn a session into <paramref name="cwd"/> bound to <paramref name="taskId"/>
+    /// (null = free session) with an explicit <paramref name="model"/> (null = host default).
+    /// Shared by the per-task "+" button (<see cref="SpawnSessionForTaskAsync"/>) and the
+    /// inspector's respawn-to-change-model path (<see cref="ApplyModelAsync"/>) so both routes
+    /// build the task pointer, create the session, and attach the row identically.</summary>
+    private async Task SpawnIntoAsync(string cwd, int? taskId, string? model)
+    {
+        if (_host is null) return;
 
         // Build the task-pointer first message when spawning under a real task. Failure here
         // (subsystem missing, task row gone, home folder wiped) is non-fatal: log + warn, then
@@ -467,7 +536,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             // Only overwrite a "spawning without pointer" warning when we *do* have a pointer;
             // otherwise the warning stays visible long enough for the operator to notice it.
             if (firstUserMessage is not null || taskId is null) StatusText = spawning;
-            ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage).ConfigureAwait(true);
+            ctx = await _host.CreateSessionAsync(cwd, taskId, firstUserMessage, model).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -486,7 +555,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             var row = AttachRowForContext(ctx, firstUserMessage);
             var driftSuffix = drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
             var warmingSuffix = firstUserMessage is not null ? " Warming up..." : "";
-            StatusText = $"Spawned {row.ShortId} in {row.Cwd}.{warmingSuffix}{driftSuffix}";
+            var modelSuffix = ctx.Model is { } m ? $" [model: {m}]" : "";
+            StatusText = $"Spawned {row.ShortId} in {row.Cwd}.{modelSuffix}{warmingSuffix}{driftSuffix}";
         }
         catch (Exception ex)
         {
@@ -494,6 +564,42 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             StatusText = $"Session spawned ({ctx.Id.ToString("N")[..8]}) but the UI failed to attach it: {ex.Message}";
             ShowError?.Invoke($"Session spawned but the UI failed to attach it: {ex.Message}\n\n{ex}");
         }
+    }
+
+    /// <summary>Inspector "Apply (respawn)" handler. claude's <c>--model</c> is fixed for the
+    /// process's life, so changing a running session's model means killing it and spawning a
+    /// fresh one in the same cwd/task with the selected model. Transcript history does NOT carry
+    /// across вЂ” a task-bound respawn re-seeds via the task pointer, a free session starts clean.
+    /// The button is gated on <see cref="CanApplyModel"/>; clicking it IS the operator's
+    /// confirmation (the inspector hint warns about the respawn).</summary>
+    private async Task ApplyModelAsync()
+    {
+        if (_host is null || FocusedSession is not { } row || SelectedInspectorModel is not { } choice) return;
+        if (!CanApplyModel) return;
+
+        var cwd = row.Context.Cwd;
+        if (string.IsNullOrWhiteSpace(cwd))
+        {
+            StatusText = "Cannot change model: focused session has no cwd.";
+            return;
+        }
+        var taskId = row.Context.ActiveTaskId;
+        var oldShortId = row.ShortId;
+        var targetLabel = choice.Id ?? "host default";
+
+        try
+        {
+            StatusText = $"Respawning {oldShortId} with model {targetLabel}...";
+            await _host.CloseSessionAsync(row.Id).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _host.Logger.Error(ex, "gui-main: close-for-respawn failed session={SessionId}", row.Id);
+            StatusText = $"Model change failed (could not close {oldShortId}): {ex.Message}";
+            return;
+        }
+
+        await SpawnIntoAsync(cwd, taskId, choice.Id).ConfigureAwait(true);
     }
 
     /// <summary>Build the row VM for a freshly-spawned context, hang it under its task node,
@@ -605,16 +711,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             return true;
         }
 
-        void Append(string s)
-        {
-            if (_dispatcher.CheckAccess()) target.Context.Transcript.Append(s);
-            else _dispatcher.Post(() => target.Context.Transcript.Append(s));
-        }
-
-        var renderer = new GuiSlashCommandRenderer(Append);
-        var writer = new TranscriptTextWriter(Append);
+        // Route command output into the focused row's Turns surface (the central pane renders
+        // Turns, not the raw TranscriptModel fragment stream) so the operator can actually see it.
+        // Earlier this appended to target.Context.Transcript, which nothing in the view binds -
+        // the output vanished and the operator saw only the status-strip "<cmd> done." line
+        // (task 0017, reported against /task review). The row marshals to the UI thread itself.
+        var renderer = new GuiSlashCommandRenderer(target.AppendHostCommandOutput);
+        var writer = new TranscriptTextWriter(target.AppendHostCommandOutput);
         var ctx = BuildSlashContext(target, renderer, writer);
         StatusText = $"Running {head}...";
+        target.BeginHostCommandTurn(text);
         try
         {
             await cmd.ExecuteAsync(ctx, argLine, CancellationToken.None).ConfigureAwait(true);
@@ -622,9 +728,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
         catch (Exception ex)
         {
-            Append($"[{head.TrimStart('/')}] error: {ex.Message}\n");
+            target.AppendHostCommandOutput($"[{head.TrimStart('/')}] error: {ex.Message}\n");
             StatusText = $"{head} failed: {ex.Message}";
             _host.Logger.Warning(ex, "gui-slash: {Cmd} threw", head);
+        }
+        finally
+        {
+            target.EndHostCommandTurn();
         }
         return true;
     }
@@ -760,7 +870,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         }
         try
         {
-            var ctx = await _host.CreateSessionAsync(cwd, plan.Task.Id, plan.FirstUserMessage).ConfigureAwait(true);
+            var ctx = await _host.CreateSessionAsync(cwd, plan.Task.Id, plan.FirstUserMessage, plan.Task.DefaultModel).ConfigureAwait(true);
             var row = AttachRowForContext(ctx, plan.FirstUserMessage);
             var label = proposal.Reason switch
             {
@@ -796,6 +906,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         OnPropertyChanged(nameof(IsAgentBusy));
         OnPropertyChanged(nameof(SendButtonTooltip));
         OnPropertyChanged(nameof(AgentBusyHint));
+        SyncInspectorModelToFocusedSession();
+    }
+
+    /// <summary>Pre-select the inspector dropdown to the focused session's running model so the
+    /// Apply button starts disabled (selection == current) until the operator picks a different
+    /// one. Falls back to the "host default" sentinel when the session's model isn't in the
+    /// catalog (or no session is focused).</summary>
+    private void SyncInspectorModelToFocusedSession()
+    {
+        var current = FocusedSession?.Context.Model;
+        var choices = InspectorModelChoices;
+        SelectedInspectorModel =
+            choices.FirstOrDefault(c => string.Equals(c.Id, current, StringComparison.Ordinal))
+            ?? choices.FirstOrDefault(c => c.Id is null);
+        OnPropertyChanged(nameof(CanApplyModel));
+        ApplyModelCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Refresh <see cref="SendPromptCommand"/>'s CanExecute when the focused session
@@ -811,6 +937,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         {
             SendPromptCommand.NotifyCanExecuteChanged();
             InterruptCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanApplyModel));
+            ApplyModelCommand.NotifyCanExecuteChanged();
             if (sender is SessionRowViewModel row)
                 _host?.Logger.Information(
                     "gui-main: focused-session changed row={Row} prop={Prop} isReady={IsReady} isAlive={IsAlive} canSend={CanSend}",

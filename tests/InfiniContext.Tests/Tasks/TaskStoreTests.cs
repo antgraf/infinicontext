@@ -59,6 +59,20 @@ public class TaskStoreTests
     }
 
     [Fact]
+    public async Task Create_round_trips_default_model()
+    {
+        await using var store = await TaskStore.OpenAsync(":memory:");
+        var id = await store.AllocateIdAsync();
+        var record = NewRecord(id, "Pick a model") with { DefaultModel = "claude-fable-5" };
+
+        await store.CreateAsync(record);
+        var roundtrip = await store.GetAsync(id);
+
+        roundtrip.Should().Be(record);
+        roundtrip!.DefaultModel.Should().Be("claude-fable-5");
+    }
+
+    [Fact]
     public async Task Get_returns_null_for_unknown_id()
     {
         await using var store = await TaskStore.OpenAsync(":memory:");

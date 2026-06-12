@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using InfiniContext.Gui.ViewModels;
 
 namespace InfiniContext.Gui.Views;
 
@@ -24,6 +25,15 @@ public partial class NewTaskDialog : Window
         CreateButton.Click += OnCreate;
         CancelButton.Click += OnCancel;
         BrowseButton.Click += OnBrowse;
+    }
+
+    /// <summary>Populate the model dropdown. Call before <see cref="ShowAsync"/>. The first
+    /// entry (typically the "host default" sentinel with a null id) is selected by default so a
+    /// task created without touching the dropdown pins no per-task model.</summary>
+    public void SetModelChoices(IReadOnlyList<ModelChoice> choices)
+    {
+        ModelBox.ItemsSource = choices;
+        if (choices.Count > 0) ModelBox.SelectedIndex = 0;
     }
 
     /// <summary>Show modal over <paramref name="parent"/> and await the operator's choice.</summary>
@@ -57,7 +67,8 @@ public partial class NewTaskDialog : Window
             ShowError("Description cannot be empty - it becomes the task's description.md.");
             return;
         }
-        _result = new NewTaskRequest(home, desc);
+        var model = (ModelBox.SelectedItem as ModelChoice)?.Id;
+        _result = new NewTaskRequest(home, desc, model);
         Close(_result);
     }
 
@@ -77,4 +88,6 @@ public partial class NewTaskDialog : Window
 /// <summary>Operator-confirmed inputs from <see cref="NewTaskDialog"/>.</summary>
 /// <param name="HomeCwd">Home folder for the task. Must exist and be writable.</param>
 /// <param name="Description">Free-form description that becomes <c>description.md</c>.</param>
-public sealed record NewTaskRequest(string HomeCwd, string Description);
+/// <param name="Model">Chosen per-task default model id, or <c>null</c> for the host default
+/// (no per-task pin вЂ” spawn falls back to the settings model chain).</param>
+public sealed record NewTaskRequest(string HomeCwd, string Description, string? Model = null);

@@ -533,4 +533,43 @@ public class SessionRowViewModelTests
         changed.Should().Contain(nameof(SessionRowViewModel.HasQueuedPrompts),
             "HasQueuedPrompts is the IsVisible binding for the badge; must raise when count crosses zero.");
     }
+
+    // ----- Host slash-command output surfacing (task 0017) -----
+
+    [Fact]
+    public void HostCommand_output_lands_in_the_visible_Turns_surface()
+    {
+        // Regression: /task review (and every other host slash-command) wrote to Context.Transcript,
+        // which nothing in the central pane binds - the pane renders Turns. The operator saw only
+        // the status-strip "<cmd> done." line and concluded the command did nothing (task 0017).
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        row.BeginHostCommandTurn("/task review");
+        row.AppendHostCommandOutput("[task review] resolving scope...\n");
+        row.AppendHostCommandOutput("[task review] done.\n");
+        row.EndHostCommandTurn();
+
+        var turn = row.Turns.Should().ContainSingle().Subject;
+        turn.UserPrompt.Should().Be("/task review", "the typed command shows in the Operator block.");
+        turn.IsInProgress.Should().BeFalse("EndHostCommandTurn stops the spinner.");
+        var child = turn.Children.Should().ContainSingle().Subject;
+        child.Detail.Should().Contain("resolving scope").And.Contain("done.",
+            "every output fragment must accumulate into the visible card.");
+        child.IsExpanded.Should().BeTrue("the output is shown without requiring a click.");
+    }
+
+    [Fact]
+    public void HostCommand_with_no_output_shows_a_marker_not_an_empty_stub()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        row.BeginHostCommandTurn("/focus 2");
+        row.EndHostCommandTurn();
+
+        row.Turns.Should().ContainSingle()
+            .Which.Children.Should().ContainSingle()
+            .Which.Detail.Should().Be("(no output)");
+    }
 }

@@ -172,6 +172,18 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public async Task CreateAsync_sets_context_model_from_request()
+    {
+        var factory = new RecordingSessionFactory();
+        await using var mgr = NewManager(factory);
+
+        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/x", model: "claude-fable-5"));
+
+        ctx.Model.Should().Be("claude-fable-5",
+            "the GUI inspector reads SessionContext.Model to show + change the running model.");
+    }
+
+    [Fact]
     public async Task CloseAsync_skips_index_write_when_session_id_was_never_assigned()
     {
         var factory = new RecordingSessionFactory { SessionIdOnStart = () => null };

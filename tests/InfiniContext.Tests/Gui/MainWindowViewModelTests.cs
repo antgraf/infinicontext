@@ -309,4 +309,74 @@ public class MainWindowViewModelTests
         tracking.PostCount.Should().BeGreaterThan(0);
         vm.StatusText.Should().Contain("refused");
     }
+
+    // ---------------------------------------------------------------------
+    // Task 0016: per-session / per-task model selection (Slice B + C UI logic).
+    //
+    // The respawn itself (ApplyModelAsync -> CloseSessionAsync + spawn) needs a real SessionHost,
+    // covered by manual GUI smoke per plan.md's escape hatch. These cases pin the pure VM logic
+    // a hostless VM can exercise: the choice list, focus-sync, and the Apply CanExecute gate.
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void BuildModelChoices_leads_with_host_default_then_catalog()
+    {
+        var vm = BuildMainVm();
+
+        var choices = vm.BuildModelChoices();
+
+        choices.Should().NotBeEmpty();
+        choices[0].Id.Should().BeNull("the first choice is the 'host default' sentinel (no per-task pin).");
+        choices[0].Label.Should().Be("Host default");
+        // Every catalog model is represented by a non-null-id choice.
+        foreach (var m in KnownModels.Catalog)
+            choices.Should().Contain(c => c.Id == m.Id);
+        choices.Should().HaveCount(KnownModels.Catalog.Count + 1);
+    }
+
+    [Fact]
+    public void Focusing_a_session_preselects_its_model_and_Apply_is_disabled()
+    {
+        var vm = BuildMainVm();
+        var f = new SessionContextFactory(activeTaskId: null, cwd: "/repo", model: KnownModels.Main);
+
+        vm.FocusedSession = BuildRow(f);
+
+        vm.SelectedInspectorModel.Should().NotBeNull();
+        vm.SelectedInspectorModel!.Id.Should().Be(KnownModels.Main,
+            "the dropdown pre-selects the running session's model on focus.");
+        vm.CanApplyModel.Should().BeFalse("selection equals the running model, so there's nothing to apply.");
+        vm.ApplyModelCommand.CanExecute(null).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Selecting_a_different_model_enables_Apply()
+    {
+        var vm = BuildMainVm();
+        var f = new SessionContextFactory(activeTaskId: null, cwd: "/repo", model: KnownModels.Main);
+        vm.FocusedSession = BuildRow(f);
+
+        // Pick a catalog entry whose id differs from the running model.
+        var other = vm.BuildModelChoices().First(c => c.Id is not null && c.Id != KnownModels.Main);
+        vm.SelectedInspectorModel = other;
+
+        vm.CanApplyModel.Should().BeTrue("selection now differs from the running model.");
+        vm.ApplyModelCommand.CanExecute(null).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Apply_is_disabled_when_focused_session_has_exited()
+    {
+        var vm = BuildMainVm();
+        var f = new SessionContextFactory(activeTaskId: null, cwd: "/repo", model: KnownModels.Main);
+        vm.FocusedSession = BuildRow(f);
+        var other = vm.BuildModelChoices().First(c => c.Id is not null && c.Id != KnownModels.Main);
+        vm.SelectedInspectorModel = other;
+        vm.CanApplyModel.Should().BeTrue();
+
+        f.Session.State.HandleProcessExit(-1);
+
+        vm.CanApplyModel.Should().BeFalse("a dead session can't be respawned via Apply - it's already gone.");
+        vm.ApplyModelCommand.CanExecute(null).Should().BeFalse();
+    }
 }
