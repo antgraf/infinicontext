@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The full architecture and rationale live in **`docs/infinicontext-initial-design.md`**; recorded Stage 2A/2B decisions live in **`docs/stage2/decisions.md`** (exit-criteria mapping in **`docs/stage2/exit-checklist.md`**) and the forward-looking work queue lives in **`docs/todo.md`** (single consolidated list, no per-stage split). Read the decisions doc before non-trivial changes — it encodes constraints that aren't visible from the code (parser tolerance contract, why no terminal embedding, why we read Claude's session store rather than mirror it, version-drift strategy, multi-session architecture).
 
-**Stage 1** (single-instance REPL), **Stage 2A** (tasks-and-sessions management — markdown artifacts under `.task/`, SQLite registry at `~/.infinicontext/`, MCP locks, context-pressure monitor, `/task` REPL commands), and **Stage 2B** (multi-session console UI + macOS supervision + CI matrix) are all done. Stage 2B closed on 2026-05-20 once `ci-macos.yml` ran green on `macos-latest` and the Phase 7 POSIX supervisor / `FileSystemNaming` code was validated end-to-end. **Stage 3** (Avalonia GUI) is not yet started; the forward-looking queue carries Stage 3 plus residual Stage 1/2A/2B follow-ups in `docs/todo.md`. <!-- stage-2b-historical: Phases 1–7 (Phases 1-7 + Phase 8 CI matrix history; preserved verbatim above is no longer the live status). -->
+**Stage 1** (single-instance REPL), **Stage 2A** (tasks-and-sessions management — markdown artifacts under `.task/`, SQLite registry at `~/.infinicontext/`, MCP locks, context-pressure monitor, `/task` REPL commands), and **Stage 2B** (multi-session console UI + macOS supervision + CI matrix) are all done. Stage 2B closed on 2026-05-20 once `ci-macos.yml` ran green on `macos-latest` and the Phase 7 POSIX supervisor / `FileSystemNaming` code was validated end-to-end. **Stage 3** (Avalonia GUI) is in progress: `src/InfiniContext.Gui` ships the multi-session window (tasks tree, transcript cards, approval banner, new-task dialog) and a two-layer UI test architecture exists (see "UI testing" below; design in `.task/0020-*/design.md`). The forward-looking queue carries the remaining Stage 3 work plus residual follow-ups in `docs/todo.md`. <!-- stage-2b-historical: Phases 1–7 (Phases 1-7 + Phase 8 CI matrix history; preserved verbatim above is no longer the live status). -->
 
 ## Build & test
 
@@ -20,16 +20,19 @@ dotnet test  InfiniContext.slnx
 dotnet run --project src/InfiniContext.Cli                # multi-session console with cwd defaults
 dotnet test  --filter FullyQualifiedName~ReplSmokeTests   # one test class
 dotnet test  --filter "DisplayName~Repl_renders"           # one test
+dotnet test  tests/InfiniContext.Gui.HeadlessTests        # headless GUI view tests (in-process, also in ci.yml)
+$env:ICX_UIA_TESTS='1'; dotnet test tests/InfiniContext.Gui.UiaTests -c Release   # UIA E2E vs the real exe (opt-in, takes over the desktop)
 ```
 
-End-to-end smoke tests opt-in via env var and are skipped in CI by default; unit/integration tests run real binaries (`InfiniContext.Cli` ↔ `FakeClaude`) via `Process.Start`, not in-process mocks.
+End-to-end smoke tests opt-in via env var and are skipped in CI by default; unit/integration tests run real binaries (`InfiniContext.Cli` ↔ `FakeClaude`) via `Process.Start`, not in-process mocks. On this dev machine a running GUI / open VS often holds Debug bin locks — test with `-c Release` when plain `dotnet test` fails on file copies.
 
 ## CI
 
-Two workflows under `.github/workflows/`:
+Three workflows under `.github/workflows/`:
 
 - **`ci.yml`** — runs on every push to `main` and every PR. `windows-latest`. Gates in order: `dotnet restore` → `dotnet format --verify-no-changes --no-restore` → `dotnet build -c Release` → `dotnet test -c Release` with `XPlat Code Coverage` → ReportGenerator markdown summary appended to the job step output. The format gate is the canonical formatting authority — fix locally with `dotnet format InfiniContext.slnx` before pushing.
 - **`ci-macos.yml`** — `workflow_dispatch` only (D37). Private-repo `macos-latest` minutes bill at 10× the Windows rate, so this is run manually whenever Phase 7's macOS-specific code (`PosixSignalSupervisor`, `FileSystemNaming`, `[MacOnlyFact]` tests) is touched, or before any release that needs the "killing the host cleans up child processes" exit criterion green on macOS. No format gate here (Windows owns that), no coverage collection.
+- **`ci-uia.yml`** — `workflow_dispatch` only. Runs the UIA end-to-end suite (`ICX_UIA_TESTS=1`) against the real `InfiniContext.Gui.exe` on `windows-latest`'s interactive desktop. Dispatch whenever the UIA suite or the automation-id contract (`docs/gui-automation-ids.md`) changes, and before GUI releases. Expected flakier than ci.yml (1024×768 desktop, foreground policing); first run green 2026-06-12. No format gate, no coverage.
 
 `gh run list --repo antgraf/infinicontext --limit 5` is the fast way to see recent runs; `gh api repos/antgraf/infinicontext/actions/jobs/<job-id>/logs > out.txt` is the reliable way to fetch a full failed log when `gh run view --log-failed` returns empty.
 
@@ -45,7 +48,10 @@ Two workflows under `.github/workflows/`:
 
 - `src/InfiniContext.Core/` — parser, state machine, session, MCP approval server + lock channel, settings, logging, process supervision, multi-session manager + session index, tasks subsystem (`Tasks/` — `TaskService`/`TaskFolder`/`TaskStore` + SQLite migrations, `ContextPressureMonitor`, `ThresholdInjector`, `TaskActivityCoordinator`), light-model service (`LightModel/`). All non-UI logic.
 - `src/InfiniContext.Cli/` — multi-session console apphost (`MultiSessionHost`). `Program.cs` also handles the `--mcp-approval-server` sidecar mode (same exe, re-spawned by `claude` over stdio).
-- `tests/InfiniContext.Tests/` — xUnit + FluentAssertions. Mirrors `Core` layout. `TestPaths.cs` walks up to find `InfiniContext.slnx` so tests are cwd-independent.
+- `tests/InfiniContext.Tests/` — xUnit (v3) + FluentAssertions. Mirrors `Core` layout. `TestPaths.cs` walks up to find `InfiniContext.slnx` so tests are cwd-independent.
+- `tests/InfiniContext.Gui.HeadlessTests/` — in-process GUI view tests on the Avalonia headless platform (real XAML + production theme, simulated keyboard/mouse). Runs in `ci.yml` like any other test project.
+- `tests/InfiniContext.Gui.UiaDriver/` — classlib shared by the UIA suite and future probe tooling: `GuiAppHarness` (hermetic real-exe launcher) + page objects over the Windows UIA tree (FlaUI.UIA3).
+- `tests/InfiniContext.Gui.UiaTests/` — opt-in (`ICX_UIA_TESTS=1`) end-to-end tests against the real `InfiniContext.Gui.exe`. Windows-only by design.
 - `tests/FakeClaude/` — scripted stand-in for the real `claude` binary; `--replay <fixture>` streams an NDJSON fixture, `--script <path>` runs adversarial JSON action scripts. Used as a transport substitute in integration tests.
 - `tests/fixtures/` — committed NDJSON recordings from real `claude` 2.1.112; the primary regression surface for the parser. **Do not regenerate casually** — see `tests/fixtures/README.md` and `NOTES.md`.
 - `tests/scripts/` — FakeClaude action scripts (different from `tests/fixtures/scripts/`, which are recorder scripts).
@@ -73,6 +79,26 @@ Two workflows under `.github/workflows/`:
 **Process supervision.** `IProcessSupervisor` has three backends: Windows (`JobObjectSupervisor` with `KILL_ON_JOB_CLOSE` so child `node` processes die with the host), POSIX (`PosixSignalSupervisor` — `PosixSignalRegistration` for SIGINT/SIGTERM/SIGHUP/SIGQUIT + `AppDomain.ProcessExit` + SIGTERM → grace → SIGKILL via `[DllImport("libc")] kill(2)`, used on macOS and Linux), and `NoopSupervisor` (stub). The macOS code shipped in Stage 2B Phase 7 and was validated on `macos-latest` via the first `ci-macos.yml` `workflow_dispatch` on 2026-05-20 (per D16 / D37).
 
 **Logging (Serilog).** Per-run file at `logs/{YYYYMMDD-HHmmss}.log`; the sidecar uses a `sidecar`-prefixed file. Every `tx:`/`rx:` event logged at Debug, truncated to `maxFieldBytes` from settings. `SecretScrubbingEnricher` filters env-var values matching `*_KEY`/`*_TOKEN`/`*_SECRET` at emission time. The log is the agent's primary debugging surface — no GUI to look at.
+
+## UI testing (GUI)
+
+Four layers exist for GUI coverage (architecture: `.task/0020-ui-testing-architecture-design-for-avalonia/design.md`). **When you change GUI code, add or extend a test at the lowest layer that can observe the bug** — view-model logic stays in `tests/InfiniContext.Tests/Gui/`; binding/focus/keyboard/visual-tree behavior goes in `Gui.HeadlessTests`; window activation, OS focus, UIA-tree exposure, or real-process lifecycle goes in `Gui.UiaTests`. A GUI bug fix without a regression test at the right layer is incomplete (tasks 0016/0017 were exactly the class of bug VM tests cannot catch).
+
+| Layer | Project | Use for | Runs |
+|---|---|---|---|
+| VM unit | `InfiniContext.Tests/Gui/` | command/state logic, CanExecute | every push |
+| Headless view | `Gui.HeadlessTests` | bindings, focus contract, key/mouse handling, dialog logic, visual-tree shape | every push (ci.yml) |
+| UIA E2E | `Gui.UiaTests` | real window activation, accessibility tree, process lifecycle | `ICX_UIA_TESTS=1` locally + `ci-uia.yml` dispatch |
+| Ad-hoc | `tmp/icx-smoke` scripts (until the planned `UiaProbe` tool lands) | investigation / repro | manual |
+
+Rules that keep the layers working:
+
+- **AutomationIds are a public test contract** (`docs/gui-automation-ids.md`). Every new interactive control gets `AutomationProperties.AutomationId` equal to its `Name`, plus a row in that doc. Renaming an id breaks both suites — update page objects (`Gui.UiaDriver`) and the doc together.
+- **App-wide styles go in `src/InfiniContext.Gui/Styles/AppStyles.axaml`, not `App.axaml`** — the headless `TestApp` loads that file by reference so view tests run under the production theme. Styles added to `App.axaml` directly are invisible to the headless suite.
+- **Pin `Avalonia.Headless.XUnit` to the GUI's exact Avalonia version.** A mismatch produces runtime type-identity errors, not compile errors. Bump them together or not at all.
+- **UIA projects target `net10.0-windows`** (FlaUI 5.x ships modern assets for `-windows` TFMs only; plain `net10.0` silently falls back to .NET Framework assets). UIA tests must not spawn sessions until the session-index path override (design prerequisite P3) lands — a spawned session would pollute the operator's real `~/.infinicontext/index.json`.
+- **Avalonia 12 exposes owned modals as child `Window`s of their owner in the UIA tree**, not desktop top-levels — scope dialog searches to the owner window (see `MainWindowPage.FindNewTaskWindow`).
+- The headless harness's "host is ready" beacon is the footer `LogFilePathLabel` (empty under the placeholder VM, a path once the live VM lands). UIA tests must `WaitForHostReady()` before clicking command-backed controls.
 
 ## Settings
 

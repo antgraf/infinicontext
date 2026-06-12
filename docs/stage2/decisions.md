@@ -290,6 +290,7 @@ All from `20260509-improve-cli-repl-help/decisions.md`.
 - **Fixtures are committed test data, not casual outputs.** Recorded against `claude` 2.1.112 on Windows via `tools/InfiniContext.Recorder`. Bump `TestedAgainstVersion` alongside any re-record. Source: `tests/fixtures/README.md`.
 - **`unknown-event.jsonl` is hand-edited.** Invented top-level type, invented content-block type, unknown fields on known events — explicit parser-tolerance fixture. Source: `tests/fixtures/README.md`.
 - **FakeClaude scripts ≠ recorder scripts.** `tests/scripts/` drives `FakeClaude`; `tests/fixtures/scripts/` drives the real recorder. Source: `tests/scripts/README.md`.
+- **Two-layer GUI test architecture (2026-06-12).** View-layer bugs (bindings, focus, key handling) get headless in-process tests (`Gui.HeadlessTests`, Avalonia.Headless.XUnit pinned to the GUI's Avalonia version, production theme loaded via the `Styles/AppStyles.axaml` extraction); real-window/OS-level behavior gets opt-in UIA E2E tests (`Gui.UiaTests` over the `Gui.UiaDriver` FlaUI.UIA3 page objects, gated on `ICX_UIA_TESTS=1`, dispatched via `ci-uia.yml`). FlaUI chosen over the Avalonia docs' Appium/WinAppDriver route (WinAppDriver unmaintained, needs a server + Developer Mode). Rule: write every GUI test at the lowest layer that can observe the bug; `AutomationId`s are a public contract recorded in `docs/gui-automation-ids.md`. Source: task 0020 `design.md`.
 
 ## 13. UI / stages / roadmap
 

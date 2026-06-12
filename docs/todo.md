@@ -437,6 +437,14 @@ When an item is picked up, **remove its bullet from this file** (or promote it i
 
 ## D. Stage 3 (Avalonia GUI)
 
+### UI-testing follow-ups (task 0020; POC shipped 2026-06-12 - `Gui.HeadlessTests`, `Gui.UiaDriver`, `Gui.UiaTests`, `ci-uia.yml` all green)
+
+- **P1 remainder: AutomationId coverage.** Ids exist only for the POC control set; the rest (approval banner buttons, approval-mode combo, auto-scroll checkbox, inspector controls, tree-row action buttons + `AutomationProperties.Name` on row templates, ConfirmDialog) are listed under "Not yet covered" in `docs/gui-automation-ids.md`. Add the UIA tree-contract test (design 6.3 #1 full form) once coverage is complete so drift is caught at dispatch time.
+- **P3: session-index path override.** `SessionIndex` resolves `~/.infinicontext/index.json` unconditionally; until a `sessions.indexPath` setting (env: `INFINICONTEXT__SESSIONS__INDEXPATH`) exists, UIA tests MUST NOT spawn sessions or they pollute the operator's real index. Blocks most of the design 6.3 seed list. Files: `src/InfiniContext.Core/Sessions/SessionIndex.cs`, settings schema/loader, `GuiAppHarness`.
+- **Grow the seed test lists.** Headless: design 5.5 items 3-8 (approval banner, session switch / 0016 cached-view regression, NewTaskDialog validation, ConfirmDialog keyboard contract, transcript render incl. the Markdown.Avalonia-under-headless canary, busy/queue semantics). UIA: design 6.3 items 2-5 (full icx-smoke scenario, foreground/focus after dialog close, dead-session UX, approval flow E2E) - all but #3 need P3 first.
+- **UiaProbe tool (design Phase 3).** `tools/InfiniContext.UiaProbe` console exe over `Gui.UiaDriver` (launch/dump/click/settext/invoke/screenshot/kill verbs, pid+sandbox state file); delete `tmp/icx-smoke` once verb parity is reached.
+- **Promote `ci-uia.yml` to PR-triggered-on-GUI-paths** after a few weeks of green manual dispatches (design 6.4).
+
 - **Avalonia 11.x app on Win + Mac.** Begins with a written design proposal; supersedes `infinicontext-initial-design.md` section 9 Stage 3. Estimated 4-8 weeks.
 - **MVVM flavour decision: CommunityToolkit.Mvvm vs ReactiveUI.** Deferred to Stage 3 spike. Source: `infinicontext-initial-design.md` section 8 item 5.
 - **Markdown library decision: Markdown.Avalonia vs alternative.** Source: `infinicontext-initial-design.md` section 8 item 6.
