@@ -1,9 +1,15 @@
 # UI testing architecture for the Avalonia GUI -- design
 
-Status: **proposed** (2026-06-12, rev 2: all test projects standardized on xunit v3, see
-plan-xunit-v3-migration.md; file deliberately ASCII-only, see issues.md#0001). Deliverable
-of task 0020. Written to be implementable by another agent without re-doing the research;
-every external claim below was verified against the Avalonia docs / NuGet on 2026-06-12.
+Status: **adopted; Phases 0.5/1/2 shipped at POC depth** (2026-06-12). Phase 0.5 (xunit v3
+migration), the partial-P1 GUI prep, both test projects + the UiaDriver classlib, and
+ci-uia.yml are implemented and green (ci.yml + one ci-uia.yml dispatch); see progress.md
+for execution detail and findings (FlaUI needs net10.0-windows; Avalonia 12 owned modals
+are child Windows of the owner in UIA). Remaining: P1 remainder, P3, full seed lists,
+UiaProbe - queued in docs/todo.md section D. (Rev 2: all test projects standardized on
+xunit v3, see plan-xunit-v3-migration.md; file deliberately ASCII-only, see issues.md#0001.)
+Deliverable of task 0020. Written to be implementable by another agent without re-doing the
+research; every external claim below was verified against the Avalonia docs / NuGet on
+2026-06-12.
 
 ## 1. Goals and non-goals
 

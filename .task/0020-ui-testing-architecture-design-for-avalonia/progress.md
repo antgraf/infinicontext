@@ -73,12 +73,28 @@
   resolution. Verified: build clean, 1110/1107/3 suite green, format gate clean. Committed
   and pushed together with the Phase 1+2 POC work (operator instruction).
 
+- **ci-uia.yml first dispatch GREEN (operator-confirmed)** -- design Phase 2 "done when" is now
+  fully met (local green + one green workflow_dispatch run). ci.yml also green on the pushed
+  head including the headless suite's first CI run.
+- **Documentation pass for the new test capabilities (operator request):**
+  - CLAUDE.md: Stage 3 status corrected to in-progress; build/test commands for both new
+    suites; ci-uia.yml added to the CI list; repo layout rows for the 3 new projects; new
+    "UI testing (GUI)" section instructing agents to add UI tests at the lowest layer that
+    can observe the bug whenever GUI code changes, plus the AutomationId contract,
+    AppStyles.axaml rule, headless/GUI version pinning, net10.0-windows TFM, modal-as-child
+    UIA fact, and the WaitForHostReady beacon.
+  - docs/stage2/decisions.md section 12: recorded the two-layer GUI test architecture
+    decision (FlaUI over Appium/WinAppDriver, lowest-layer rule, id contract).
+  - docs/todo.md section D: queued the follow-ups (P1 remainder, P3, seed-list growth,
+    UiaProbe, ci-uia promotion to PR-triggered).
+  - design.md status header: proposed -> adopted, Phases 0.5/1/2 shipped at POC depth.
+
 ### Handoff to next session
 
-Design + migration acceptance COMPLETE (see above); Phases 1 and 2 now have working POC
-skeletons in the working tree (3 new projects, 4 POC tests, ci-uia.yml), verified locally,
-awaiting commit. Next: (1) operator commits + dispatches ci-uia.yml once; (2) grow the seed
-test lists (design 5.5 / 6.3) on the new skeletons; (3) P3 session-index override before any
-UIA test spawns sessions; (4) P1 remainder per docs/gui-automation-ids.md; (5) UiaProbe
-(Phase 3). Note issues.md#0001 (host mojibake, resolved/diagnosed) and #0002 (mojibake baked
-into committed source -- cheap repo-wide sweep candidate).
+Task 0020 is COMPLETE end-to-end: design (rev 2), xunit v3 migration, Phase 1+2 POC
+skeletons, mojibake sweep, and the documentation pass are all committed, pushed, and green
+on ci.yml + ci-macos.yml + ci-uia.yml. Follow-up work is queued in docs/todo.md section D
+("UI-testing follow-ups"): seed-list growth (design 5.5 / 6.3), P3 session-index override
+(required before UIA tests may spawn sessions), P1 AutomationId remainder
+(docs/gui-automation-ids.md), UiaProbe (Phase 3), ci-uia PR-trigger promotion. Both issues
+resolved. A `/task review 0020` before closing the task is the operator's call.
