@@ -28,7 +28,7 @@ public class AutoApplyExecutorTests
         var runner = new FakeRunner();
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, Array.Empty<ConsolidatedFinding>(), default);
+        var result = await sut.ApplyAsync(fx.Root, Array.Empty<ConsolidatedFinding>(), TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().BeEmpty();
@@ -48,7 +48,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", oldText: "return 1;", newText: "return 2;");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle(f => f.Id == finding.Id);
         result.Demoted.Should().BeEmpty();
@@ -64,7 +64,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", oldText: "expected", newText: "replacement");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle();
@@ -81,7 +81,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", oldText: "x", newText: "y");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("ambiguous"));
@@ -95,7 +95,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Ghost.cs", oldText: "x", newText: "y");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("does not exist"));
     }
@@ -127,7 +127,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("../escape.cs", oldText: "x", newText: "y");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("outside repo root"));
     }
@@ -143,7 +143,7 @@ public class AutoApplyExecutorTests
         var finding = NewReplaceFileFinding("src/Foo.cs", newText: "new contents");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         fx.Read("src/Foo.cs").Should().Be("new contents");
@@ -156,7 +156,7 @@ public class AutoApplyExecutorTests
         var finding = NewReplaceFileFinding("src/New.cs", newText: "fresh contents");
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         fx.Read("src/New.cs").Should().Be("fresh contents");
@@ -173,7 +173,7 @@ public class AutoApplyExecutorTests
         { SuggestedFix = new SuggestedFix(FixKind.Manual, null, null) };
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("Manual"));
     }
@@ -185,7 +185,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", "x", "y") with { SuggestedFix = null };
         var sut = new AutoApplyExecutor(new FakeRunner());
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("SuggestedFix is null"));
     }
@@ -211,7 +211,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle();
@@ -242,7 +242,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle();
@@ -270,7 +270,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         File.Exists(Path.Combine(fx.Root, "src", "Created.cs")).Should().BeFalse();
@@ -292,7 +292,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle();
@@ -319,7 +319,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle();
@@ -341,7 +341,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, Array.Empty<ConsolidatedFinding>(), default);
+        var result = await sut.ApplyAsync(fx.Root, Array.Empty<ConsolidatedFinding>(), TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().BeEmpty();
@@ -366,7 +366,7 @@ public class AutoApplyExecutorTests
             newText: "public int Foo()\n{\n    return 2;\n}");
 
         var sut = new AutoApplyExecutor(new FakeRunner());
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         result.Demoted.Should().BeEmpty();
@@ -390,7 +390,7 @@ public class AutoApplyExecutorTests
             newText: "lineA\r\nlineB\r\nlineC");
 
         var sut = new AutoApplyExecutor(new FakeRunner());
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         var written = fx.Read("src/Foo.cs");
@@ -412,7 +412,7 @@ public class AutoApplyExecutorTests
             newText: "delta\nepsilon"); // multi-line NewText with LF
 
         var sut = new AutoApplyExecutor(new FakeRunner());
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         var written = fx.Read("src/Foo.cs");
@@ -468,7 +468,7 @@ public class AutoApplyExecutorTests
         };
 
         var sut = new AutoApplyExecutor(new FakeRunner());
-        var result = await sut.ApplyAsync(fx.Root, findings, default);
+        var result = await sut.ApplyAsync(fx.Root, findings, TestContext.Current.CancellationToken);
 
         result.Applied.Should().HaveCount(2);
         fx.Read("src/A.cs").Should().Be("aaa");
@@ -490,7 +490,7 @@ public class AutoApplyExecutorTests
         };
 
         var sut = new AutoApplyExecutor(new FakeRunner());
-        var result = await sut.ApplyAsync(fx.Root, findings, default);
+        var result = await sut.ApplyAsync(fx.Root, findings, TestContext.Current.CancellationToken);
 
         result.Applied.Should().HaveCount(1);
         result.Demoted.Should().ContainSingle();
@@ -522,7 +522,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner);
 
-        var result = await sut.ApplyAsync(fx.Root, findings, default);
+        var result = await sut.ApplyAsync(fx.Root, findings, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().HaveCount(2);
@@ -603,7 +603,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", "original", "edited") with { Confidence = 0.85 };
 
         var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().BeEmpty();
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("reviewer confidence 0.85 is below floor 0.90"));
@@ -618,7 +618,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", "original", "edited") with { DispositionConfidence = 0.7 };
 
         var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("disposition_confidence 0.70 is below floor 0.90"));
         fx.Read("src/Foo.cs").Should().Be("original");
@@ -636,7 +636,7 @@ public class AutoApplyExecutorTests
         var finding = NewEditFinding("src/Foo.cs", bigOld, bigNew);
 
         var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { MaxLinesPerFinding = 5 });
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("exceeds MaxLinesPerFinding 5"));
     }
@@ -652,7 +652,7 @@ public class AutoApplyExecutorTests
         { Confidence = 0.9, DispositionConfidence = 0.9 };
 
         var sut = new AutoApplyExecutor(new FakeRunner(), new AutoApplyOptions { ConfidenceFloor = 0.9 });
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         fx.Read("src/Foo.cs").Should().Be("edited");
@@ -676,7 +676,7 @@ public class AutoApplyExecutorTests
         };
         var sut = new AutoApplyExecutor(runner, new AutoApplyOptions { SkipBuildTestGate = true });
 
-        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, default);
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
 
         result.Applied.Should().ContainSingle();
         result.BuildTestGatePassed.Should().BeTrue();

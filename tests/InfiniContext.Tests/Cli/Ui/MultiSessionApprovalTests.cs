@@ -42,7 +42,7 @@ public class MultiSessionApprovalTests
             ctxA, input, console, Log.Logger,
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         bRequest.IsCompleted.Should().BeFalse(
             "an unfocused session's approval must remain parked, not be answered by the host's quit input");
@@ -69,7 +69,7 @@ public class MultiSessionApprovalTests
             ctxA, input, console, Log.Logger,
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var response = await pending;
         response.Behavior.Should().Be(ApprovalBehavior.Allow);
@@ -93,7 +93,7 @@ public class MultiSessionApprovalTests
             ctxA, input, console, Log.Logger,
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var response = await pending;
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
@@ -114,7 +114,7 @@ public class MultiSessionApprovalTests
             ctx, input, console, Log.Logger,
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         // Reaching here means /quit was treated as a slash command and triggered exit.
     }
 

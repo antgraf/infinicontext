@@ -20,7 +20,7 @@ public class LockRegistryTests
     {
         var registry = NewRegistry();
 
-        var outcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1));
+        var outcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
 
         outcome.Ok.Should().BeTrue();
         outcome.Token.Should().NotBeNullOrEmpty().And.StartWith("lt_");
@@ -31,10 +31,10 @@ public class LockRegistryTests
     public async Task Acquire_when_held_by_other_owner_with_no_release_times_out()
     {
         var registry = NewRegistry();
-        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
         first.Ok.Should().BeTrue();
 
-        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(80));
+        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(80), TestContext.Current.CancellationToken);
 
         second.Ok.Should().BeFalse();
         second.Error.Should().Contain("timeout");
@@ -44,10 +44,10 @@ public class LockRegistryTests
     public async Task Acquire_after_release_succeeds()
     {
         var registry = NewRegistry();
-        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
         registry.Release(first.Token!).Should().BeTrue();
 
-        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
         second.Ok.Should().BeTrue();
         second.Token.Should().NotBe(first.Token);
@@ -57,7 +57,7 @@ public class LockRegistryTests
     public async Task Release_returns_false_for_unknown_or_already_released_token()
     {
         var registry = NewRegistry();
-        var outcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var outcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
         registry.Release(outcome.Token!).Should().BeTrue();
         registry.Release(outcome.Token!).Should().BeFalse("second release of the same token");
@@ -71,11 +71,11 @@ public class LockRegistryTests
         // observes an expired entry on its first iteration and takes the lock immediately.
         var clock = new FakeClock(new DateTimeOffset(2026, 5, 7, 10, 0, 0, TimeSpan.Zero));
         var registry = new LockRegistry(clock: () => clock.UtcNow, pollInterval: FastPoll);
-        await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(10));
+        await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(10), TestContext.Current.CancellationToken);
 
         clock.Advance(TimeSpan.FromSeconds(31)); // strictly past expiry
 
-        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var second = await registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
         second.Ok.Should().BeTrue();
         registry.Snapshot().Should().ContainSingle().Which.OwnerId.Should().Be("owner-2");
@@ -85,8 +85,8 @@ public class LockRegistryTests
     public async Task ReleaseAllOwnedBy_drops_only_that_owners_locks()
     {
         var registry = NewRegistry();
-        var aOutcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
-        var bOutcome = await registry.AcquireAsync("b.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var aOutcome = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+        var bOutcome = await registry.AcquireAsync("b.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
         aOutcome.Ok.Should().BeTrue();
         bOutcome.Ok.Should().BeTrue();
 
@@ -103,10 +103,10 @@ public class LockRegistryTests
     public async Task Different_files_can_be_locked_concurrently()
     {
         var registry = NewRegistry();
-        var t1 = registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
-        var t2 = registry.AcquireAsync("b.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var t1 = registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+        var t2 = registry.AcquireAsync("b.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
-        var results = await Task.WhenAll(t1, t2).WaitAsync(TestTimeout);
+        var results = await Task.WhenAll(t1, t2).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
         results.Should().AllSatisfy(o => o.Ok.Should().BeTrue());
         registry.Snapshot().Should().HaveCount(2);
@@ -116,10 +116,10 @@ public class LockRegistryTests
     public async Task Contended_waiter_unblocks_after_release()
     {
         var registry = NewRegistry();
-        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        var first = await registry.AcquireAsync("a.md", "owner-1", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
         first.Ok.Should().BeTrue();
 
-        var waiter = registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(2));
+        var waiter = registry.AcquireAsync("a.md", "owner-2", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
 
         // Yield until the waiter has had several scheduling opportunities. If it's still not
         // completed after that, it's genuinely in the poll loop's `Task.Delay` — which is what
@@ -130,7 +130,7 @@ public class LockRegistryTests
 
         registry.Release(first.Token!).Should().BeTrue();
 
-        var outcome = await waiter.WaitAsync(TestTimeout);
+        var outcome = await waiter.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
         outcome.Ok.Should().BeTrue();
         outcome.Token.Should().NotBe(first.Token);
     }

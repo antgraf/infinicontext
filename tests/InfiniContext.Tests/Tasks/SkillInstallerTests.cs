@@ -10,11 +10,11 @@ public class SkillInstallerTests
     {
         using var home = new TempHome();
 
-        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
 
         result.Should().Be(SkillInstaller.InstallResult.Installed);
         File.Exists(InfiniContextTaskSkill.GetSkillFilePath(home.Path)).Should().BeTrue();
-        var content = await File.ReadAllTextAsync(InfiniContextTaskSkill.GetSkillFilePath(home.Path));
+        var content = await File.ReadAllTextAsync(InfiniContextTaskSkill.GetSkillFilePath(home.Path), TestContext.Current.CancellationToken);
         content.Should().Be(InfiniContextTaskSkill.SkillMarkdown);
     }
 
@@ -22,14 +22,14 @@ public class SkillInstallerTests
     public async Task Second_install_at_same_version_is_a_noop()
     {
         using var home = new TempHome();
-        await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
         var skillPath = InfiniContextTaskSkill.GetSkillFilePath(home.Path);
         var firstWriteUtc = File.GetLastWriteTimeUtc(skillPath);
         // Step the timestamp back so a rewrite is observable.
         File.SetLastWriteTimeUtc(skillPath, firstWriteUtc.AddHours(-1));
         var pretendLastWrite = File.GetLastWriteTimeUtc(skillPath);
 
-        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
 
         result.Should().Be(SkillInstaller.InstallResult.UpToDate);
         File.GetLastWriteTimeUtc(skillPath).Should().Be(pretendLastWrite); // unchanged
@@ -44,12 +44,12 @@ public class SkillInstallerTests
         Directory.CreateDirectory(skillDir);
         // Write an older version so the installer sees v0 < current.
         var older = $"# old content\n{InfiniContextTaskSkill.VersionMarkerPrefix}0{InfiniContextTaskSkill.VersionMarkerSuffix}\n";
-        await File.WriteAllTextAsync(skillPath, older);
+        await File.WriteAllTextAsync(skillPath, older, TestContext.Current.CancellationToken);
 
-        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
 
         result.Should().Be(SkillInstaller.InstallResult.Updated);
-        var content = await File.ReadAllTextAsync(skillPath);
+        var content = await File.ReadAllTextAsync(skillPath, TestContext.Current.CancellationToken);
         content.Should().Be(InfiniContextTaskSkill.SkillMarkdown);
     }
 
@@ -64,15 +64,15 @@ public class SkillInstallerTests
         var skillPath = InfiniContextTaskSkill.GetSkillFilePath(home.Path);
         Directory.CreateDirectory(skillDir);
         const string customContent = "# my custom edits\n\nlots of careful work here";
-        await File.WriteAllTextAsync(skillPath, customContent);
+        await File.WriteAllTextAsync(skillPath, customContent, TestContext.Current.CancellationToken);
 
-        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
 
         result.Should().Be(SkillInstaller.InstallResult.Updated);
         var backupPath = skillPath + SkillInstaller.BackupSuffix;
         File.Exists(backupPath).Should().BeTrue("the prior content must be preserved at SKILL.md.bak");
-        (await File.ReadAllTextAsync(backupPath)).Should().Be(customContent);
-        (await File.ReadAllTextAsync(skillPath)).Should().Be(InfiniContextTaskSkill.SkillMarkdown);
+        (await File.ReadAllTextAsync(backupPath, TestContext.Current.CancellationToken)).Should().Be(customContent);
+        (await File.ReadAllTextAsync(skillPath, TestContext.Current.CancellationToken)).Should().Be(InfiniContextTaskSkill.SkillMarkdown);
     }
 
     [Fact]
@@ -82,12 +82,12 @@ public class SkillInstallerTests
         var skillDir = InfiniContextTaskSkill.GetInstallDir(home.Path);
         var skillPath = InfiniContextTaskSkill.GetSkillFilePath(home.Path);
         Directory.CreateDirectory(skillDir);
-        await File.WriteAllTextAsync(skillPath, "# arbitrary user-edited content with no marker");
+        await File.WriteAllTextAsync(skillPath, "# arbitrary user-edited content with no marker", TestContext.Current.CancellationToken);
 
-        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path);
+        var result = await SkillInstaller.InstallIfMissingOrOutdatedAsync(home.Path, ct: TestContext.Current.CancellationToken);
 
         result.Should().Be(SkillInstaller.InstallResult.Updated);
-        (await File.ReadAllTextAsync(skillPath)).Should().Be(InfiniContextTaskSkill.SkillMarkdown);
+        (await File.ReadAllTextAsync(skillPath, TestContext.Current.CancellationToken)).Should().Be(InfiniContextTaskSkill.SkillMarkdown);
     }
 
     [Theory]

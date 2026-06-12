@@ -41,12 +41,12 @@ public class AutoRotationServiceTests
         var fired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         service.AutoRotationProposed += p => { proposals.Add(p); fired.TrySetResult(true); };
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 
-        await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         prepareCalled.Should().Be(1);
         proposals.Should().ContainSingle();
         var p = proposals[0];
@@ -75,12 +75,12 @@ public class AutoRotationServiceTests
         var fired = new TaskCompletionSource<AutoRotationProposal>(TaskCreationOptions.RunContinuationsAsynchronously);
         service.AutoRotationProposed += p => fired.TrySetResult(p);
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 13 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 13 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Soft);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 
-        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         proposal.Status.Should().Be(AutoRotationStatus.Approved);
         proposal.Reason.Should().Be(RotationReason.Soft);
         proposal.Plan.Should().BeSameAs(fakePlan);
@@ -102,7 +102,7 @@ public class AutoRotationServiceTests
         var fired = false;
         service.AutoRotationProposed += _ => fired = true;
 
-        await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
         // No MarkRotationReason call тАФ baseline.
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
@@ -129,7 +129,7 @@ public class AutoRotationServiceTests
         var fired = false;
         service.AutoRotationProposed += _ => fired = true;
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo" }); // no ActiveTaskId
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo" }, TestContext.Current.CancellationToken); // no ActiveTaskId
         ctx.MarkRotationReason(RotationReason.Hard);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
@@ -158,12 +158,12 @@ public class AutoRotationServiceTests
         var fired = new TaskCompletionSource<AutoRotationProposal>(TaskCreationOptions.RunContinuationsAsynchronously);
         service.AutoRotationProposed += p => fired.TrySetResult(p);
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 11 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 11 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 
-        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         proposal.Status.Should().Be(AutoRotationStatus.Refused);
         proposal.TaskId.Should().Be(11);
         proposal.Plan.Should().BeNull();
@@ -188,12 +188,12 @@ public class AutoRotationServiceTests
         var fired = new TaskCompletionSource<AutoRotationProposal>(TaskCreationOptions.RunContinuationsAsynchronously);
         service.AutoRotationProposed += p => fired.TrySetResult(p);
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 5 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 5 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 
-        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         proposal.Status.Should().Be(AutoRotationStatus.Failed);
         proposal.TaskId.Should().Be(5);
         proposal.Plan.Should().BeNull();
@@ -211,7 +211,7 @@ public class AutoRotationServiceTests
         var fake = new FakeSession();
         var factory = new QueueingFactory(new IClaudeSession[] { fake });
         await using var mgr = NewManager(factory);
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
 
         var plan = NewSwitchPlan(7);
@@ -226,7 +226,7 @@ public class AutoRotationServiceTests
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
 
-        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var proposal = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         proposal.Status.Should().Be(AutoRotationStatus.Approved);
         proposal.Plan.Should().BeSameAs(plan);
     }
@@ -245,7 +245,7 @@ public class AutoRotationServiceTests
 
         var fired = false;
         service.AutoRotationProposed += _ => fired = true;
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
 
         service.Dispose();
@@ -282,7 +282,7 @@ public class AutoRotationServiceTests
         var proposalFired = new TaskCompletionSource<AutoRotationProposal>(TaskCreationOptions.RunContinuationsAsynchronously);
         service.AutoRotationProposed += p => proposalFired.TrySetResult(p);
 
-        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 });
+        var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo", ActiveTaskId = 7 }, TestContext.Current.CancellationToken);
         ctx.MarkRotationReason(RotationReason.Hard);
         fake.State.BeginSend();
         fake.State.HandleProcessExit(0);
@@ -290,15 +290,15 @@ public class AutoRotationServiceTests
         // unfinished ProposeAsync Task is now in _pending (the await of prepareGate suspends
         // before _pending.Add returns).
 
-        var disposeTask = Task.Run(() => service.Dispose());
+        var disposeTask = Task.Run(() => service.Dispose(), TestContext.Current.CancellationToken);
 
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         disposeTask.IsCompleted.Should().BeFalse("Dispose must drain the in-flight proposal");
 
         prepareGate.SetResult(plan);
-        await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await disposeTask.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
 
-        var proposal = await proposalFired.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var proposal = await proposalFired.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
         proposal.Status.Should().Be(AutoRotationStatus.Approved);
         proposal.Plan.Should().BeSameAs(plan);
     }

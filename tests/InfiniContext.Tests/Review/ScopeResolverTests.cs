@@ -16,7 +16,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "0011" + new string('0', 36),
-            scopeOverridePaths: new[] { "src/A.cs", "src/B.cs" }, progressMdPath: null);
+            scopeOverridePaths: new[] { "src/A.cs", "src/B.cs" }, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Description.Should().Contain("--scope override");
         scope.Files.Should().HaveCount(2);
@@ -38,7 +38,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var sha = "cafef00d" + new string('0', 32);
-        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: sha, scopeOverridePaths: null, progressMdPath: null);
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: sha, scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.FallbackNote.Should().BeNull();
         scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Foo.cs");
@@ -59,7 +59,7 @@ public class ScopeResolverTests
         };
         var sut = new ScopeResolver(git);
 
-        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: null, scopeOverridePaths: null, progressMdPath: null);
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: null, scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.FallbackNote.Should().NotBeNull();
         scope.FallbackNote.Should().Contain("merge-base");
@@ -73,7 +73,7 @@ public class ScopeResolverTests
         var git = new FakeGitRunner { MergeBase = null };
         var sut = new ScopeResolver(git);
 
-        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: null, scopeOverridePaths: null, progressMdPath: null);
+        var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: null, scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().BeEmpty();
         scope.FallbackNote.Should().NotBeNull();
@@ -95,7 +95,7 @@ public class ScopeResolverTests
             ### Files touched this session
 
             - `src/FromProgress.cs` - some change
-            """);
+            """, TestContext.Current.CancellationToken);
         var git = new FakeGitRunner
         {
             Head = "h",
@@ -104,7 +104,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: progressPath);
+            scopeOverridePaths: null, progressMdPath: progressPath, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Select(f => f.RelativePath).Should()
             .BeEquivalentTo(new[] { "src/FromDiff.cs", "src/FromProgress.cs" });
@@ -122,7 +122,7 @@ public class ScopeResolverTests
             ### Files touched
 
             - `src/Both.cs` - also listed in diff
-            """);
+            """, TestContext.Current.CancellationToken);
         var git = new FakeGitRunner
         {
             Head = "h",
@@ -131,7 +131,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: progressPath);
+            scopeOverridePaths: null, progressMdPath: progressPath, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Both.cs");
     }
@@ -150,7 +150,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git, byteCap: 1_000);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: null);
+            scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Small.cs");
         scope.ExcludedFiles.Should().ContainSingle(e => e.RelativePath == "src/Big.cs");
@@ -169,7 +169,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: null);
+            scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().BeEmpty();
         scope.ExcludedFiles.Should().ContainSingle(e => e.RelativePath == "src/Ghost.cs");
@@ -184,7 +184,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: new[] { "../escape.cs" }, progressMdPath: null);
+            scopeOverridePaths: new[] { "../escape.cs" }, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().BeEmpty();
         scope.ExcludedFiles.Should().ContainSingle(e => e.Reason.Contains("outside"));
@@ -274,7 +274,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: null);
+            scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Foo.cs");
         scope.ExcludedFiles.Should().HaveCount(2);
@@ -291,7 +291,7 @@ public class ScopeResolverTests
 
         var sut = new ScopeResolver(new FakeGitRunner());
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "ignored" + new string('0', 33),
-            scopeOverridePaths: new[] { ".env", "src/Foo.cs" }, progressMdPath: null);
+            scopeOverridePaths: new[] { ".env", "src/Foo.cs" }, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().ContainSingle(f => f.RelativePath == "src/Foo.cs");
         scope.ExcludedFiles.Should().ContainSingle(e => e.RelativePath == ".env"
@@ -314,7 +314,7 @@ public class ScopeResolverTests
         var sut = new ScopeResolver(git);
 
         var scope = await sut.ResolveAsync(fx.Root, baseCommitSha: "abcd" + new string('0', 36),
-            scopeOverridePaths: null, progressMdPath: null);
+            scopeOverridePaths: null, progressMdPath: null, ct: TestContext.Current.CancellationToken);
 
         scope.Files.Should().BeEmpty();
         // Sanity: no ReviewFile carries the secret content.

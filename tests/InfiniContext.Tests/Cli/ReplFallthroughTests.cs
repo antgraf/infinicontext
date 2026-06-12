@@ -35,7 +35,7 @@ public class ReplFallthroughTests
             writeLock: new object(),
             settings: InfiniContextSettings.Defaults);
 
-        var result = await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.ExitCode.Should().Be(0);
         session.SentMessages.Should().ContainSingle().Which.Should().Be("/clear",
@@ -59,7 +59,7 @@ public class ReplFallthroughTests
             writeLock: new object(),
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         session.SentMessages.Should().BeEmpty(
             "host-handled commands must not leak through to the spawned claude");

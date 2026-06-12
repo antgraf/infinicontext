@@ -31,7 +31,7 @@ public class SessionExitChannelTests
         var (reader, writer) = Open(pipe);
 
         await writer.WriteLineAsync(new SessionExitRequest("flushed after hard nudge").ToJson().ToJsonString());
-        var line = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no session.exit response");
+        var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no session.exit response");
         var resp = SessionExitResponse.FromJson((JsonObject)JsonNode.Parse(line)!);
 
         resp.Ok.Should().BeTrue();
@@ -39,7 +39,7 @@ public class SessionExitChannelTests
             .Should().Be(LockWireFormat.SessionExitKind);
 
         // The handler is invoked fire-and-forget on the threadpool, so wait for it explicitly.
-        var observed = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var observed = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         observed.Reason.Should().Be("flushed after hard nudge");
         sink.Calls.Should().Be(0, "session.exit must not reach the approval sink");
     }
@@ -57,7 +57,7 @@ public class SessionExitChannelTests
         var (reader, writer) = Open(pipe);
 
         await writer.WriteLineAsync(new SessionExitRequest(null).ToJson().ToJsonString());
-        var line = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no session.exit response");
+        var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no session.exit response");
 
         SessionExitResponse.FromJson((JsonObject)JsonNode.Parse(line)!).Ok.Should().BeFalse();
     }

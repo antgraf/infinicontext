@@ -59,7 +59,7 @@ public class LongLivedCliLightModelServiceTests
         // Service may still be holding the child as it waits for cleanup; dispose to flush.
         await service.DisposeAsync();
 
-        var recorded = await File.ReadAllLinesAsync(recordPath);
+        var recorded = await File.ReadAllLinesAsync(recordPath, TestContext.Current.CancellationToken);
         recorded.Length.Should().Be(2, "service writes one user message + one /clear per call");
 
         var firstMessage = ExtractUserText(recorded[0]);

@@ -2,6 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- xunit.v3 test projects are self-contained executables; the generated entry point
+         also lets `dotnet run` on this project run the suite directly. -->
+    <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -20,7 +23,7 @@
     <!-- Mirrors the InfiniContext.Cli reference; required because ScopeGlobExpander.cs is
          link-compiled into this assembly and uses Microsoft.Extensions.FileSystemGlobbing. -->
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.8" />
-    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
 

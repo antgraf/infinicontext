@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace InfiniContext.Tests.Supervision;
 
 /// <summary>
@@ -15,7 +17,10 @@ namespace InfiniContext.Tests.Supervision;
 /// </summary>
 public sealed class MacOnlyFactAttribute : FactAttribute
 {
-    public MacOnlyFactAttribute()
+    public MacOnlyFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (!OperatingSystem.IsMacOS())
             Skip = "macOS-only test";

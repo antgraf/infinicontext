@@ -70,11 +70,11 @@ public class ApprovalE2ETests
         var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
         await writer.WriteLineAsync(new ApprovalRequest("Bash", new JsonObject()).ToJson().ToJsonString());
-        var first = JsonNode.Parse(await reader.ReadLineAsync() ?? "")! as JsonObject;
+        var first = JsonNode.Parse(await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? "")! as JsonObject;
         first!["behavior"]!.GetValue<string>().Should().Be("allow");
 
         await writer.WriteLineAsync(new ApprovalRequest("Other", new JsonObject()).ToJson().ToJsonString());
-        var second = JsonNode.Parse(await reader.ReadLineAsync() ?? "")! as JsonObject;
+        var second = JsonNode.Parse(await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? "")! as JsonObject;
         second!["behavior"]!.GetValue<string>().Should().Be("deny");
 
         sink.Calls.Should().Be(2);

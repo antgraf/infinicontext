@@ -32,9 +32,9 @@ public class MultiSessionExitCriteriaTests
         var factory = new StreamingFakeSessionFactory();
         await using var mgr = NewManager(factory);
 
-        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/a" });
-        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/b" });
-        var c = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/c" });
+        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/a" }, TestContext.Current.CancellationToken);
+        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/b" }, TestContext.Current.CancellationToken);
+        var c = await mgr.CreateAsync(new SpawnRequest { Cwd = "/repo/c" }, TestContext.Current.CancellationToken);
 
         mgr.ActiveCount.Should().Be(3);
         mgr.Active.Select(s => s.Cwd).Should().BeEquivalentTo(new[] { "/repo/a", "/repo/b", "/repo/c" });
@@ -65,8 +65,8 @@ public class MultiSessionExitCriteriaTests
         var factory = new StreamingFakeSessionFactory();
         await using var mgr = NewManager(factory);
 
-        var focused = await mgr.CreateAsync(new SpawnRequest { Cwd = "/focused" });
-        var offscreen = await mgr.CreateAsync(new SpawnRequest { Cwd = "/offscreen" });
+        var focused = await mgr.CreateAsync(new SpawnRequest { Cwd = "/focused" }, TestContext.Current.CancellationToken);
+        var offscreen = await mgr.CreateAsync(new SpawnRequest { Cwd = "/offscreen" }, TestContext.Current.CancellationToken);
 
         // While the host "looks at" `focused`, claude is still producing turns in `offscreen`. The
         // host has no event-subscription side-effect that gates the reader тАФ emit and observe.
@@ -91,7 +91,7 @@ public class MultiSessionExitCriteriaTests
         // Phase 1: open manager, create one session that picks up `resumeSessionId`, close it.
         await using (var mgr = NewManager(factory, indexPath: tmp.IndexPath))
         {
-            var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/work" });
+            var ctx = await mgr.CreateAsync(new SpawnRequest { Cwd = "/work" }, TestContext.Current.CancellationToken);
             await mgr.CloseAsync(ctx.Id);
             mgr.RecentSessions.Should().ContainSingle().Which.SessionId.Should().Be(resumeSessionId.ToString());
         }
@@ -110,7 +110,7 @@ public class MultiSessionExitCriteriaTests
         // Phase 3: caller picks a row тЖТ host issues a SpawnRequest with that ResumeSessionId.
         // The manager must thread it through to the session factory unchanged so claude is invoked
         // with --resume <id>.
-        await resumed.CreateAsync(new SpawnRequest { Cwd = "/work", ResumeSessionId = resumeSessionId.ToString() });
+        await resumed.CreateAsync(new SpawnRequest { Cwd = "/work", ResumeSessionId = resumeSessionId.ToString() }, TestContext.Current.CancellationToken);
 
         reopenFactory.LastOptions!.ResumeSessionId.Should().Be(resumeSessionId.ToString());
     }
@@ -121,11 +121,11 @@ public class MultiSessionExitCriteriaTests
     {
         var factory = new StreamingFakeSessionFactory();
         await using var mgr = NewManager(factory);
-        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
-        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" });
-        var c = await mgr.CreateAsync(new SpawnRequest { Cwd = "/c" });
+        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" }, TestContext.Current.CancellationToken);
+        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" }, TestContext.Current.CancellationToken);
+        var c = await mgr.CreateAsync(new SpawnRequest { Cwd = "/c" }, TestContext.Current.CancellationToken);
 
-        var results = await mgr.BroadcastAsync(new[] { a.Id, c.Id }, "shared-prompt");
+        var results = await mgr.BroadcastAsync(new[] { a.Id, c.Id }, "shared-prompt", TestContext.Current.CancellationToken);
 
         results.Should().OnlyContain(r => r.Outcome == BroadcastSendOutcome.Sent);
         factory.SessionFor(a).Sent.Should().Equal(new[] { "shared-prompt" });
@@ -139,8 +139,8 @@ public class MultiSessionExitCriteriaTests
     {
         var factory = new StreamingFakeSessionFactory();
         await using var mgr = NewManager(factory);
-        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
-        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" });
+        var a = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" }, TestContext.Current.CancellationToken);
+        var b = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" }, TestContext.Current.CancellationToken);
 
         // Park an approval request in session A's slot тАФ it will never resolve. Per-session slot
         // design (Stage 2B Phase 5) means session B's send-path has no shared dependency.
@@ -150,8 +150,8 @@ public class MultiSessionExitCriteriaTests
             cancellationToken: CancellationToken.None);
         a.ApprovalSlot.Current.Should().NotBeNull("the approval request is parked and awaiting host resolution");
 
-        var sendOnB = b.Session.SendUserMessageAsync("hi-b");
-        var raceWinner = await Task.WhenAny(sendOnB, Task.Delay(TimeSpan.FromSeconds(2)));
+        var sendOnB = b.Session.SendUserMessageAsync("hi-b", TestContext.Current.CancellationToken);
+        var raceWinner = await Task.WhenAny(sendOnB, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
         raceWinner.Should().BeSameAs(sendOnB, "session B must process independently of session A's pending approval");
 
         factory.SessionFor(b).Sent.Should().Equal(new[] { "hi-b" });

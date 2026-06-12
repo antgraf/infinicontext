@@ -211,7 +211,7 @@ public class FakeClaudeIntegrationTests
         };
 
         var scriptPath = Path.Combine(Path.GetTempPath(), $"fakeclaude-oversized-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8);
+        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8, TestContext.Current.CancellationToken);
 
         try
         {
@@ -276,7 +276,7 @@ public class FakeClaudeIntegrationTests
         };
 
         var scriptPath = Path.Combine(Path.GetTempPath(), $"fakeclaude-first-msg-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8);
+        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8, TestContext.Current.CancellationToken);
 
         try
         {
@@ -289,7 +289,7 @@ public class FakeClaudeIntegrationTests
             };
 
             await using var session = new ClaudeSession(options);
-            await session.StartAsync();
+            await session.StartAsync(TestContext.Current.CancellationToken);
 
             // Drain events until the channel completes (process exit). Do NOT call SendUserMessageAsync.
             using var cts = new CancellationTokenSource(TestTimeout);
@@ -305,10 +305,10 @@ public class FakeClaudeIntegrationTests
                 throw new TimeoutException("Session never completed.");
             }
 
-            await session.WaitForExitAsync().WaitAsync(TestTimeout);
+            await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
             File.Exists(stdinRecord).Should().BeTrue("FakeClaude should have written the recorded stdin line");
-            var captured = await File.ReadAllTextAsync(stdinRecord);
+            var captured = await File.ReadAllTextAsync(stdinRecord, TestContext.Current.CancellationToken);
             // Each stream-json line on stdin is a JSON object whose `content` field is the user
             // message string. JSON-encoded inner quotes appear as \" so check for non-quoted
             // substrings of the pointer.
@@ -363,8 +363,8 @@ public class FakeClaudeIntegrationTests
             throw new InvalidOperationException($"simulated cross-thread binding failure #{throwCount}");
         };
 
-        await session.StartAsync();
-        await session.SendUserMessageAsync("hi");
+        await session.StartAsync(TestContext.Current.CancellationToken);
+        await session.SendUserMessageAsync("hi", TestContext.Current.CancellationToken);
 
         var eventTypes = new List<string>();
         using (var cts = new CancellationTokenSource(TestTimeout))
@@ -376,7 +376,7 @@ public class FakeClaudeIntegrationTests
             }
         }
 
-        await session.WaitForExitAsync().WaitAsync(TestTimeout);
+        await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
         // The full simple-prompt event trace must still flow even though every state transition
         // threw inside Apply. If the loop had terminated on the first throw (the original bug),
@@ -478,7 +478,7 @@ public class FakeClaudeIntegrationTests
         };
 
         var scriptPath = Path.Combine(Path.GetTempPath(), $"fakeclaude-pressure-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8);
+        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8, TestContext.Current.CancellationToken);
 
         try
         {
@@ -500,8 +500,8 @@ public class FakeClaudeIntegrationTests
 
             await using var session = new ClaudeSession(options, eventObserver: monitor.OnEvent);
             sessionRef = session;
-            await session.StartAsync();
-            await session.SendUserMessageAsync("hi");
+            await session.StartAsync(TestContext.Current.CancellationToken);
+            await session.SendUserMessageAsync("hi", TestContext.Current.CancellationToken);
 
             using var cts = new CancellationTokenSource(TestTimeout);
             try
@@ -511,10 +511,10 @@ public class FakeClaudeIntegrationTests
             }
             catch (OperationCanceledException) { throw new TimeoutException("Session never completed."); }
 
-            await session.WaitForExitAsync().WaitAsync(TestTimeout);
+            await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
             File.Exists(stdinRecord).Should().BeTrue("FakeClaude should have recorded both stdin lines");
-            var captured = (await File.ReadAllTextAsync(stdinRecord)).TrimEnd('\r', '\n').Split('\n');
+            var captured = (await File.ReadAllTextAsync(stdinRecord, TestContext.Current.CancellationToken)).TrimEnd('\r', '\n').Split('\n');
             captured.Should().HaveCount(2, "first line = 'hi', second line = injected soft nudge");
 
             captured[0].Should().Contain("\"content\":\"hi\"");

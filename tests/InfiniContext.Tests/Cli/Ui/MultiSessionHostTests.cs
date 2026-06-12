@@ -37,7 +37,7 @@ public class MultiSessionHostTests
         // Simulate what SessionTranscriptReader does in a real session: append a fragment.
         ctx.Transcript.Append("hello world\n");
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.ExitCode.Should().Be(0);
         console.Output.Should().Contain("hello world");
@@ -60,7 +60,7 @@ public class MultiSessionHostTests
             Log.Logger,
             settings: InfiniContextSettings.Defaults);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var beforePostRun = console.Output;
         ctx.Transcript.Append("after-shutdown fragment\n");
@@ -84,8 +84,8 @@ public class MultiSessionHostTests
             (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: factory.Build,
             indexPath: Path.Combine(Path.GetTempPath(), $"cp-multifocus-{Guid.NewGuid():N}.json"));
-        var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
-        var ctxB = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" });
+        var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" }, TestContext.Current.CancellationToken);
+        var ctxB = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" }, TestContext.Current.CancellationToken);
         ctxB.Transcript.Append("hello-from-B\n");
 
         var input = new StringReader($"/focus {ctxB.Id:D}\n/quit\n");
@@ -98,7 +98,7 @@ public class MultiSessionHostTests
             settings: InfiniContextSettings.Defaults,
             sessionManager: mgr);
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         console.Output.Should().Contain("hello-from-B", "ctxB's accumulated transcript is replayed on /focus");
         console.Output.Should().Contain("[focus] switched to");
@@ -116,8 +116,8 @@ public class MultiSessionHostTests
             (slot, transcript, cwd) => new StubApprovalSink(),
             sessionFactory: factory.Build,
             indexPath: Path.Combine(Path.GetTempPath(), $"cp-unfoc-{Guid.NewGuid():N}.json"));
-        var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" });
-        var ctxB = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" });
+        var ctxA = await mgr.CreateAsync(new SpawnRequest { Cwd = "/a" }, TestContext.Current.CancellationToken);
+        var ctxB = await mgr.CreateAsync(new SpawnRequest { Cwd = "/b" }, TestContext.Current.CancellationToken);
 
         var input = new StringReader("/quit\n");
         var console = new TestConsole();
@@ -132,7 +132,7 @@ public class MultiSessionHostTests
         // (FragmentAppended fires synchronously, so timing is deterministic.)
         ctxB.Transcript.Append("silent-from-B\n");
 
-        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await host.RunAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         console.Output.Should().NotContain("silent-from-B",
             "fragments to a non-focused session must not reach the live console");
@@ -174,7 +174,7 @@ public class MultiSessionHostTests
         fake.State.HandleProcessExit(0); // OnStateTransition тЖТ TryStartAutoRotation тЖТ AutoRotateAsync
         fake.SignalExit(); // unblock the host's post-loop drain immediately
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         prepareCalled.Should().Be(1, "AutoRotateAsync asks the loader for the same task id");
         result.SwitchPlan.Should().NotBeNull();
@@ -215,7 +215,7 @@ public class MultiSessionHostTests
         fake.State.HandleProcessExit(0);
         fake.SignalExit();
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         prepareCalled.Should().Be(1);
         result.SwitchPlan.Should().NotBeNull();
@@ -255,11 +255,11 @@ public class MultiSessionHostTests
 
         // Wait until the input loop is genuinely blocked inside ReadLineAsync (the production hang
         // point) before driving the exit вЂ” the session went Idle, so the loop is at the prompt.
-        await input.ReadLineCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await input.ReadLineCalled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         fake.State.HandleProcessExit(0); // Exited в†’ rotation в†’ RequestSwitch в†’ _exitSignal
         fake.SignalExit();
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         result.SwitchPlan.Should().NotBeNull("the rotation must complete even though ReadLineAsync never returned");
         result.SwitchPlan!.Task.Id.Should().Be(7);
@@ -296,7 +296,7 @@ public class MultiSessionHostTests
         fake.State.HandleProcessExit(0);
         fake.SignalExit();
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         prepareCalled.Should().Be(0, "no nudge fired so the loader must not be invoked");
         result.SwitchPlan.Should().BeNull();
@@ -339,7 +339,7 @@ public class MultiSessionHostTests
         fake.State.HandleProcessExit(0);
         fake.SignalExit();
 
-        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await hostRun.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         prepareCalled.Should().Be(0, "cap-hit path must not invoke the plan loader");
         result.SwitchPlan.Should().BeNull("the host falls back to a normal exit when the cap is hit");

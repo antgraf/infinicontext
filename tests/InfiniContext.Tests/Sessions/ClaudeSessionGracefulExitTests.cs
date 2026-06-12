@@ -39,7 +39,7 @@ public class ClaudeSessionGracefulExitTests
         };
 
         var scriptPath = Path.Combine(Path.GetTempPath(), $"fakeclaude-graceful-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8);
+        await File.WriteAllTextAsync(scriptPath, script.ToJsonString(), Encoding.UTF8, TestContext.Current.CancellationToken);
 
         try
         {
@@ -53,7 +53,7 @@ public class ClaudeSessionGracefulExitTests
             var transitions = new List<StateTransition>();
             session.State.Transitioned += t => transitions.Add(t);
 
-            await session.StartAsync();
+            await session.StartAsync(TestContext.Current.CancellationToken);
 
             // Wait for init so we know the child is up and at its wait-stdin before we close stdin.
             using (var initCts = new CancellationTokenSource(TestTimeout))
@@ -63,7 +63,7 @@ public class ClaudeSessionGracefulExitTests
             }
             session.SessionId.Should().NotBeNull("system/init must have been parsed before graceful exit");
 
-            await session.RequestGracefulExitAsync();
+            await session.RequestGracefulExitAsync(TestContext.Current.CancellationToken);
 
             // Drain the rest until the channel completes on process exit.
             using (var cts = new CancellationTokenSource(TestTimeout))
@@ -79,11 +79,11 @@ public class ClaudeSessionGracefulExitTests
                 }
             }
 
-            await session.WaitForExitAsync().WaitAsync(TestTimeout);
+            await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
             while (session.State.State != SessionState.Exited && DateTime.UtcNow < deadline)
-                await Task.Delay(20);
+                await Task.Delay(20, TestContext.Current.CancellationToken);
 
             session.State.State.Should().Be(SessionState.Exited);
             var exitReason = transitions.LastOrDefault(t => t.To == SessionState.Exited)?.Reason;
@@ -91,7 +91,7 @@ public class ClaudeSessionGracefulExitTests
                 "closing stdin must let the child exit naturally (0), not be killed");
 
             // Idempotent: a second call after the child has exited is a harmless no-op.
-            await session.RequestGracefulExitAsync();
+            await session.RequestGracefulExitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {

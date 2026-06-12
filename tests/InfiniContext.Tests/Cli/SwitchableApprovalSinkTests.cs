@@ -12,7 +12,7 @@ public class SwitchableApprovalSinkTests
     {
         var inner = new CountingSink(ApprovalResponse.Allow());
         var s = new SwitchableApprovalSink(inner);
-        var resp = await s.RequestAsync(NewRequest(), default);
+        var resp = await s.RequestAsync(NewRequest(), TestContext.Current.CancellationToken);
         resp.Behavior.Should().Be(ApprovalBehavior.Allow);
         inner.Calls.Should().Be(1);
     }
@@ -23,9 +23,9 @@ public class SwitchableApprovalSinkTests
         var first = new CountingSink(ApprovalResponse.Allow());
         var second = new CountingSink(ApprovalResponse.Deny("nope"));
         var s = new SwitchableApprovalSink(first);
-        await s.RequestAsync(NewRequest(), default);
+        await s.RequestAsync(NewRequest(), TestContext.Current.CancellationToken);
         s.Switch(second);
-        var resp = await s.RequestAsync(NewRequest(), default);
+        var resp = await s.RequestAsync(NewRequest(), TestContext.Current.CancellationToken);
         resp.Behavior.Should().Be(ApprovalBehavior.Deny);
         first.Calls.Should().Be(1);
         second.Calls.Should().Be(1);

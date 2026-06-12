@@ -23,11 +23,11 @@ public class StateMachineTraceTests
 
         if (Environment.GetEnvironmentVariable("GENERATE_TRACES") == "1" || !File.Exists(expectedPath))
         {
-            await File.WriteAllTextAsync(expectedPath, actual);
+            await File.WriteAllTextAsync(expectedPath, actual, TestContext.Current.CancellationToken);
             return;
         }
 
-        var expected = await File.ReadAllTextAsync(expectedPath);
+        var expected = await File.ReadAllTextAsync(expectedPath, TestContext.Current.CancellationToken);
         Normalise(actual).Should().Be(Normalise(expected),
             $"state-machine trace for {scenario} should match {expectedPath}");
     }

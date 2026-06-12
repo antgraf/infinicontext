@@ -414,7 +414,7 @@ public class SessionRowViewModelTests
         var f = new SessionContextFactory(activeTaskId: null);
         var row = BuildRow(f);
 
-        var sentNow = await row.SendOrQueueAsync("hello");
+        var sentNow = await row.SendOrQueueAsync("hello", TestContext.Current.CancellationToken);
 
         sentNow.Should().BeTrue("Idle path writes to claude's stdin in the same call.");
         f.Session.SentMessages.Should().ContainSingle().Which.Should().Be("hello");
@@ -431,12 +431,12 @@ public class SessionRowViewModelTests
         var row = BuildRow(f);
 
         // First send goes immediately and moves state to Sending (turn in flight).
-        await row.SendOrQueueAsync("first");
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);
         f.Session.State.State.Should().Be(SessionState.Sending,
             "BeginSend inside SendUserMessageAsync transitions to Sending - that is the in-flight state.");
 
         // Second send during in-flight must NOT hit stdin.
-        var sentNow = await row.SendOrQueueAsync("second");
+        var sentNow = await row.SendOrQueueAsync("second", TestContext.Current.CancellationToken);
 
         sentNow.Should().BeFalse("glue path defers the write to the next Idle transition.");
         f.Session.SentMessages.Should().ContainSingle().Which.Should().Be("first",
@@ -454,10 +454,10 @@ public class SessionRowViewModelTests
         var f = new SessionContextFactory(activeTaskId: null);
         var row = BuildRow(f);
 
-        await row.SendOrQueueAsync("first");   // immediate, in-flight
-        await row.SendOrQueueAsync("a");        // bundle
-        await row.SendOrQueueAsync("b");        // bundle
-        await row.SendOrQueueAsync("c");        // bundle
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);   // immediate, in-flight
+        await row.SendOrQueueAsync("a", TestContext.Current.CancellationToken);        // bundle
+        await row.SendOrQueueAsync("b", TestContext.Current.CancellationToken);        // bundle
+        await row.SendOrQueueAsync("c", TestContext.Current.CancellationToken);        // bundle
 
         row.QueuedPromptCount.Should().Be(3);
         row.Turns.Should().HaveCount(2);
@@ -472,9 +472,9 @@ public class SessionRowViewModelTests
         var f = new SessionContextFactory(activeTaskId: null);
         var row = BuildRow(f);
 
-        await row.SendOrQueueAsync("first");
-        await row.SendOrQueueAsync("a");
-        await row.SendOrQueueAsync("b");
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);
+        await row.SendOrQueueAsync("a", TestContext.Current.CancellationToken);
+        await row.SendOrQueueAsync("b", TestContext.Current.CancellationToken);
 
         // First-turn lifecycle: assistant text + result. The result closes the in-flight turn
         // and triggers the glue flush.
@@ -482,7 +482,7 @@ public class SessionRowViewModelTests
         f.RaiseEvent(SessionContextFactory.MakeResult());
 
         // SendOrQueueAsync's flush path uses Task.Run; give the continuation a tick to run.
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         f.Session.SentMessages.Should().HaveCount(2, "first + combined-bundle.");
         f.Session.SentMessages[1].Should().Be("a\n\n---\n\nb",
@@ -499,9 +499,9 @@ public class SessionRowViewModelTests
         var f = new SessionContextFactory(activeTaskId: null);
         var row = BuildRow(f);
 
-        await row.SendOrQueueAsync("first");
-        await row.SendOrQueueAsync("a");
-        await row.SendOrQueueAsync("b");
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);
+        await row.SendOrQueueAsync("a", TestContext.Current.CancellationToken);
+        await row.SendOrQueueAsync("b", TestContext.Current.CancellationToken);
 
         var sentCountBefore = f.Session.SentMessages.Count;
         f.Session.State.HandleProcessExit(-1);
@@ -524,9 +524,9 @@ public class SessionRowViewModelTests
         var changed = new List<string?>();
         row.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
 
-        await row.SendOrQueueAsync("first");      // Idle path - no QueuedPromptCount change expected
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);      // Idle path - no QueuedPromptCount change expected
         changed.Clear();
-        await row.SendOrQueueAsync("buffered");    // glue path - QueuedPromptCount must raise
+        await row.SendOrQueueAsync("buffered", TestContext.Current.CancellationToken);    // glue path - QueuedPromptCount must raise
 
         changed.Should().Contain(nameof(SessionRowViewModel.QueuedPromptCount),
             "the host VM watches this property to surface the queued-count badge.");

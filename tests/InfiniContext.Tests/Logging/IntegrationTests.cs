@@ -35,14 +35,14 @@ public class IntegrationTests
                 logPath = logging.LogFilePath;
                 await using var session = new ClaudeSession(options, logging.Logger);
 
-                await session.StartAsync();
-                await session.SendUserMessageAsync("hi");
+                await session.StartAsync(TestContext.Current.CancellationToken);
+                await session.SendUserMessageAsync("hi", TestContext.Current.CancellationToken);
 
                 // Drain channel; this also gives FakeClaude time to finish streaming.
-                while (await session.Events.WaitToReadAsync())
+                while (await session.Events.WaitToReadAsync(TestContext.Current.CancellationToken))
                     while (session.Events.TryRead(out _)) { }
 
-                await session.WaitForExitAsync();
+                await session.WaitForExitAsync(TestContext.Current.CancellationToken);
             }
 
             // The Serilog file sink flushes on dispose; read with shared access in case OS still has handle.

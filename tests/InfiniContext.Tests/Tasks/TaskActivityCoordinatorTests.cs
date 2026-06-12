@@ -9,15 +9,15 @@ public class TaskActivityCoordinatorTests
     [Fact]
     public async Task Enter_marks_InProgress_with_clock_value()
     {
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var clock = new FakeClock(DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000));
         var coord = new TaskActivityCoordinator(store, clock.Now, Log.Logger);
 
-        var result = await coord.EnterAsync(Guid.NewGuid(), id);
+        var result = await coord.EnterAsync(Guid.NewGuid(), id, TestContext.Current.CancellationToken);
 
         result.Should().BeOfType<EnterTaskResult.GrantedResult>();
-        var row = await store.GetAsync(id);
+        var row = await store.GetAsync(id, TestContext.Current.CancellationToken);
         row!.Status.Should().Be(TaskItemStatus.InProgress);
         row.LastActiveAtUnixMs.Should().Be(1_700_000_000_000);
     }
@@ -25,17 +25,17 @@ public class TaskActivityCoordinatorTests
     [Fact]
     public async Task Leave_marks_Idle_with_clock_value()
     {
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var clock = new FakeClock(DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_500_000));
         var coord = new TaskActivityCoordinator(store, clock.Now, Log.Logger);
         var session = Guid.NewGuid();
-        await coord.EnterAsync(session, id);
+        await coord.EnterAsync(session, id, TestContext.Current.CancellationToken);
 
         clock.Advance(TimeSpan.FromMinutes(5));
-        await coord.LeaveAsync(session, id);
+        await coord.LeaveAsync(session, id, TestContext.Current.CancellationToken);
 
-        var row = await store.GetAsync(id);
+        var row = await store.GetAsync(id, TestContext.Current.CancellationToken);
         row!.Status.Should().Be(TaskItemStatus.Idle);
         row.LastActiveAtUnixMs.Should().Be(clock.Now().ToUnixTimeMilliseconds());
     }
@@ -43,14 +43,14 @@ public class TaskActivityCoordinatorTests
     [Fact]
     public async Task Enter_refuses_when_another_session_holds_the_task()
     {
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var coord = new TaskActivityCoordinator(store, () => DateTimeOffset.UtcNow, Log.Logger);
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
-        await coord.EnterAsync(first, id);
+        await coord.EnterAsync(first, id, TestContext.Current.CancellationToken);
 
-        var result = await coord.EnterAsync(second, id);
+        var result = await coord.EnterAsync(second, id, TestContext.Current.CancellationToken);
 
         result.Should().BeOfType<EnterTaskResult.RefusedResult>()
             .Which.Should().BeEquivalentTo(new { TaskId = id, HolderSessionId = first });
@@ -59,13 +59,13 @@ public class TaskActivityCoordinatorTests
     [Fact]
     public async Task Enter_is_idempotent_for_the_same_session()
     {
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var coord = new TaskActivityCoordinator(store, () => DateTimeOffset.UtcNow, Log.Logger);
         var session = Guid.NewGuid();
 
-        var first = await coord.EnterAsync(session, id);
-        var second = await coord.EnterAsync(session, id);
+        var first = await coord.EnterAsync(session, id, TestContext.Current.CancellationToken);
+        var second = await coord.EnterAsync(session, id, TestContext.Current.CancellationToken);
 
         first.Should().BeOfType<EnterTaskResult.GrantedResult>();
         second.Should().BeOfType<EnterTaskResult.GrantedResult>("re-entering with the same session id must not be refused");
@@ -74,15 +74,15 @@ public class TaskActivityCoordinatorTests
     [Fact]
     public async Task Leave_releases_claim_allowing_another_session_to_enter()
     {
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var coord = new TaskActivityCoordinator(store, () => DateTimeOffset.UtcNow, Log.Logger);
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
-        await coord.EnterAsync(first, id);
-        await coord.LeaveAsync(first, id);
+        await coord.EnterAsync(first, id, TestContext.Current.CancellationToken);
+        await coord.LeaveAsync(first, id, TestContext.Current.CancellationToken);
 
-        var result = await coord.EnterAsync(second, id);
+        var result = await coord.EnterAsync(second, id, TestContext.Current.CancellationToken);
 
         result.Should().BeOfType<EnterTaskResult.GrantedResult>();
     }
@@ -93,15 +93,15 @@ public class TaskActivityCoordinatorTests
         // Matches the prior outer-loop semantics: Idle writes flush unconditionally, but the
         // in-memory claim only releases when the holder leaves. This guards against a stray
         // OnExit on session B clearing session A's hold on the task.
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var id = await SeedTaskAsync(store);
         var coord = new TaskActivityCoordinator(store, () => DateTimeOffset.UtcNow, Log.Logger);
         var holder = Guid.NewGuid();
         var other = Guid.NewGuid();
-        await coord.EnterAsync(holder, id);
+        await coord.EnterAsync(holder, id, TestContext.Current.CancellationToken);
 
-        await coord.LeaveAsync(other, id);
-        var reenter = await coord.EnterAsync(other, id);
+        await coord.LeaveAsync(other, id, TestContext.Current.CancellationToken);
+        var reenter = await coord.EnterAsync(other, id, TestContext.Current.CancellationToken);
 
         reenter.Should().BeOfType<EnterTaskResult.RefusedResult>()
             .Which.HolderSessionId.Should().Be(holder);
@@ -113,10 +113,10 @@ public class TaskActivityCoordinatorTests
         // TaskStore.UpdateStatusAsync returns false (rather than throwing) when the id is
         // unknown. The coordinator should not propagate that to the caller — the original
         // outer-loop just logged and continued.
-        await using var store = await TaskStore.OpenAsync(":memory:");
+        await using var store = await TaskStore.OpenAsync(":memory:", TestContext.Current.CancellationToken);
         var coord = new TaskActivityCoordinator(store, () => DateTimeOffset.UtcNow, Log.Logger);
 
-        var result = await coord.EnterAsync(Guid.NewGuid(), taskId: 9_999);
+        var result = await coord.EnterAsync(Guid.NewGuid(), taskId: 9_999, ct: TestContext.Current.CancellationToken);
 
         result.Should().BeOfType<EnterTaskResult.GrantedResult>();
     }

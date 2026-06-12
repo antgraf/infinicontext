@@ -44,7 +44,7 @@ public class ToolStackTests
 
         var parser = new StreamJsonParser();
         using var reader = new StreamReader(TestPaths.Fixture("nested-tool"));
-        await foreach (var ev in parser.ParseAsync(reader))
+        await foreach (var ev in parser.ParseAsync(reader, TestContext.Current.CancellationToken))
         {
             sm.Apply(ev);
         }

@@ -15,7 +15,7 @@ public class ThresholdInjectorTests
         var sent = new List<string>();
         var injector = new ThresholdInjector((msg, _) => { sent.Add(msg); return Task.CompletedTask; });
 
-        await injector.OnSoftAsync(new ContextPressureCrossing(130_000, 200_000, 0.65, "claude-opus-4-7"));
+        await injector.OnSoftAsync(new ContextPressureCrossing(130_000, 200_000, 0.65, "claude-opus-4-7"), TestContext.Current.CancellationToken);
 
         sent.Should().ContainSingle();
         var msg = sent[0];
@@ -31,7 +31,7 @@ public class ThresholdInjectorTests
         var sent = new List<string>();
         var injector = new ThresholdInjector((msg, _) => { sent.Add(msg); return Task.CompletedTask; });
 
-        await injector.OnHardAsync(new ContextPressureCrossing(180_000, 200_000, 0.90, "claude-opus-4-7"));
+        await injector.OnHardAsync(new ContextPressureCrossing(180_000, 200_000, 0.90, "claude-opus-4-7"), TestContext.Current.CancellationToken);
 
         sent.Should().ContainSingle();
         var msg = sent[0];

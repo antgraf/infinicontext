@@ -40,7 +40,7 @@ public class GuiSettingsTests
 
         // Null means "never positioned" - the View falls back to OS placement. It must not become
         // 0,0 (a real on-screen coordinate that would wrongly pin the window to the corner).
-        var json = await File.ReadAllTextAsync(path);
+        var json = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
         json.Should().NotContain("windowX");
         json.Should().NotContain("windowY");
 
@@ -58,7 +58,7 @@ public class GuiSettingsTests
         // size/maximized but no windowX/windowY. The permissive schema must load it without error.
         await File.WriteAllTextAsync(path, """
             { "version": 1, "windowWidth": 1280, "windowHeight": 800, "windowMaximized": false }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var loaded = await GuiSettings.LoadAsync(path);
 

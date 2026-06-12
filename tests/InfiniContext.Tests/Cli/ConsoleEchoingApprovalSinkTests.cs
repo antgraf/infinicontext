@@ -10,7 +10,7 @@ public class ConsoleEchoingApprovalSinkTests
     public async Task Allow_decision_writes_allow_line_with_tool_name()
     {
         var (sink, output) = New(ApprovalResponse.Allow());
-        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
 
         var rendered = output.ToString();
         rendered.Should().Contain("[approval]");
@@ -22,7 +22,7 @@ public class ConsoleEchoingApprovalSinkTests
     public async Task Deny_decision_writes_deny_line_with_reason()
     {
         var (sink, output) = New(ApprovalResponse.Deny("auto-deny [Destructive]: rm -rf /"));
-        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
 
         var rendered = output.ToString();
         rendered.Should().Contain("DENY");
@@ -35,7 +35,7 @@ public class ConsoleEchoingApprovalSinkTests
     {
         var inner = ApprovalResponse.Deny("nope");
         var (sink, _) = New(inner);
-        var actual = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        var actual = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
 
         actual.Behavior.Should().Be(ApprovalBehavior.Deny);
         actual.Message.Should().Be("nope");
@@ -48,7 +48,7 @@ public class ConsoleEchoingApprovalSinkTests
         var sink = new ConsoleEchoingApprovalSink(new ThrowingSink(), output, new object());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default));
+            sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken));
         output.ToString().Should().BeEmpty();
     }
 
@@ -60,7 +60,7 @@ public class ConsoleEchoingApprovalSinkTests
         var sink = new ConsoleEchoingApprovalSink(inner, output, new object());
 
         sink.Inner.Should().BeSameAs(inner);
-        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
         inner.Calls.Should().Be(1);
     }
 

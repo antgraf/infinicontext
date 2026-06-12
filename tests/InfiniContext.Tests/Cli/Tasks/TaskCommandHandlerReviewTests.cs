@@ -149,7 +149,7 @@ public class TaskCommandHandlerReviewTests
         var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
         var reportFiles = Directory.GetFiles(folder.Path, "review-*.md");
         reportFiles.Should().HaveCount(1);
-        var reportContent = await File.ReadAllTextAsync(reportFiles[0]);
+        var reportContent = await File.ReadAllTextAsync(reportFiles[0], TestContext.Current.CancellationToken);
         reportContent.Should().Contain("# Review report - Test task");
         reportContent.Should().Contain($"**Task:** {task.Id:D4}");
     }
@@ -164,11 +164,11 @@ public class TaskCommandHandlerReviewTests
 
         var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
         var indexPath = Path.Combine(folder.Path, "index.md");
-        var beforeContent = await File.ReadAllTextAsync(indexPath);
+        var beforeContent = await File.ReadAllTextAsync(indexPath, TestContext.Current.CancellationToken);
 
         await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
 
-        var afterContent = await File.ReadAllTextAsync(indexPath);
+        var afterContent = await File.ReadAllTextAsync(indexPath, TestContext.Current.CancellationToken);
         afterContent.Should().StartWith(beforeContent.TrimEnd()); // existing content preserved
         afterContent.Should().Contain("| review-");
         afterContent.Should().Contain("Review report (applied=0 rejected=0 awaiting=0)");
@@ -184,11 +184,11 @@ public class TaskCommandHandlerReviewTests
 
         var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
         var progressPath = Path.Combine(folder.Path, "progress.md");
-        var beforeContent = await File.ReadAllTextAsync(progressPath);
+        var beforeContent = await File.ReadAllTextAsync(progressPath, TestContext.Current.CancellationToken);
 
         await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
 
-        var afterContent = await File.ReadAllTextAsync(progressPath);
+        var afterContent = await File.ReadAllTextAsync(progressPath, TestContext.Current.CancellationToken);
         afterContent.Should().StartWith(beforeContent.TrimEnd()); // existing content preserved
         afterContent.Should().Contain("(review)");
         afterContent.Should().Contain("Ran `/task review`. applied=0 rejected=0 awaiting=0");
@@ -208,7 +208,7 @@ public class TaskCommandHandlerReviewTests
         await fx.Handler.HandleReviewAsync(new TaskCommand.Review(Id: task.Id, Scope: null, SkipConfirm: true), activeTaskId: null, CancellationToken.None);
 
         var folder = new TaskFolder(task.HomeCwd, task.Id, Slugify.For(task.Title));
-        var indexAfter = await File.ReadAllTextAsync(Path.Combine(folder.Path, "index.md"));
+        var indexAfter = await File.ReadAllTextAsync(Path.Combine(folder.Path, "index.md"), TestContext.Current.CancellationToken);
         indexAfter.Should().Contain("| review-");
     }
 

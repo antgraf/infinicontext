@@ -14,7 +14,8 @@ public class IssueServiceTests
 
         var entry = await fx.Issues.AppendAsync(
             task.Id,
-            new IssueCapture("First issue", IssueKind.Bug, Where: "src/Foo.cs:42", Body: null, LoggedBy: "test"));
+            new IssueCapture("First issue", IssueKind.Bug, Where: "src/Foo.cs:42", Body: null, LoggedBy: "test"),
+            TestContext.Current.CancellationToken);
 
         entry.LocalId.Should().Be(1);
         entry.Title.Should().Be("First issue");
@@ -22,7 +23,7 @@ public class IssueServiceTests
         entry.Where.Should().Be("src/Foo.cs:42");
         entry.Status.Should().Be(IssueStatus.Open);
 
-        var content = await File.ReadAllTextAsync(fx.IssuesPath(task));
+        var content = await File.ReadAllTextAsync(fx.IssuesPath(task), TestContext.Current.CancellationToken);
         content.Should().Contain("# Issues - Implement feature");
         content.Should().Contain("## 0001 - First issue");
         content.Should().Contain("- **Kind:** bug");
@@ -36,13 +37,13 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("a"));
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("b"));
-        var third = await fx.Issues.AppendAsync(task.Id, new IssueCapture("c"));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("a"), TestContext.Current.CancellationToken);
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("b"), TestContext.Current.CancellationToken);
+        var third = await fx.Issues.AppendAsync(task.Id, new IssueCapture("c"), TestContext.Current.CancellationToken);
 
         third.LocalId.Should().Be(3);
 
-        var entries = await fx.Issues.ListAsync(task.Id);
+        var entries = await fx.Issues.ListAsync(task.Id, TestContext.Current.CancellationToken);
         entries.Select(e => e.LocalId).Should().Equal(1, 2, 3);
         entries.Select(e => e.Title).Should().Equal("a", "b", "c");
     }
@@ -54,20 +55,20 @@ public class IssueServiceTests
         // not 3 - max(seen) + 1.
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("a"));
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("b"));
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("c"));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("a"), TestContext.Current.CancellationToken);
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("b"), TestContext.Current.CancellationToken);
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("c"), TestContext.Current.CancellationToken);
 
         var path = fx.IssuesPath(task);
-        var content = await File.ReadAllTextAsync(path);
+        var content = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
         // Strip the second entry block (heading line through next heading, exclusive).
         var lines = content.Split('\n').ToList();
         var b = lines.FindIndex(l => l.StartsWith("## 0002 "));
         var c = lines.FindIndex(l => l.StartsWith("## 0003 "));
         lines.RemoveRange(b, c - b);
-        await File.WriteAllTextAsync(path, string.Join('\n', lines));
+        await File.WriteAllTextAsync(path, string.Join('\n', lines), TestContext.Current.CancellationToken);
 
-        var fourth = await fx.Issues.AppendAsync(task.Id, new IssueCapture("d"));
+        var fourth = await fx.Issues.AppendAsync(task.Id, new IssueCapture("d"), TestContext.Current.CancellationToken);
         fourth.LocalId.Should().Be(4);
     }
 
@@ -77,7 +78,7 @@ public class IssueServiceTests
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
 
-        var entries = await fx.Issues.ListAsync(task.Id);
+        var entries = await fx.Issues.ListAsync(task.Id, TestContext.Current.CancellationToken);
 
         entries.Should().BeEmpty();
     }
@@ -87,16 +88,16 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("bug 1", IssueKind.Bug));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("bug 1", IssueKind.Bug), TestContext.Current.CancellationToken);
 
-        var updated = await fx.Issues.ResolveAsync(task.Id, 1, IssueStatus.Resolved, "fixed in abc123");
+        var updated = await fx.Issues.ResolveAsync(task.Id, 1, IssueStatus.Resolved, "fixed in abc123", TestContext.Current.CancellationToken);
 
         updated.Should().NotBeNull();
         updated!.Status.Should().Be(IssueStatus.Resolved);
         updated.Resolution.Should().StartWith(fx.Clock.UtcNow.UtcDateTime.ToString("yyyy-MM-dd"));
         updated.Resolution.Should().EndWith("fixed in abc123");
 
-        var content = await File.ReadAllTextAsync(fx.IssuesPath(task));
+        var content = await File.ReadAllTextAsync(fx.IssuesPath(task), TestContext.Current.CancellationToken);
         content.Should().Contain("- **Status:** resolved");
         content.Should().Contain("- **Resolution:** ");
         content.Should().Contain("fixed in abc123");
@@ -111,13 +112,13 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"), TestContext.Current.CancellationToken);
 
-        var updated = await fx.Issues.ResolveAsync(task.Id, 1, status, note: null);
+        var updated = await fx.Issues.ResolveAsync(task.Id, 1, status, note: null, ct: TestContext.Current.CancellationToken);
 
         updated.Should().NotBeNull();
         updated!.Status.Should().Be(status);
-        (await File.ReadAllTextAsync(fx.IssuesPath(task))).Should().Contain($"- **Status:** {expectedWire}");
+        (await File.ReadAllTextAsync(fx.IssuesPath(task), TestContext.Current.CancellationToken)).Should().Contain($"- **Status:** {expectedWire}");
     }
 
     [Fact]
@@ -125,7 +126,7 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"), TestContext.Current.CancellationToken);
 
         var act = () => fx.Issues.ResolveAsync(task.Id, 1, IssueStatus.Open, note: null);
 
@@ -137,9 +138,9 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("x"), TestContext.Current.CancellationToken);
 
-        var result = await fx.Issues.ResolveAsync(task.Id, 99, IssueStatus.Resolved, "n/a");
+        var result = await fx.Issues.ResolveAsync(task.Id, 99, IssueStatus.Resolved, "n/a", TestContext.Current.CancellationToken);
 
         result.Should().BeNull();
     }
@@ -151,7 +152,7 @@ public class IssueServiceTests
         var task = await fx.CreateTaskAsync("T");
         // No issues.md created yet.
 
-        var result = await fx.Issues.ResolveAsync(task.Id, 1, IssueStatus.Resolved, null);
+        var result = await fx.Issues.ResolveAsync(task.Id, 1, IssueStatus.Resolved, null, TestContext.Current.CancellationToken);
 
         result.Should().BeNull();
     }
@@ -161,10 +162,10 @@ public class IssueServiceTests
     {
         await using var fx = await Fixture.OpenAsync();
         var task = await fx.CreateTaskAsync("T");
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("Title 1", IssueKind.Smell, Where: "f.cs:1", LoggedBy: "alice"));
-        await fx.Issues.AppendAsync(task.Id, new IssueCapture("Title 2", IssueKind.Question));
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("Title 1", IssueKind.Smell, Where: "f.cs:1", LoggedBy: "alice"), TestContext.Current.CancellationToken);
+        await fx.Issues.AppendAsync(task.Id, new IssueCapture("Title 2", IssueKind.Question), TestContext.Current.CancellationToken);
 
-        var list = await fx.Issues.ListAsync(task.Id);
+        var list = await fx.Issues.ListAsync(task.Id, TestContext.Current.CancellationToken);
 
         list.Should().HaveCount(2);
         list[0].Title.Should().Be("Title 1");

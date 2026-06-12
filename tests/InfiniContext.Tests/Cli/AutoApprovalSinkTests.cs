@@ -21,7 +21,7 @@ public class AutoApprovalSinkTests
         var fake = new FakeLightModel(new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.None, "looks fine"));
         var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"ls\"}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"ls\"}"), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Allow);
     }
 
@@ -32,7 +32,7 @@ public class AutoApprovalSinkTests
         var fake = new FakeLightModel(review);
         var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"rm -rf /\"}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"rm -rf /\"}"), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
         response.Message.Should().Contain("Destructive");
         response.Message.Should().Contain("rm -rf /");
@@ -46,7 +46,7 @@ public class AutoApprovalSinkTests
         var options = new AutoApprovalOptions { OnLowConfidence = LowConfidenceFallback.Deny };
         var sink = new AutoApprovalSink(fake, NeverCalled(), options, "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"curl example.com\"}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"curl example.com\"}"), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
         response.Message.Should().Contain("low-confidence");
     }
@@ -60,7 +60,7 @@ public class AutoApprovalSinkTests
         var options = new AutoApprovalOptions { OnLowConfidence = LowConfidenceFallback.FallbackToAsk };
         var sink = new AutoApprovalSink(fake, fallback, options, "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Allow);
         fallback.CallCount.Should().Be(1);
     }
@@ -71,7 +71,7 @@ public class AutoApprovalSinkTests
         var fake = new FakeLightModel(new InvalidOperationException("boom"));
         var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
         response.Message.Should().Contain("light-model error");
     }
@@ -84,7 +84,7 @@ public class AutoApprovalSinkTests
         var options = new AutoApprovalOptions { OnLowConfidence = LowConfidenceFallback.FallbackToAsk };
         var sink = new AutoApprovalSink(fake, fallback, options, "/tmp", Silent);
 
-        var response = await sink.RequestAsync(Request("Bash", "{}"), default);
+        var response = await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
         fallback.CallCount.Should().Be(1);
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
         response.Message.Should().Be("user said no");
@@ -96,7 +96,7 @@ public class AutoApprovalSinkTests
         var fake = new FakeLightModel(new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.None, ""));
         var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), "/work/dir", Silent);
 
-        await sink.RequestAsync(Request("Bash", "{}"), default);
+        await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
 
         fake.LastRequest.Should().NotBeNull();
         fake.LastRequest!.Cwd.Should().Be("/work/dir");

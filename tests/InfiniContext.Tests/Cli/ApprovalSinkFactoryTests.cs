@@ -30,7 +30,7 @@ public class ApprovalSinkFactoryTests
         effective.Should().Be(ApprovalMode.Deny);
         Unwrap(sink).Should().BeOfType<StaticApprovalSink>();
 
-        var response = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        var response = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Deny);
     }
 
@@ -46,7 +46,7 @@ public class ApprovalSinkFactoryTests
         rendered.Should().Contain("ALLOW");
         rendered.Should().Contain("/approval auto"); // banner suggests the safer middle ground
 
-        var response = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        var response = await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
         response.Behavior.Should().Be(ApprovalBehavior.Allow);
     }
 
@@ -239,7 +239,7 @@ public class ApprovalSinkFactoryTests
         var (factory, _, slot, transcript) = NewFactory();
         var sink = factory.Build(ApprovalMode.Deny, slot, transcript, cwd: "/tmp", out _);
 
-        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
 
         // Phase 5: the per-request echo lands in the originating session's transcript (rather
         // than the host-shared console stream) so multi-session output stays per-pane.
@@ -255,7 +255,7 @@ public class ApprovalSinkFactoryTests
         var (factory, _, slot, transcript) = NewFactory();
         var sink = factory.Build(ApprovalMode.Allow, slot, transcript, cwd: "/tmp", out _);
 
-        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), default);
+        await sink.RequestAsync(new ApprovalRequest("Bash", new JsonObject()), TestContext.Current.CancellationToken);
 
         var rendered = string.Concat(transcript.Snapshot());
         rendered.Should().Contain("[approval]");

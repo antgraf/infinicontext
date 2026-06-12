@@ -33,7 +33,7 @@ public class LockChannelE2ETests
 
         // Acquire
         await writer.WriteLineAsync(new LockAcquireRequest("a.md", "owner-1").ToJson().ToJsonString());
-        var acqLine = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no acquire response");
+        var acqLine = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no acquire response");
         var acq = LockAcquireResponse.FromJson((JsonObject)JsonNode.Parse(acqLine)!);
         acq.Ok.Should().BeTrue();
         acq.Token.Should().NotBeNullOrEmpty();
@@ -41,7 +41,7 @@ public class LockChannelE2ETests
 
         // Release
         await writer.WriteLineAsync(new LockReleaseRequest(acq.Token!).ToJson().ToJsonString());
-        var relLine = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no release response");
+        var relLine = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no release response");
         var rel = LockReleaseResponse.FromJson((JsonObject)JsonNode.Parse(relLine)!);
         rel.Ok.Should().BeTrue();
 
@@ -54,7 +54,7 @@ public class LockChannelE2ETests
     {
         var registry = new LockRegistry(pollInterval: TimeSpan.FromMilliseconds(5));
         // Pre-populate the registry with a held lock owned by a different owner.
-        await registry.AcquireAsync("a.md", "external-owner", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50));
+        await registry.AcquireAsync("a.md", "external-owner", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
 
         var pipeName = ApprovalChannel.GeneratePipeName();
         await using var channel = new ApprovalChannel(
@@ -68,7 +68,7 @@ public class LockChannelE2ETests
         var (reader, writer) = Open(pipe);
 
         await writer.WriteLineAsync(new LockAcquireRequest("a.md", "owner-1").ToJson().ToJsonString());
-        var line = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no response");
+        var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no response");
         var resp = LockAcquireResponse.FromJson((JsonObject)JsonNode.Parse(line)!);
 
         resp.Ok.Should().BeFalse();
@@ -93,7 +93,7 @@ public class LockChannelE2ETests
 
             // Sidecar uses the pipe name as the owner id (matches ApprovalSidecarHost).
             await writer.WriteLineAsync(new LockAcquireRequest("a.md", pipeName).ToJson().ToJsonString());
-            var line = await reader.ReadLineAsync() ?? throw new InvalidOperationException("no response");
+            var line = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no response");
             LockAcquireResponse.FromJson((JsonObject)JsonNode.Parse(line)!).Ok.Should().BeTrue();
             registry.Snapshot().Should().HaveCount(1);
         }
@@ -125,13 +125,13 @@ public class LockChannelE2ETests
         // Approval (no kind field — back-compat).
         await writer.WriteLineAsync(new ApprovalRequest("Bash", new JsonObject { ["command"] = "ls" })
             .ToJson().ToJsonString());
-        var apprLine = await reader.ReadLineAsync() ?? "";
+        var apprLine = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? "";
         var appr = (JsonObject)JsonNode.Parse(apprLine)!;
         appr["behavior"]!.GetValue<string>().Should().Be("allow");
 
         // Lock acquire on the same connection.
         await writer.WriteLineAsync(new LockAcquireRequest("a.md", "owner-1").ToJson().ToJsonString());
-        var lockLine = await reader.ReadLineAsync() ?? "";
+        var lockLine = await reader.ReadLineAsync(TestContext.Current.CancellationToken) ?? "";
         var lockResp = LockAcquireResponse.FromJson((JsonObject)JsonNode.Parse(lockLine)!);
         lockResp.Ok.Should().BeTrue();
 

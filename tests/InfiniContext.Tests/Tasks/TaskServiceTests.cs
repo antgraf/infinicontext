@@ -14,7 +14,7 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Implement Phase 3");
 
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "We need to wire TaskStore + TaskFolder + light model into a service.");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "We need to wire TaskStore + TaskFolder + light model into a service.", ct: TestContext.Current.CancellationToken);
 
         record.Id.Should().Be(1);
         record.Title.Should().Be("Implement Phase 3");
@@ -26,11 +26,11 @@ public class TaskServiceTests
         // Folder scaffolds + description override exist on disk.
         var folder = new TaskFolder(fixture.HomeCwd, record.Id, Slugify.For(record.Title));
         Directory.Exists(folder.Path).Should().BeTrue();
-        var desc = await File.ReadAllTextAsync(Path.Combine(folder.Path, "description.md"));
+        var desc = await File.ReadAllTextAsync(Path.Combine(folder.Path, "description.md"), TestContext.Current.CancellationToken);
         desc.Should().Contain("# Implement Phase 3").And.Contain("wire TaskStore + TaskFolder");
 
         // Row round-trips from the store.
-        var roundtrip = await fixture.Store.GetAsync(record.Id);
+        var roundtrip = await fixture.Store.GetAsync(record.Id, TestContext.Current.CancellationToken);
         roundtrip.Should().Be(record);
 
         fixture.LightModel.Calls.Should().ContainSingle()
@@ -43,10 +43,10 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Use Fable");
 
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: "claude-fable-5");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: "claude-fable-5", ct: TestContext.Current.CancellationToken);
 
         record.DefaultModel.Should().Be("claude-fable-5");
-        var roundtrip = await fixture.Store.GetAsync(record.Id);
+        var roundtrip = await fixture.Store.GetAsync(record.Id, TestContext.Current.CancellationToken);
         roundtrip!.DefaultModel.Should().Be("claude-fable-5");
     }
 
@@ -59,10 +59,10 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("No model");
 
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: model);
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", defaultModel: model, ct: TestContext.Current.CancellationToken);
 
         record.DefaultModel.Should().BeNull();
-        var roundtrip = await fixture.Store.GetAsync(record.Id);
+        var roundtrip = await fixture.Store.GetAsync(record.Id, TestContext.Current.CancellationToken);
         roundtrip!.DefaultModel.Should().BeNull();
     }
 
@@ -72,7 +72,7 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("\"Implement   Phase\u00a03\"   \n");
 
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "anything", ct: TestContext.Current.CancellationToken);
 
         record.Title.Should().Be("Implement   Phase\u00a03"); // quotes + trailing whitespace gone
         // Slug strips all whitespace consistently regardless of input internal whitespace.
@@ -90,13 +90,13 @@ public class TaskServiceTests
         fixture.LightModel.QueueTitle("I don't have access to read files from your local filesystem. I cannot view the documents you've referenced to plan phase 3.");
 
         const string description = "Review @docs/foo.md and @docs/bar.md to plan phase 3 of the migration.";
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, description);
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, description, ct: TestContext.Current.CancellationToken);
 
         record.Title.Should().NotContain("I don't have access");
         record.Title.Should().Be("Review @docs/foo.md and @docs/bar.md to plan");
 
         var folder = new TaskFolder(fixture.HomeCwd, record.Id, Slugify.For(record.Title));
-        var desc = await File.ReadAllTextAsync(Path.Combine(folder.Path, "description.md"));
+        var desc = await File.ReadAllTextAsync(Path.Combine(folder.Path, "description.md"), TestContext.Current.CancellationToken);
         desc.Should().Contain("@docs/foo.md").And.Contain("@docs/bar.md");
     }
 
@@ -151,10 +151,10 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Implement foo");
-        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "do the foo work");
+        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "do the foo work", ct: TestContext.Current.CancellationToken);
 
-        var fork1 = await fixture.Service.ForkAsync(parent.Id);
-        var fork2 = await fixture.Service.ForkAsync(fork1.Id);
+        var fork1 = await fixture.Service.ForkAsync(parent.Id, ct: TestContext.Current.CancellationToken);
+        var fork2 = await fixture.Service.ForkAsync(fork1.Id, ct: TestContext.Current.CancellationToken);
 
         fork1.Title.Should().Be("Implement foo (2)");
         fork2.Title.Should().Be("Implement foo (3)");
@@ -167,9 +167,9 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Implement foo");
-        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "do the foo work");
+        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "do the foo work", ct: TestContext.Current.CancellationToken);
 
-        var fork = await fixture.Service.ForkAsync(parent.Id, overrideTitle: "Spike: alternative approach");
+        var fork = await fixture.Service.ForkAsync(parent.Id, overrideTitle: "Spike: alternative approach", ct: TestContext.Current.CancellationToken);
 
         fork.Title.Should().Be("Spike: alternative approach");
         fork.ParentTaskId.Should().Be(parent.Id);
@@ -180,16 +180,16 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Source task");
-        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "...");
+        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "...", ct: TestContext.Current.CancellationToken);
         // Add a custom artifact into the source folder so we can verify it's copied.
         var parentFolder = new TaskFolder(fixture.HomeCwd, parent.Id, Slugify.For(parent.Title));
-        await File.WriteAllTextAsync(Path.Combine(parentFolder.Path, "research.md"), "investigation notes");
+        await File.WriteAllTextAsync(Path.Combine(parentFolder.Path, "research.md"), "investigation notes", TestContext.Current.CancellationToken);
 
-        var fork = await fixture.Service.ForkAsync(parent.Id);
+        var fork = await fixture.Service.ForkAsync(parent.Id, ct: TestContext.Current.CancellationToken);
 
         var forkFolder = new TaskFolder(fixture.HomeCwd, fork.Id, Slugify.For(fork.Title));
         File.Exists(Path.Combine(forkFolder.Path, "research.md")).Should().BeTrue();
-        (await File.ReadAllTextAsync(Path.Combine(forkFolder.Path, "research.md"))).Should().Be("investigation notes");
+        (await File.ReadAllTextAsync(Path.Combine(forkFolder.Path, "research.md"), TestContext.Current.CancellationToken)).Should().Be("investigation notes");
     }
 
     [Fact]
@@ -208,27 +208,27 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Alpha");
         fixture.LightModel.QueueTitle("Bravo");
-        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "alpha work");
-        var b = await fixture.Service.CreateAsync(fixture.HomeCwd, "bravo work");
+        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "alpha work", ct: TestContext.Current.CancellationToken);
+        var b = await fixture.Service.CreateAsync(fixture.HomeCwd, "bravo work", ct: TestContext.Current.CancellationToken);
         // Mutate progress.md on each so we can see concatenation.
         var aFolder = new TaskFolder(fixture.HomeCwd, a.Id, Slugify.For(a.Title));
         var bFolder = new TaskFolder(fixture.HomeCwd, b.Id, Slugify.For(b.Title));
-        await File.WriteAllTextAsync(Path.Combine(aFolder.Path, "progress.md"), "alpha progress");
-        await File.WriteAllTextAsync(Path.Combine(bFolder.Path, "progress.md"), "bravo progress");
+        await File.WriteAllTextAsync(Path.Combine(aFolder.Path, "progress.md"), "alpha progress", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(bFolder.Path, "progress.md"), "bravo progress", TestContext.Current.CancellationToken);
 
-        var merged = await fixture.Service.MergeAsync(new[] { a.Id, b.Id }, MergeTier.DeterministicConcat);
+        var merged = await fixture.Service.MergeAsync(new[] { a.Id, b.Id }, MergeTier.DeterministicConcat, TestContext.Current.CancellationToken);
 
         merged.ParentTaskId.Should().BeNull(); // multi-parent post-MVP
         merged.Title.Should().StartWith("Merge of ");
         var mergedFolder = new TaskFolder(fixture.HomeCwd, merged.Id, Slugify.For(merged.Title));
-        var progress = await File.ReadAllTextAsync(Path.Combine(mergedFolder.Path, "progress.md"));
+        var progress = await File.ReadAllTextAsync(Path.Combine(mergedFolder.Path, "progress.md"), TestContext.Current.CancellationToken);
         progress.Should()
             .Contain("merged from 2 source tasks")
             .And.Contain($"From task {a.Id:D4}").And.Contain("alpha progress")
             .And.Contain($"From task {b.Id:D4}").And.Contain("bravo progress");
 
         // Index lists merged files (description, progress) and skips itself.
-        var index = await File.ReadAllTextAsync(Path.Combine(mergedFolder.Path, "index.md"));
+        var index = await File.ReadAllTextAsync(Path.Combine(mergedFolder.Path, "index.md"), TestContext.Current.CancellationToken);
         index.Should().Contain("description.md").And.Contain("progress.md");
         index.Should().NotContain("| index.md |");
     }
@@ -241,8 +241,8 @@ public class TaskServiceTests
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("a");
         fixture.LightModel.QueueTitle("b");
-        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "x");
-        var b = await fixture.Service.CreateAsync(fixture.HomeCwd, "y");
+        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "x", ct: TestContext.Current.CancellationToken);
+        var b = await fixture.Service.CreateAsync(fixture.HomeCwd, "y", ct: TestContext.Current.CancellationToken);
 
         var act = () => fixture.Service.MergeAsync(new[] { a.Id, b.Id }, tier);
 
@@ -254,7 +254,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("only");
-        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "x");
+        var a = await fixture.Service.CreateAsync(fixture.HomeCwd, "x", ct: TestContext.Current.CancellationToken);
 
         var act = () => fixture.Service.MergeAsync(new[] { a.Id }, MergeTier.DeterministicConcat);
 
@@ -266,14 +266,14 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("here");
-        var here = await fixture.Service.CreateAsync(fixture.HomeCwd, "x");
+        var here = await fixture.Service.CreateAsync(fixture.HomeCwd, "x", ct: TestContext.Current.CancellationToken);
         // Insert a record with a different home_cwd directly through the store so we don't
         // need to scaffold an extra temp dir.
         var elsewhereCwd = Path.Combine(fixture.TempPath, "other-repo");
         Directory.CreateDirectory(elsewhereCwd);
-        var elsewhereId = await fixture.Store.AllocateIdAsync();
+        var elsewhereId = await fixture.Store.AllocateIdAsync(TestContext.Current.CancellationToken);
         var elsewhere = new TaskRecord(elsewhereId, elsewhereCwd, "Elsewhere", 0, 0, TaskItemStatus.InProgress, null);
-        await fixture.Store.CreateAsync(elsewhere);
+        await fixture.Store.CreateAsync(elsewhere, TestContext.Current.CancellationToken);
 
         var act = () => fixture.Service.MergeAsync(new[] { here.Id, elsewhere.Id }, MergeTier.DeterministicConcat);
 
@@ -289,22 +289,22 @@ public class TaskServiceTests
         fixture.LightModel.QueueTitle("third");
 
         fixture.Clock.Advance(TimeSpan.FromMinutes(1));
-        var first = await fixture.Service.CreateAsync(fixture.HomeCwd, "1");
+        var first = await fixture.Service.CreateAsync(fixture.HomeCwd, "1", ct: TestContext.Current.CancellationToken);
         fixture.Clock.Advance(TimeSpan.FromMinutes(1));
-        var second = await fixture.Service.CreateAsync(fixture.HomeCwd, "2");
+        var second = await fixture.Service.CreateAsync(fixture.HomeCwd, "2", ct: TestContext.Current.CancellationToken);
         fixture.Clock.Advance(TimeSpan.FromMinutes(1));
-        var third = await fixture.Service.CreateAsync(fixture.HomeCwd, "3");
+        var third = await fixture.Service.CreateAsync(fixture.HomeCwd, "3", ct: TestContext.Current.CancellationToken);
 
         // Mark first as Idle so the status filter has something to remove.
-        await fixture.Store.UpdateStatusAsync(first.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds() - 60_000);
+        await fixture.Store.UpdateStatusAsync(first.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds() - 60_000, TestContext.Current.CancellationToken);
 
-        var all = await fixture.Service.ListAsync();
+        var all = await fixture.Service.ListAsync(ct: TestContext.Current.CancellationToken);
         all.Select(r => r.Id).Should().Equal(new[] { third.Id, second.Id, first.Id });
 
-        var inProgress = await fixture.Service.ListAsync(new ListFilter(Status: TaskItemStatus.InProgress));
+        var inProgress = await fixture.Service.ListAsync(new ListFilter(Status: TaskItemStatus.InProgress), TestContext.Current.CancellationToken);
         inProgress.Select(r => r.Id).Should().Equal(new[] { third.Id, second.Id });
 
-        var top = await fixture.Service.ListAsync(new ListFilter(Limit: 2));
+        var top = await fixture.Service.ListAsync(new ListFilter(Limit: 2), TestContext.Current.CancellationToken);
         top.Select(r => r.Id).Should().Equal(new[] { third.Id, second.Id });
     }
 
@@ -313,9 +313,9 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("only");
-        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "x");
+        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "x", ct: TestContext.Current.CancellationToken);
 
-        var details = await fixture.Service.GetAsync(rec.Id);
+        var details = await fixture.Service.GetAsync(rec.Id, TestContext.Current.CancellationToken);
 
         details.Should().NotBeNull();
         details!.Record.Should().Be(rec);
@@ -328,7 +328,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
 
-        var details = await fixture.Service.GetAsync(999);
+        var details = await fixture.Service.GetAsync(999, TestContext.Current.CancellationToken);
 
         details.Should().BeNull();
     }
@@ -407,7 +407,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Wandering home");
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "wander");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "wander", ct: TestContext.Current.CancellationToken);
         // Simulate the home folder disappearing (rebuild wipe, manual rm, etc.).
         Directory.Delete(fixture.HomeCwd, recursive: true);
 
@@ -422,7 +422,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Ghost task");
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "ghosted");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "ghosted", ct: TestContext.Current.CancellationToken);
         // home_cwd still exists, but the task folder underneath got wiped.
         var folder = new TaskFolder(fixture.HomeCwd, record.Id, Slugify.For(record.Title));
         Directory.Delete(folder.Path, recursive: true);
@@ -438,7 +438,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
 
-        var plan = await fixture.Service.PrepareSwitchAsync(999);
+        var plan = await fixture.Service.PrepareSwitchAsync(999, TestContext.Current.CancellationToken);
 
         plan.Should().BeNull();
     }
@@ -448,9 +448,9 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Implement switch");
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "build the switch flow");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "build the switch flow", ct: TestContext.Current.CancellationToken);
 
-        var plan = await fixture.Service.PrepareSwitchAsync(record.Id);
+        var plan = await fixture.Service.PrepareSwitchAsync(record.Id, TestContext.Current.CancellationToken);
 
         plan.Should().NotBeNull();
         plan!.Task.Id.Should().Be(record.Id);
@@ -467,13 +467,13 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("Drifty task");
-        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "introduce drift");
+        var record = await fixture.Service.CreateAsync(fixture.HomeCwd, "introduce drift", ct: TestContext.Current.CancellationToken);
 
         // Drop a file on disk that the scaffolded index.md doesn't mention.
         var folder = new TaskFolder(fixture.HomeCwd, record.Id, Slugify.For(record.Title));
-        await File.WriteAllTextAsync(Path.Combine(folder.Path, "research.md"), "# notes");
+        await File.WriteAllTextAsync(Path.Combine(folder.Path, "research.md"), "# notes", TestContext.Current.CancellationToken);
 
-        var plan = await fixture.Service.PrepareSwitchAsync(record.Id);
+        var plan = await fixture.Service.PrepareSwitchAsync(record.Id, TestContext.Current.CancellationToken);
 
         plan.Should().NotBeNull();
         plan!.Drift.Should().Equal("research.md");
@@ -486,7 +486,7 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
 
-        var result = await fixture.Service.DeleteAsync(999, removeFolder: false);
+        var result = await fixture.Service.DeleteAsync(999, removeFolder: false, ct: TestContext.Current.CancellationToken);
 
         result.Should().BeNull();
     }
@@ -496,14 +496,14 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("active");
-        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "x");
+        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "x", ct: TestContext.Current.CancellationToken);
         // CreateAsync sets status=InProgress; do not flip to Idle.
 
         var act = () => fixture.Service.DeleteAsync(rec.Id, removeFolder: false);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage($"*{rec.Id:D4}*InProgress*");
-        (await fixture.Store.GetAsync(rec.Id)).Should().NotBeNull();
+        (await fixture.Store.GetAsync(rec.Id, TestContext.Current.CancellationToken)).Should().NotBeNull();
     }
 
     [Fact]
@@ -511,11 +511,11 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("to delete");
-        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "delete me");
-        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds());
+        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "delete me", ct: TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds(), TestContext.Current.CancellationToken);
         var folder = new TaskFolder(fixture.HomeCwd, rec.Id, Slugify.For(rec.Title));
 
-        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: false);
+        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: false, ct: TestContext.Current.CancellationToken);
 
         result.Should().NotBeNull();
         result!.Record.Id.Should().Be(rec.Id);
@@ -523,7 +523,7 @@ public class TaskServiceTests
         result.FolderExisted.Should().BeTrue();
         result.FolderRemoved.Should().BeFalse();
         result.OrphanedChildren.Should().Be(0);
-        (await fixture.Store.GetAsync(rec.Id)).Should().BeNull();
+        (await fixture.Store.GetAsync(rec.Id, TestContext.Current.CancellationToken)).Should().BeNull();
         Directory.Exists(folder.Path).Should().BeTrue();
     }
 
@@ -532,11 +532,11 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("to nuke");
-        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "nuke me");
-        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds());
+        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "nuke me", ct: TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds(), TestContext.Current.CancellationToken);
         var folder = new TaskFolder(fixture.HomeCwd, rec.Id, Slugify.For(rec.Title));
 
-        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: true);
+        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: true, ct: TestContext.Current.CancellationToken);
 
         result.Should().NotBeNull();
         result!.FolderExisted.Should().BeTrue();
@@ -549,19 +549,19 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("ghost row");
-        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "vanish");
-        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds());
+        var rec = await fixture.Service.CreateAsync(fixture.HomeCwd, "vanish", ct: TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(rec.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds(), TestContext.Current.CancellationToken);
         var folder = new TaskFolder(fixture.HomeCwd, rec.Id, Slugify.For(rec.Title));
         // Simulate the stale-data scenario from the 2026-05-09 manual-testing session:
         // a row whose home_cwd folder got wiped (e.g. a bin/Debug output dir was the home).
         Directory.Delete(folder.Path, recursive: true);
 
-        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: true);
+        var result = await fixture.Service.DeleteAsync(rec.Id, removeFolder: true, ct: TestContext.Current.CancellationToken);
 
         result.Should().NotBeNull();
         result!.FolderExisted.Should().BeFalse();
         result.FolderRemoved.Should().BeFalse();
-        (await fixture.Store.GetAsync(rec.Id)).Should().BeNull();
+        (await fixture.Store.GetAsync(rec.Id, TestContext.Current.CancellationToken)).Should().BeNull();
     }
 
     [Fact]
@@ -569,17 +569,17 @@ public class TaskServiceTests
     {
         await using var fixture = await TaskServiceFixture.OpenAsync();
         fixture.LightModel.QueueTitle("parent");
-        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "p");
-        var child1 = await fixture.Service.ForkAsync(parent.Id);
-        var child2 = await fixture.Service.ForkAsync(parent.Id);
-        await fixture.Store.UpdateStatusAsync(parent.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds());
+        var parent = await fixture.Service.CreateAsync(fixture.HomeCwd, "p", ct: TestContext.Current.CancellationToken);
+        var child1 = await fixture.Service.ForkAsync(parent.Id, ct: TestContext.Current.CancellationToken);
+        var child2 = await fixture.Service.ForkAsync(parent.Id, ct: TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(parent.Id, TaskItemStatus.Idle, fixture.Clock.UtcNow.ToUnixTimeMilliseconds(), TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.DeleteAsync(parent.Id, removeFolder: false);
+        var result = await fixture.Service.DeleteAsync(parent.Id, removeFolder: false, ct: TestContext.Current.CancellationToken);
 
         result.Should().NotBeNull();
         result!.OrphanedChildren.Should().Be(2);
-        (await fixture.Store.GetAsync(child1.Id))!.ParentTaskId.Should().BeNull();
-        (await fixture.Store.GetAsync(child2.Id))!.ParentTaskId.Should().BeNull();
+        (await fixture.Store.GetAsync(child1.Id, TestContext.Current.CancellationToken))!.ParentTaskId.Should().BeNull();
+        (await fixture.Store.GetAsync(child2.Id, TestContext.Current.CancellationToken))!.ParentTaskId.Should().BeNull();
     }
 
     private sealed class TaskServiceFixture : IAsyncDisposable

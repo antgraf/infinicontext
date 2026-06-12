@@ -17,7 +17,7 @@ public class SessionManagerTests
         var factory = new RecordingSessionFactory();
         await using var mgr = NewManager(factory);
 
-        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/a", activeTaskId: 42));
+        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/a", activeTaskId: 42), TestContext.Current.CancellationToken);
 
         ctx.Id.Should().NotBe(Guid.Empty);
         ctx.ActiveTaskId.Should().Be(42);
@@ -36,7 +36,7 @@ public class SessionManagerTests
     {
         var factory = new RecordingSessionFactory();
         await using var mgr = NewManager(factory);
-        var ctx = await mgr.CreateAsync(NewRequest());
+        var ctx = await mgr.CreateAsync(NewRequest(), TestContext.Current.CancellationToken);
         var produced = (RecordingSession)ctx.Session;
 
         await mgr.CloseAsync(ctx.Id);
@@ -61,8 +61,8 @@ public class SessionManagerTests
     {
         var factory = new RecordingSessionFactory();
         var mgr = NewManager(factory);
-        var a = await mgr.CreateAsync(NewRequest(cwd: "/a"));
-        var b = await mgr.CreateAsync(NewRequest(cwd: "/b"));
+        var a = await mgr.CreateAsync(NewRequest(cwd: "/a"), TestContext.Current.CancellationToken);
+        var b = await mgr.CreateAsync(NewRequest(cwd: "/b"), TestContext.Current.CancellationToken);
 
         await mgr.DisposeAsync();
 
@@ -74,11 +74,11 @@ public class SessionManagerTests
     public async Task BroadcastAsync_sends_to_every_target_in_parallel_and_reports_results()
     {
         await using var mgr = NewManager();
-        var a = await mgr.CreateAsync(NewRequest(cwd: "/a"));
-        var b = await mgr.CreateAsync(NewRequest(cwd: "/b"));
-        var c = await mgr.CreateAsync(NewRequest(cwd: "/c"));
+        var a = await mgr.CreateAsync(NewRequest(cwd: "/a"), TestContext.Current.CancellationToken);
+        var b = await mgr.CreateAsync(NewRequest(cwd: "/b"), TestContext.Current.CancellationToken);
+        var c = await mgr.CreateAsync(NewRequest(cwd: "/c"), TestContext.Current.CancellationToken);
 
-        var results = await mgr.BroadcastAsync(new[] { a.Id, c.Id }, "hello");
+        var results = await mgr.BroadcastAsync(new[] { a.Id, c.Id }, "hello", TestContext.Current.CancellationToken);
 
         ((RecordingSession)a.Session).Sent.Should().Equal(new[] { "hello" });
         ((RecordingSession)b.Session).Sent.Should().BeEmpty("b was not in the target set");
@@ -93,10 +93,10 @@ public class SessionManagerTests
     public async Task BroadcastAsync_reports_unknown_ids_as_NotFound_entries()
     {
         await using var mgr = NewManager();
-        var ctx = await mgr.CreateAsync(NewRequest());
+        var ctx = await mgr.CreateAsync(NewRequest(), TestContext.Current.CancellationToken);
         var phantom = Guid.NewGuid();
 
-        var results = await mgr.BroadcastAsync(new[] { ctx.Id, phantom }, "x");
+        var results = await mgr.BroadcastAsync(new[] { ctx.Id, phantom }, "x", TestContext.Current.CancellationToken);
 
         ((RecordingSession)ctx.Session).Sent.Should().Equal(new[] { "x" });
         results.Should().HaveCount(2);
@@ -111,11 +111,11 @@ public class SessionManagerTests
     {
         var factory = new RecordingSessionFactory();
         await using var mgr = NewManager(factory);
-        var good = await mgr.CreateAsync(NewRequest(cwd: "/good"));
-        var bad = await mgr.CreateAsync(NewRequest(cwd: "/bad"));
+        var good = await mgr.CreateAsync(NewRequest(cwd: "/good"), TestContext.Current.CancellationToken);
+        var bad = await mgr.CreateAsync(NewRequest(cwd: "/bad"), TestContext.Current.CancellationToken);
         ((RecordingSession)bad.Session).SendThrows = new InvalidOperationException("kaboom");
 
-        var results = await mgr.BroadcastAsync(new[] { good.Id, bad.Id }, "ping");
+        var results = await mgr.BroadcastAsync(new[] { good.Id, bad.Id }, "ping", TestContext.Current.CancellationToken);
 
         results.Should().HaveCount(2);
         results[0].Outcome.Should().Be(BroadcastSendOutcome.Sent);
@@ -156,7 +156,7 @@ public class SessionManagerTests
         using var tmp = new TempIndexDir();
         await using var mgr = NewManager(factory, indexPath: tmp.IndexPath);
 
-        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/x", model: "claude-sonnet-4-6"));
+        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/x", model: "claude-sonnet-4-6"), TestContext.Current.CancellationToken);
         await mgr.CloseAsync(ctx.Id);
 
         File.Exists(tmp.IndexPath).Should().BeTrue("close must persist the index file");
@@ -177,7 +177,7 @@ public class SessionManagerTests
         var factory = new RecordingSessionFactory();
         await using var mgr = NewManager(factory);
 
-        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/x", model: "claude-fable-5"));
+        var ctx = await mgr.CreateAsync(NewRequest(cwd: "/repo/x", model: "claude-fable-5"), TestContext.Current.CancellationToken);
 
         ctx.Model.Should().Be("claude-fable-5",
             "the GUI inspector reads SessionContext.Model to show + change the running model.");
@@ -190,7 +190,7 @@ public class SessionManagerTests
         using var tmp = new TempIndexDir();
         await using var mgr = NewManager(factory, indexPath: tmp.IndexPath);
 
-        var ctx = await mgr.CreateAsync(NewRequest());
+        var ctx = await mgr.CreateAsync(NewRequest(), TestContext.Current.CancellationToken);
         await mgr.CloseAsync(ctx.Id);
 
         File.Exists(tmp.IndexPath).Should().BeFalse(
@@ -239,9 +239,9 @@ public class SessionManagerTests
         using var tmp = new TempIndexDir();
         await using var mgr = NewManager(factory, indexPath: tmp.IndexPath);
 
-        var first = await mgr.CreateAsync(NewRequest(cwd: "/first"));
+        var first = await mgr.CreateAsync(NewRequest(cwd: "/first"), TestContext.Current.CancellationToken);
         await mgr.CloseAsync(first.Id);
-        var second = await mgr.CreateAsync(NewRequest(cwd: "/second"));
+        var second = await mgr.CreateAsync(NewRequest(cwd: "/second"), TestContext.Current.CancellationToken);
         await mgr.CloseAsync(second.Id);
 
         mgr.RecentSessions.Should().ContainSingle().Which.Cwd.Should().Be("/second",
@@ -259,7 +259,7 @@ public class SessionManagerTests
         // Deliberately no model on the spawn request (the default-session shape): the monitor
         // must still pick the large-context 45/65 pair from the window it resolves at runtime
         // via the init-reported model id (task 0018 follow-up).
-        var ctx = await mgr.CreateAsync(NewRequest(activeTaskId: 99));
+        var ctx = await mgr.CreateAsync(NewRequest(activeTaskId: 99), TestContext.Current.CancellationToken);
         ctx.RotationReason.Should().Be(InfiniContext.Core.Sessions.RotationReason.None, "no nudge has fired yet");
 
         // Drive the monitor through the same observer SessionManager passes to the factory тАФ
@@ -325,7 +325,7 @@ public class SessionManagerTests
         var factory = new RecordingSessionFactory { SessionIdOnStart = () => fixedSessionId };
         using var tmp = new TempIndexDir();
         var mgr = NewManager(factory, indexPath: tmp.IndexPath);
-        await mgr.CreateAsync(NewRequest(cwd: "/live"));
+        await mgr.CreateAsync(NewRequest(cwd: "/live"), TestContext.Current.CancellationToken);
 
         await mgr.DisposeAsync();
 

@@ -11,7 +11,7 @@ public class MigrationRunnerTests
     {
         await using var conn = await OpenInMemoryAsync();
 
-        var applied = await MigrationRunner.ApplyAsync(conn);
+        var applied = await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
 
         applied.Should().Equal(new[] { 1, 2, 3 });
         var tables = await ObjectNamesAsync(conn);
@@ -25,14 +25,14 @@ public class MigrationRunnerTests
     public async Task Migration_002_adds_base_commit_sha_column_to_tasks()
     {
         await using var conn = await OpenInMemoryAsync();
-        await MigrationRunner.ApplyAsync(conn);
+        await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
 
         // PRAGMA table_info returns one row per column: (cid, name, type, notnull, dflt_value, pk).
         var cols = new List<(string Name, string Type, bool NotNull)>();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "PRAGMA table_info(tasks);";
-        await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync())
+        await using var r = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        while (await r.ReadAsync(TestContext.Current.CancellationToken))
             cols.Add((r.GetString(1), r.GetString(2), r.GetInt32(3) != 0));
 
         cols.Should().Contain(c => c.Name == "base_commit_sha" && c.Type == "TEXT" && !c.NotNull);
@@ -42,14 +42,14 @@ public class MigrationRunnerTests
     public async Task Migration_003_adds_default_model_column_to_tasks()
     {
         await using var conn = await OpenInMemoryAsync();
-        await MigrationRunner.ApplyAsync(conn);
+        await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
 
         // PRAGMA table_info returns one row per column: (cid, name, type, notnull, dflt_value, pk).
         var cols = new List<(string Name, string Type, bool NotNull)>();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "PRAGMA table_info(tasks);";
-        await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync())
+        await using var r = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        while (await r.ReadAsync(TestContext.Current.CancellationToken))
             cols.Add((r.GetString(1), r.GetString(2), r.GetInt32(3) != 0));
 
         cols.Should().Contain(c => c.Name == "default_model" && c.Type == "TEXT" && !c.NotNull);
@@ -59,9 +59,9 @@ public class MigrationRunnerTests
     public async Task Apply_is_idempotent_on_repeat_run()
     {
         await using var conn = await OpenInMemoryAsync();
-        await MigrationRunner.ApplyAsync(conn);
+        await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
 
-        var second = await MigrationRunner.ApplyAsync(conn);
+        var second = await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
 
         second.Should().BeEmpty();
         // __migrations still has exactly the rows from the first apply (one per built-in migration).
@@ -101,7 +101,7 @@ public class MigrationRunnerTests
     public async Task Apply_rejects_unknown_applied_version()
     {
         await using var conn = await OpenInMemoryAsync();
-        await MigrationRunner.ApplyAsync(conn);
+        await MigrationRunner.ApplyAsync(conn, TestContext.Current.CancellationToken);
         // Pretend we previously applied a version the current code doesn't know about: use
         // BuiltIn.Count + 1 so the test stays correct as new migrations land.
         var unknown = MigrationRunner.BuiltIn.Count + 1;

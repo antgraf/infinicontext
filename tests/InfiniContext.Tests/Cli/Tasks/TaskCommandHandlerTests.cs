@@ -19,7 +19,7 @@ public class TaskCommandHandlerTests
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("Implement Phase 5");
 
-        await fixture.Handler.HandleAsync(new TaskCommand.New("wire the REPL command surface"));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("wire the REPL command surface"), TestContext.Current.CancellationToken);
 
         var output = fixture.Captured;
         output.Should().Contain("[task] created 0001 \"Implement Phase 5\"");
@@ -31,7 +31,7 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.List(null, null));
+        await fixture.Handler.HandleAsync(new TaskCommand.List(null, null), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] no tasks match.");
     }
@@ -42,11 +42,11 @@ public class TaskCommandHandlerTests
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("First");
         fixture.LightModel.QueueTitle("Second");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("a"));
-        await fixture.Handler.HandleAsync(new TaskCommand.New("b"));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("a"), TestContext.Current.CancellationToken);
+        await fixture.Handler.HandleAsync(new TaskCommand.New("b"), TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.List(null, null));
+        await fixture.Handler.HandleAsync(new TaskCommand.List(null, null), TestContext.Current.CancellationToken);
 
         var output = fixture.Captured;
         output.Should().Contain("ID     STATUS      LAST ACTIVE");
@@ -60,10 +60,10 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("Showme");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("describe"));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("describe"), TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Show(1));
+        await fixture.Handler.HandleAsync(new TaskCommand.Show(1), TestContext.Current.CancellationToken);
 
         var output = fixture.Captured;
         output.Should().Contain("[task] 0001 \"Showme\"");
@@ -77,7 +77,7 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Show(999));
+        await fixture.Handler.HandleAsync(new TaskCommand.Show(999), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] 0999 not found.");
     }
@@ -87,10 +87,10 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("Source");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("the source"));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("the source"), TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Fork(1, null));
+        await fixture.Handler.HandleAsync(new TaskCommand.Fork(1, null), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("forked 0001 -> 0002").And.Contain("\"Source (2)\"");
     }
@@ -101,11 +101,11 @@ public class TaskCommandHandlerTests
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("A");
         fixture.LightModel.QueueTitle("B");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("a"));
-        await fixture.Handler.HandleAsync(new TaskCommand.New("b"));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("a"), TestContext.Current.CancellationToken);
+        await fixture.Handler.HandleAsync(new TaskCommand.New("b"), TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Merge(new[] { 1, 2 }));
+        await fixture.Handler.HandleAsync(new TaskCommand.Merge(new[] { 1, 2 }), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("merged 0001, 0002 -> 0003");
         fixture.Captured.Should().Contain("only DeterministicConcat tier is implemented in MVP");
@@ -119,7 +119,7 @@ public class TaskCommandHandlerTests
         // silent no-op.
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Switch(42));
+        await fixture.Handler.HandleAsync(new TaskCommand.Switch(42), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("/task switch must be invoked from the REPL.");
     }
@@ -129,7 +129,7 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Delete(999, RemoveFolder: false));
+        await fixture.Handler.HandleAsync(new TaskCommand.Delete(999, RemoveFolder: false), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] 0999 not found.");
     }
@@ -139,14 +139,14 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("active");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("a", fixture.HomeCwd));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("a", fixture.HomeCwd), TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: false));
+        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: false), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] error:")
             .And.Contain("InProgress");
-        (await fixture.Store.GetAsync(1)).Should().NotBeNull();
+        (await fixture.Store.GetAsync(1, TestContext.Current.CancellationToken)).Should().NotBeNull();
     }
 
     [Fact]
@@ -154,16 +154,16 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("doomed");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("d", fixture.HomeCwd));
-        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1);
+        await fixture.Handler.HandleAsync(new TaskCommand.New("d", fixture.HomeCwd), TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1, ct: TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: false));
+        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: false), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] deleted 0001 \"doomed\"");
         fixture.Captured.Should().Contain("folder left in place");
         fixture.Captured.Should().Contain("--remove-folder");
-        (await fixture.Store.GetAsync(1)).Should().BeNull();
+        (await fixture.Store.GetAsync(1, TestContext.Current.CancellationToken)).Should().BeNull();
         Directory.Exists(Path.Combine(fixture.HomeCwd, ".task", "0001-doomed")).Should().BeTrue();
     }
 
@@ -172,15 +172,15 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("annihilate");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("a", fixture.HomeCwd));
-        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1);
+        await fixture.Handler.HandleAsync(new TaskCommand.New("a", fixture.HomeCwd), TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1, ct: TestContext.Current.CancellationToken);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: true));
+        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: true), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] deleted 0001 \"annihilate\"");
         fixture.Captured.Should().Contain("removed folder:");
-        (await fixture.Store.GetAsync(1)).Should().BeNull();
+        (await fixture.Store.GetAsync(1, TestContext.Current.CancellationToken)).Should().BeNull();
         Directory.Exists(Path.Combine(fixture.HomeCwd, ".task", "0001-annihilate")).Should().BeFalse();
     }
 
@@ -189,17 +189,17 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.LightModel.QueueTitle("ghost");
-        await fixture.Handler.HandleAsync(new TaskCommand.New("g", fixture.HomeCwd));
-        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1);
+        await fixture.Handler.HandleAsync(new TaskCommand.New("g", fixture.HomeCwd), TestContext.Current.CancellationToken);
+        await fixture.Store.UpdateStatusAsync(1, TaskItemStatus.Idle, whenUnixMs: 1, ct: TestContext.Current.CancellationToken);
         // Reproduce the 2026-05-09 stale-data scenario: build wiped the home folder.
         Directory.Delete(Path.Combine(fixture.HomeCwd, ".task", "0001-ghost"), recursive: true);
         fixture.Captured = "";
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: true));
+        await fixture.Handler.HandleAsync(new TaskCommand.Delete(1, RemoveFolder: true), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] deleted 0001 \"ghost\"");
         fixture.Captured.Should().Contain("folder already absent");
-        (await fixture.Store.GetAsync(1)).Should().BeNull();
+        (await fixture.Store.GetAsync(1, TestContext.Current.CancellationToken)).Should().BeNull();
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Help());
+        await fixture.Handler.HandleAsync(new TaskCommand.Help(), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("/task new").And.Contain("/task list").And.Contain("/task show");
         fixture.Captured.Should().Contain("/task fork").And.Contain("/task merge").And.Contain("/task switch");
@@ -219,7 +219,7 @@ public class TaskCommandHandlerTests
     {
         await using var fixture = await Fixture.OpenAsync();
 
-        await fixture.Handler.HandleAsync(new TaskCommand.Fork(999, null));
+        await fixture.Handler.HandleAsync(new TaskCommand.Fork(999, null), TestContext.Current.CancellationToken);
 
         fixture.Captured.Should().Contain("[task] error:").And.Contain("999");
     }
@@ -231,9 +231,9 @@ public class TaskCommandHandlerTests
         fixture.LightModel.QueueTitle("Custom-home task");
         var customHome = Path.Combine(fixture.TempPath, "custom-home");
 
-        await fixture.Handler.HandleAsync(new TaskCommand.New("describe", customHome));
+        await fixture.Handler.HandleAsync(new TaskCommand.New("describe", customHome), TestContext.Current.CancellationToken);
 
-        var record = (await fixture.Store.ListAsync()).Single();
+        var record = (await fixture.Store.ListAsync(TestContext.Current.CancellationToken)).Single();
         record.HomeCwd.Should().Be(Path.GetFullPath(customHome));
         Directory.Exists(Path.Combine(customHome, ".task", $"0001-{Slugify.For("Custom-home task")}"))
             .Should().BeTrue();

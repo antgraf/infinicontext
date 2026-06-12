@@ -47,7 +47,7 @@ public class SessionIndexTests
     {
         using var tmp = new TempDir();
         var path = Path.Combine(tmp.Path, "index.json");
-        await File.WriteAllTextAsync(path, "{not valid json");
+        await File.WriteAllTextAsync(path, "{not valid json", TestContext.Current.CancellationToken);
 
         var index = await SessionIndex.LoadAsync(path, Log.Logger);
 
@@ -59,7 +59,7 @@ public class SessionIndexTests
     {
         using var tmp = new TempDir();
         var path = Path.Combine(tmp.Path, "index.json");
-        await File.WriteAllTextAsync(path, """{ "version": 99, "sessions": [] }""");
+        await File.WriteAllTextAsync(path, """{ "version": 99, "sessions": [] }""", TestContext.Current.CancellationToken);
 
         var index = await SessionIndex.LoadAsync(path, Log.Logger);
 

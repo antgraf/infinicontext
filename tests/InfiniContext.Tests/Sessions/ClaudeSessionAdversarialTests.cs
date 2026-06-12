@@ -50,7 +50,7 @@ public class ClaudeSessionAdversarialTests
             ExtraArgs = new[] { "--replay", TestPaths.Fixture("simple-prompt") },
         });
 
-        await session.StartAsync();
+        await session.StartAsync(TestContext.Current.CancellationToken);
         var act = async () => await session.StartAsync();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -66,7 +66,7 @@ public class ClaudeSessionAdversarialTests
         var bogusExe = Path.Combine(
             Path.GetTempPath(),
             $"infinicontext-not-an-exe-{Guid.NewGuid():N}" + (OperatingSystem.IsWindows() ? ".exe" : ""));
-        await File.WriteAllTextAsync(bogusExe, "this is plain text, not an executable\n");
+        await File.WriteAllTextAsync(bogusExe, "this is plain text, not an executable\n", TestContext.Current.CancellationToken);
 
         try
         {
@@ -99,10 +99,10 @@ public class ClaudeSessionAdversarialTests
             ExtraArgs = new[] { "--replay", TestPaths.Fixture("simple-prompt") },
         });
 
-        await session.StartAsync();
+        await session.StartAsync(TestContext.Current.CancellationToken);
         // FakeClaude --replay waits for one stdin line before streaming the fixture and exiting.
-        await session.SendUserMessageAsync("hi");
-        await session.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await session.SendUserMessageAsync("hi", TestContext.Current.CancellationToken);
+        await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await session.DisposeAsync();
         var act = async () => await session.DisposeAsync();
         await act.Should().NotThrowAsync();
@@ -118,10 +118,10 @@ public class ClaudeSessionAdversarialTests
             ExtraArgs = new[] { "--replay", TestPaths.Fixture("simple-prompt") },
         });
 
-        await session.StartAsync();
+        await session.StartAsync(TestContext.Current.CancellationToken);
         // Drive a single message so FakeClaude actually runs the replay-and-exit path.
-        await session.SendUserMessageAsync("hi");
-        await session.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await session.SendUserMessageAsync("hi", TestContext.Current.CancellationToken);
+        await session.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         var act = async () => await session.SendUserMessageAsync("again");
         await act.Should().ThrowAsync<InvalidOperationException>()

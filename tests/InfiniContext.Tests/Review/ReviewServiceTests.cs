@@ -51,7 +51,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson(MakeNeedsUserFinding("code-001"));
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Awaiting.Should().ContainSingle(f => f.Id == "code-001");
         report.Applied.Should().BeEmpty();
@@ -71,7 +71,7 @@ public class ReviewServiceTests
         };
         var sut = new ReviewService(reviewer, executor);
 
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         executor.Calls.Should().HaveCount(1);
         executor.Calls[0].repoRoot.Should().Be("D:/repo");
@@ -92,7 +92,7 @@ public class ReviewServiceTests
         var executor = new FakeAutoApplyExecutor();
         var sut = new ReviewService(reviewer, executor);
 
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions { AutoApplyEnabled = false }, default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions { AutoApplyEnabled = false }, TestContext.Current.CancellationToken);
 
         executor.Calls.Should().BeEmpty();
         report.Applied.Should().BeEmpty();
@@ -108,7 +108,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson(fix);
 
         var sut = new ReviewService(reviewer, autoApply: null);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Applied.Should().BeEmpty();
         report.Awaiting.Should().ContainSingle(f => f.Id == "sec-002");
@@ -123,7 +123,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson(rejected);
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Rejected.Should().ContainSingle(f => f.Id == "arch-001");
         report.Rejected[0].RejectionReason.Should().Contain("still supported");
@@ -141,7 +141,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Awaiting.Should().ContainSingle(f => f.Id.Contains("security") && f.Id.Contains("failure"));
         var synthesized = report.Awaiting.First(f => f.Id.Contains("security"));
@@ -158,7 +158,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Awaiting.Should().Contain(f => f.Id.Contains("tests") && f.Id.Contains("failure"));
     }
@@ -169,7 +169,7 @@ public class ReviewServiceTests
         var reviewer = new FakeReviewer { ThrowAlways = true };
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         // Five synthetic findings, one per reviewer; coordinator never invoked.
         report.Awaiting.Should().HaveCount(5);
@@ -189,7 +189,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = "i refuse to emit JSON";
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Awaiting.Should().ContainSingle(f => f.Id == "t-001");
         report.Awaiting[0].Disposition.Should().Be(Disposition.NeedsUser);
@@ -221,7 +221,7 @@ public class ReviewServiceTests
             """;
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.Awaiting.Should().ContainSingle(f => f.Id == "x-001" && f.Disposition == Disposition.NeedsUser);
         report.Rejected.Should().BeEmpty();
@@ -237,7 +237,7 @@ public class ReviewServiceTests
         reviewer.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.RawReviewerOutputs.Keys.Should().Contain(new[]
         {
@@ -258,7 +258,7 @@ public class ReviewServiceTests
             FallbackNote: null);
 
         var sut = new ReviewService(reviewer);
-        var report = await sut.RunReviewAsync(MakeRequest() with { Scope = scope }, new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest() with { Scope = scope }, new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.ExcludedFiles.Should().ContainSingle(s => s.Contains("big.json") && s.Contains("byte cap"));
     }
@@ -280,7 +280,7 @@ public class ReviewServiceTests
         };
 
         var sut = new ReviewService(reviewer, executor);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         report.BuildTestGatePassed.Should().BeFalse();
         report.GateReversionReason.Should().Contain("test gate red");
@@ -298,7 +298,7 @@ public class ReviewServiceTests
         coordinator.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson(MakeNeedsUserFinding("code-001"));
 
         var sut = new ReviewService(reviewer, coordinator);
-        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        var report = await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         // Reviewer channel: exactly the five reviewer roles, never the coordinator.
         reviewer.Calls.Should().HaveCount(5);
@@ -328,7 +328,7 @@ public class ReviewServiceTests
         both.ResponsesByRole[ReviewerRole.Coordinator] = CoordinatedJson();
 
         var sut = new ReviewService(both);
-        await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), default);
+        await sut.RunReviewAsync(MakeRequest(), new ReviewOptions(), TestContext.Current.CancellationToken);
 
         both.Calls.Should().HaveCount(6);
         both.Calls.Should().Contain(c => c.role == ReviewerRole.Coordinator);

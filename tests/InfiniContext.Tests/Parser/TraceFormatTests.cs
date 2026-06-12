@@ -26,11 +26,11 @@ public class TraceFormatTests
 
         if (Environment.GetEnvironmentVariable("GENERATE_TRACES") == "1" || !File.Exists(expectedPath))
         {
-            await File.WriteAllTextAsync(expectedPath, actual);
+            await File.WriteAllTextAsync(expectedPath, actual, TestContext.Current.CancellationToken);
             return;
         }
 
-        var expected = await File.ReadAllTextAsync(expectedPath);
+        var expected = await File.ReadAllTextAsync(expectedPath, TestContext.Current.CancellationToken);
         // Normalise line endings before comparing — git on Windows turns LF into CRLF.
         Normalise(actual).Should().Be(Normalise(expected),
             $"parser trace for {scenario} should match {expectedPath}");

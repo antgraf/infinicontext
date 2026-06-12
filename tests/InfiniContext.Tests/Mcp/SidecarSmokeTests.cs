@@ -49,7 +49,7 @@ public class SidecarSmokeTests
             await proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""");
             await proc.StandardInput.WriteLineAsync(
                 """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"approval_prompt","arguments":{"tool_name":"Bash","input":{"command":"echo hi"}}}}""");
-            await proc.StandardInput.FlushAsync();
+            await proc.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
 
             // McpServer dispatches fire-and-forget so replies can arrive on stdout in any order.
             // Read all three, then look up by JSON-RPC id.
@@ -132,7 +132,7 @@ public class SidecarSmokeTests
             await proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await proc.StandardInput.WriteLineAsync(
                 """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"task_acquire_lock","arguments":{"file":".task/0001-foo/progress.md"}}}""");
-            await proc.StandardInput.FlushAsync();
+            await proc.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
 
             var responses = new Dictionary<int, JsonObject>();
             for (var i = 0; i < 2; i++)
@@ -158,7 +158,7 @@ public class SidecarSmokeTests
             // Now release.
             var releaseRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"task_release_lock\",\"arguments\":{\"token\":\"" + token + "\"}}}";
             await proc.StandardInput.WriteLineAsync(releaseRequest);
-            await proc.StandardInput.FlushAsync();
+            await proc.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
 
             var releaseLine = await ReadLineWithTimeoutAsync(proc.StandardOutput, TimeSpan.FromSeconds(5));
             var releaseResp = JsonNode.Parse(releaseLine!) as JsonObject;
@@ -212,7 +212,7 @@ public class SidecarSmokeTests
             await proc.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
             await proc.StandardInput.WriteLineAsync(
                 """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_exit","arguments":{"reason":"flushed after hard nudge"}}}""");
-            await proc.StandardInput.FlushAsync();
+            await proc.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
 
             var responses = new Dictionary<int, JsonObject>();
             for (var i = 0; i < 2; i++)
@@ -228,7 +228,7 @@ public class SidecarSmokeTests
             var text = exitResp["result"]!["content"]![0]!["text"]!.GetValue<string>();
             (JsonNode.Parse(text) as JsonObject)!["ok"]!.GetValue<bool>().Should().BeTrue();
 
-            var observed = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var observed = await fired.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             observed.Reason.Should().Be("flushed after hard nudge");
         }
         finally

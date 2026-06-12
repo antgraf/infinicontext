@@ -22,12 +22,12 @@ public class RoundTripTests
     public async Task EveryFixtureLine_RoundTripsThroughTheParser(string scenario)
     {
         var path = TestPaths.Fixture(scenario);
-        var originalLines = await File.ReadAllLinesAsync(path);
+        var originalLines = await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken);
 
         var parser = new StreamJsonParser();
         using var reader = new StreamReader(path);
         var index = 0;
-        await foreach (var ev in parser.ParseAsync(reader))
+        await foreach (var ev in parser.ParseAsync(reader, TestContext.Current.CancellationToken))
         {
             var originalNode = JsonNode.Parse(originalLines[index]);
             JsonNode.DeepEquals(originalNode, ev.Raw).Should().BeTrue(

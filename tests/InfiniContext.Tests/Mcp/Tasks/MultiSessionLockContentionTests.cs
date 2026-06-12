@@ -56,11 +56,11 @@ public class MultiSessionLockContentionTests
         // Session B sends its acquire while A still holds — kick it off without awaiting so we
         // can observe the contention from outside, then release A and confirm B wins.
         await writerB.WriteLineAsync(new LockAcquireRequest(file, pipeB).ToJson().ToJsonString());
-        var bResponseTask = readerB.ReadLineAsync();
+        var bResponseTask = readerB.ReadLineAsync(TestContext.Current.CancellationToken);
 
         // Give B a moment to start polling so we know it's actually contending, not finishing
         // before A's lock is even in the registry.
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         bResponseTask.IsCompleted.Should().BeFalse(
             "B's acquire must still be in-flight (polling) while A holds the lock");
         registry.Snapshot().Should().ContainSingle()
@@ -68,7 +68,7 @@ public class MultiSessionLockContentionTests
 
         // A releases — B's poll loop should pick this up on the next tick and respond Ok.
         await writerA.WriteLineAsync(new LockReleaseRequest(aTokenResp.Token!).ToJson().ToJsonString());
-        var aReleaseLine = await readerA.ReadLineAsync() ?? throw new InvalidOperationException("no A release response");
+        var aReleaseLine = await readerA.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no A release response");
         LockReleaseResponse.FromJson((JsonObject)JsonNode.Parse(aReleaseLine)!).Ok.Should().BeTrue();
 
         var bResponseLine = await bResponseTask ?? throw new InvalidOperationException("no B acquire response");
