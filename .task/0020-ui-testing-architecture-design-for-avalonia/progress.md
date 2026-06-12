@@ -24,6 +24,8 @@
   - decisions.md: added one bullet to docs/stage2/decisions.md section 12 (Testing discipline).
   - Remaining for acceptance: commit (awaiting operator), green ci.yml run, one green ci-macos.yml dispatch (MacOnlyFact skip pattern must show executed-on-mac / skipped-on-win).
 
+- Migration committed and pushed on branch task/0013-gui-session-transfer: 1c303f2 (tests/ + decisions.md line), 982d77a (task 0020 artifacts). CI still pending: ci.yml has no manual trigger (PR or push-to-main only; branch is 18 commits ahead of main, so a PR carries tasks 0013-0021, operator's call); ci-macos.yml dispatch was blocked by the session permission hook (auto-deny on `gh workflow run`) -- operator must dispatch it once, ref task/0013-gui-session-transfer (or main after merge).
+
 ### Handoff to next session
 
 Deliverables complete: design.md (rev 2) + plan-xunit-v3-migration.md. Phase 0.5 (xunit v3 migration) is EXECUTED in the working tree, verified locally, awaiting commit + CI (ci.yml and one ci-macos.yml dispatch) to close acceptance criteria 2-3. Then: Phase 0 (P1-P4) as follow-up task, Phases 1 and 2 in parallel. Note issues.md#0001 (host mojibake bug) -- worth its own host-side fix task.
