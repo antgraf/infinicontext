@@ -41,13 +41,22 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
     public async Task<AutoApplyResult> ApplyAsync(
         string repoRoot,
         IReadOnlyList<ConsolidatedFinding> findings,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyCollection<string>? allowedRelativePaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repoRoot);
         ArgumentNullException.ThrowIfNull(findings);
         if (!Directory.Exists(repoRoot)) throw new DirectoryNotFoundException($"Repo root does not exist: {repoRoot}");
 
         var normalizedRoot = Path.GetFullPath(repoRoot);
+
+        // C4 scope constraint set. Null = no constraint (legacy callers / tests that don't pass a
+        // scope); the .git/CI/build-file denylist below always applies regardless. The scope paths
+        // arrive already forward-slash-normalized (ReviewFile.RelativePath); key the set with
+        // FileSystemNaming.Comparer so the membership test honors the platform's case rule.
+        var allowedScope = allowedRelativePaths is null
+            ? null
+            : new HashSet<string>(allowedRelativePaths.Select(NormalizeRelative), FileSystemNaming.Comparer);
 
         // Baseline gate. If the build or test is already red BEFORE we apply anything, the
         // post-apply gate would either blame our edits for pre-existing failures (and revert
@@ -92,7 +101,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         {
             ct.ThrowIfCancellationRequested();
 
-            var demotion = await TryApplySingleAsync(finding, normalizedRoot, backups, ct).ConfigureAwait(false);
+            var demotion = await TryApplySingleAsync(finding, normalizedRoot, backups, allowedScope, ct).ConfigureAwait(false);
             if (demotion is null)
             {
                 applied.Add(finding);
@@ -156,6 +165,7 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         ConsolidatedFinding finding,
         string normalizedRoot,
         IDictionary<string, byte[]?> backups,
+        IReadOnlySet<string>? allowedScope,
         CancellationToken ct)
     {
         // Return value: null = applied successfully; non-null = demotion reason.
@@ -200,6 +210,19 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         {
             return "target file outside repo root";
         }
+
+        // C4: hard denylist. Even an in-scope, high-confidence finding is refused if it would write
+        // to version-control internals, CI workflow definitions, or build-system files — the
+        // executor's own gate then runs `dotnet build`, so a planted .targets/.csproj or a
+        // .git/config `core.fsmonitor` payload would execute under the host account. Route to user.
+        var denyReason = DenylistReason(relative);
+        if (denyReason is not null) return denyReason;
+
+        // C4: scope constraint. When the caller passed the resolved review scope, the target must
+        // be one of the files that scope actually covered. A fix touching a file outside the
+        // reviewed set (a common indirect-injection payload) is handed to the user, not applied.
+        if (allowedScope is not null && !allowedScope.Contains(NormalizeRelative(relative)))
+            return "target file is outside the reviewed scope";
 
         if (fix.Kind == FixKind.Edit)
         {
@@ -310,6 +333,57 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
             RejectionReason = null,
         };
     }
+
+    /// <summary>
+    /// Normalize a repo-root-relative path to the form used for scope-set membership: forward
+    /// slashes, no leading separator. Matches <c>ReviewFile.RelativePath</c>'s normalization.
+    /// </summary>
+    internal static string NormalizeRelative(string relative) =>
+        relative.Replace('\\', '/').TrimStart('/');
+
+    /// <summary>
+    /// C4 hard denylist. Returns a demotion reason when <paramref name="relative"/> (a
+    /// repo-root-relative, in-root path) targets version-control internals, a CI workflow
+    /// definition, or a build-system file — all of which would let a model-emitted "fix" execute
+    /// code under the host account once the post-apply build/test gate runs. Returns null when the
+    /// path is allowed. Public for tests; unconditional (applies even when no scope is supplied).
+    /// </summary>
+    internal static string? DenylistReason(string relative)
+    {
+        var norm = NormalizeRelative(relative);
+        var segments = norm.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // .git/ internals — hooks/, config (core.fsmonitor → arbitrary command on every git op), etc.
+        if (segments.Length > 0 && segments[0].Equals(".git", FileSystemNaming.Comparison))
+            return "auto-apply refused: target is under .git/ (version-control internals)";
+
+        // CI workflow definitions run on push under the repo's credentials.
+        if (segments.Length >= 2
+            && segments[0].Equals(".github", FileSystemNaming.Comparison)
+            && segments[1].Equals("workflows", FileSystemNaming.Comparison))
+            return "auto-apply refused: target is a CI workflow file under .github/workflows/";
+
+        // Build-system files are executed as MSBuild logic during the gate's `dotnet build`.
+        var ext = Path.GetExtension(norm);
+        if (!string.IsNullOrEmpty(ext))
+        {
+            foreach (var denied in BuildFileExtensions)
+            {
+                if (ext.Equals(denied, FileSystemNaming.Comparison))
+                    return $"auto-apply refused: target is a build-system file ({ext})";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// File extensions whose content is executed by the build toolchain (MSBuild project/import
+    /// files and solution files). Auto-applying these is refused because the executor itself then
+    /// runs <c>dotnet build</c> against the modified tree.
+    /// </summary>
+    private static readonly string[] BuildFileExtensions =
+        [".csproj", ".props", ".targets", ".slnx", ".sln", ".fsproj", ".vbproj"];
 
     /// <summary>
     /// Adjust <paramref name="oldText"/> and <paramref name="newText"/> so their line endings

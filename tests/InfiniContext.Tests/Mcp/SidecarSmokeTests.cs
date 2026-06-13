@@ -22,7 +22,10 @@ public class SidecarSmokeTests
     {
         var pipeName = ApprovalChannel.GeneratePipeName();
         var sink = new RecordingSink(req => ApprovalResponse.Allow(req.Input));
-        await using var channel = new ApprovalChannel(pipeName, sink);
+        // M1: the spawned sidecar is the real CLI exe; tell the channel to expect that image (in
+        // production host and sidecar are the same exe, so the default suffices — here the host is
+        // the test runner, so we name the sidecar explicitly).
+        await using var channel = new ApprovalChannel(pipeName, sink, expectedClientExecutable: CliRunner.ExecutablePath);
         await channel.StartAsync();
 
         var cliPath = CliRunner.ExecutablePath;
@@ -107,7 +110,8 @@ public class SidecarSmokeTests
             pipeName, new RecordingSink(req => ApprovalResponse.Allow(req.Input)),
             lockRegistry: registry,
             lockTtl: TimeSpan.FromSeconds(30),
-            lockMaxWait: TimeSpan.FromSeconds(1));
+            lockMaxWait: TimeSpan.FromSeconds(1),
+            expectedClientExecutable: CliRunner.ExecutablePath); // M1: the spawned sidecar is the CLI exe
         await channel.StartAsync();
 
         var psi = new ProcessStartInfo
@@ -187,7 +191,8 @@ public class SidecarSmokeTests
         var fired = new TaskCompletionSource<SessionExitRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var channel = new ApprovalChannel(
             pipeName, new RecordingSink(req => ApprovalResponse.Allow(req.Input)),
-            onSessionExit: (req, _) => { fired.TrySetResult(req); return Task.CompletedTask; });
+            onSessionExit: (req, _) => { fired.TrySetResult(req); return Task.CompletedTask; },
+            expectedClientExecutable: CliRunner.ExecutablePath); // M1: the spawned sidecar is the CLI exe
         await channel.StartAsync();
 
         var psi = new ProcessStartInfo

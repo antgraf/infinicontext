@@ -45,12 +45,13 @@ Ordered by risk/leverage and by "isolated & high-confidence first".
       CLI subscribes (GUI uses no coordinator → `TryEnterTask=null`).
 - [x] M16 — `DeleteIfNotInProgressAsync` (atomic status-guarded delete); delete row first, then folder.
 
-### Phase D — security / trust boundaries
-- [ ] C4  — constrain `finding.File` to `ReviewScope.Files`; hard-denylist `.git/`, `.github/workflows/`, build files.
-- [ ] M1  — pipe ACL to current user; verify connected client PID is the expected sidecar.
-- [ ] M2  — ignore wire owner, pass `_pipeName`; verify releasing channel owns the token.
-- [ ] M3  — delimit reviewed tool input as opaque data; injection-trip / shell-or-network tool → human `ask`.
-- [ ] M4  — carve `.git/`, untracked/uncommitted, VCS-history-destroying commands out of "non-destructive"; host verifies VCS.
+### Phase D — security / trust boundaries — DONE 2026-06-12 (full suite green: 1156 pass / 3 skip)
+- [x] C4  — constrain `finding.File` to `ReviewScope.Files`; hard-denylist `.git/`, `.github/workflows/`, build files.
+- [x] M1  — current-user pipe ACL (Windows) + client-image peer auth (`GetNamedPipeClientProcessId`).
+- [x] M2  — ignore wire owner, pass `_pipeName`; owner-checked `Release(token, expectedOwner)`.
+- [x] M3  — shared `SafetyReviewPrompt.Body` framing input as untrusted data; escalate injection-flagged allow.
+      DEFERRED: "always route shell/network tools to ask" (disables auto-approve for Bash — operator call). see issues.md#0002.
+- [x] M4  — host-verified `UnderVersionControl` fact; prompt carves out `.git/`, history/uncommitted-destroying ops.
 
 ### Phase E — POSIX signals (re-validate on macOS)
 - [ ] C2  — host owns SIGINT; supervisor reaps only on SIGTERM/SIGHUP/SIGQUIT/Dispose (or suppression hook).

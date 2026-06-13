@@ -1,4 +1,9 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json.Nodes;
 using InfiniContext.Core.Mcp.Sessions;
@@ -32,6 +37,7 @@ public sealed class ApprovalChannel : IAsyncDisposable
     private readonly TimeSpan _lockTtl;
     private readonly TimeSpan _lockMaxWait;
     private readonly Func<SessionExitRequest, CancellationToken, Task>? _onSessionExit;
+    private readonly string? _expectedClientExecutable;
     private readonly ILogger _logger;
     private readonly TimeSpan _disposeTimeout;
     private readonly CancellationTokenSource _cts = new();
@@ -47,7 +53,8 @@ public sealed class ApprovalChannel : IAsyncDisposable
         LockRegistry? lockRegistry = null,
         TimeSpan? lockTtl = null,
         TimeSpan? lockMaxWait = null,
-        Func<SessionExitRequest, CancellationToken, Task>? onSessionExit = null)
+        Func<SessionExitRequest, CancellationToken, Task>? onSessionExit = null,
+        string? expectedClientExecutable = null)
     {
         _pipeName = pipeName;
         _sink = sink;
@@ -55,6 +62,11 @@ public sealed class ApprovalChannel : IAsyncDisposable
         _lockTtl = lockTtl ?? TimeSpan.FromSeconds(30);
         _lockMaxWait = lockMaxWait ?? TimeSpan.FromSeconds(60);
         _onSessionExit = onSessionExit;
+        // M1: the image the connecting sidecar is expected to run. The sidecar is a re-spawn of the
+        // host's own executable (claude launches "<our exe> --mcp-approval-server <pipe>"), so the
+        // default is this process's image. The launcher passes the resolved sidecar path explicitly
+        // in case ApprovalSidecarExecutable is ever overridden.
+        _expectedClientExecutable = expectedClientExecutable ?? Environment.ProcessPath;
         _logger = logger ?? Log.Logger;
         _disposeTimeout = TimeSpan.FromSeconds(disposeTimeoutSeconds);
     }
@@ -76,16 +88,114 @@ public sealed class ApprovalChannel : IAsyncDisposable
     /// </summary>
     public Task StartAsync()
     {
-        _pipe = new NamedPipeServerStream(
+        _pipe = CreatePipe();
+        _serverTask = Task.Run(RunServerAsync);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Create the server pipe. On Windows (M1) the pipe's ACL is restricted to the current user so
+    /// no other account on a shared machine can connect; if applying the ACL fails for any reason we
+    /// log and fall back to the default (the client-identity check below is the same-user guard). On
+    /// Unix the pipe maps to a Unix-domain socket under <c>$TMPDIR</c> whose directory permissions
+    /// already scope it to the current user, and <c>PipeSecurity</c> is unsupported there.
+    /// </summary>
+    private NamedPipeServerStream CreatePipe()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var secured = TryCreateCurrentUserPipe();
+            if (secured is not null) return secured;
+        }
+
+        return new NamedPipeServerStream(
             _pipeName,
             PipeDirection.InOut,
             maxNumberOfServerInstances: 1,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
-
-        _serverTask = Task.Run(RunServerAsync);
-        return Task.CompletedTask;
     }
+
+    [SupportedOSPlatform("windows")]
+    private NamedPipeServerStream? TryCreateCurrentUserPipe()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var user = identity.User;
+            if (user is null) return null;
+
+            var security = new PipeSecurity();
+            security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+
+            return NamedPipeServerStreamAcl.Create(
+                _pipeName,
+                PipeDirection.InOut,
+                maxNumberOfServerInstances: 1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous,
+                inBufferSize: 0,
+                outBufferSize: 0,
+                security);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "approval-channel: could not apply current-user pipe ACL; using default security");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// M1 peer authentication. Returns false only when we can confidently establish that the
+    /// connected client process is NOT the expected sidecar executable; every inconclusive case
+    /// (non-Windows, PID/image unresolvable, expected image unknown) returns true so a legitimate
+    /// connection is never dropped. Windows-only enforcement today: the client PID comes from
+    /// <c>GetNamedPipeClientProcessId</c> and we compare its image path to the expected sidecar.
+    /// </summary>
+    private bool ClientIsTrusted()
+    {
+        if (!OperatingSystem.IsWindows()) return true;
+        if (string.IsNullOrEmpty(_expectedClientExecutable)) return true;
+
+        uint clientPid;
+        try
+        {
+            var handle = _pipe!.SafePipeHandle.DangerousGetHandle();
+            if (!GetNamedPipeClientProcessId(handle, out clientPid)) return true; // can't resolve → allow
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "approval-channel: client PID lookup failed; allowing connection");
+            return true;
+        }
+
+        try
+        {
+            using var clientProc = Process.GetProcessById((int)clientPid);
+            var clientImage = clientProc.MainModule?.FileName;
+            if (string.IsNullOrEmpty(clientImage)) return true; // access-denied / cross-arch → allow
+
+            if (string.Equals(clientImage, _expectedClientExecutable, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            _logger.Warning(
+                "approval-channel: rejecting connection from unexpected client image={ClientImage} pid={Pid}; expected={Expected}",
+                clientImage, clientPid, _expectedClientExecutable);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // The process may have exited between connect and lookup, or MainModule may be
+            // inaccessible. Inconclusive → allow (the ACL still bounds cross-user access).
+            _logger.Debug(ex, "approval-channel: client image lookup inconclusive for pid={Pid}; allowing", clientPid);
+            return true;
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(nint pipe, out uint clientProcessId);
 
     private async Task RunServerAsync()
     {
@@ -110,6 +220,19 @@ public sealed class ApprovalChannel : IAsyncDisposable
             }
 
             _logger.Debug("approval-channel: sidecar connected");
+
+            // M1: authenticate the connected peer before serving it. The threat is the processes
+            // this approval flow gates — any tool the agent spawns runs as the same user and could
+            // otherwise connect to forge lock ops, send session.exit, or flood prompts. We refuse a
+            // connection whose client image is confidently NOT the expected sidecar executable.
+            // Best-effort: an inconclusive check (non-Windows, unresolvable PID/image) allows the
+            // connection — the ACL above already bounds cross-user access.
+            if (!ClientIsTrusted())
+            {
+                try { if (_pipe!.IsConnected) _pipe.Disconnect(); } catch { /* fall through to re-listen */ }
+                continue;
+            }
+
             try
             {
                 await ServeConnectionAsync().ConfigureAwait(false);
@@ -228,7 +351,11 @@ public sealed class ApprovalChannel : IAsyncDisposable
         try
         {
             var req = LockAcquireRequest.FromJson(obj);
-            var outcome = await _lockRegistry.AcquireAsync(req.FilePath, req.OwnerId, _lockTtl, _lockMaxWait, _cts.Token).ConfigureAwait(false);
+            // M2: the wire-supplied owner id is NOT trusted. The owner is always this channel's pipe
+            // name so that (a) dispose-time ReleaseAllOwnedBy(_pipeName) reclaims every lock this
+            // session took, and (b) a release can be authenticated against the acquiring channel. A
+            // sidecar that sets some other owner string can no longer strand a lock past our dispose.
+            var outcome = await _lockRegistry.AcquireAsync(req.FilePath, _pipeName, _lockTtl, _lockMaxWait, _cts.Token).ConfigureAwait(false);
             return outcome.Ok
                 ? LockAcquireResponse.Granted(outcome.Token!, (int)outcome.TtlGranted.TotalSeconds)
                 : LockAcquireResponse.Failed(outcome.Error ?? "unknown error");
@@ -250,7 +377,9 @@ public sealed class ApprovalChannel : IAsyncDisposable
         try
         {
             var req = LockReleaseRequest.FromJson(obj);
-            return new LockReleaseResponse(_lockRegistry.Release(req.Token));
+            // M2: authenticate the release against this channel's owner id. A connection that holds
+            // or guesses a token owned by a different session cannot release it.
+            return new LockReleaseResponse(_lockRegistry.Release(req.Token, _pipeName));
         }
         catch (Exception ex)
         {

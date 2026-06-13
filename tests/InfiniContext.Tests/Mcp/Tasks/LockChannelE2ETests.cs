@@ -107,6 +107,41 @@ public class LockChannelE2ETests
     }
 
     [Fact]
+    public async Task A_second_channel_cannot_release_a_lock_held_by_another_channel()
+    {
+        // M2: even sharing the registry and learning the token, channel B (a different pipe/owner)
+        // must not be able to release channel A's lock over the wire.
+        var registry = new LockRegistry(pollInterval: TimeSpan.FromMilliseconds(5));
+
+        var pipeA = ApprovalChannel.GeneratePipeName();
+        await using var channelA = new ApprovalChannel(pipeA, new DenyAllSink(), lockRegistry: registry,
+            lockTtl: TimeSpan.FromSeconds(30), lockMaxWait: TimeSpan.FromSeconds(1));
+        await channelA.StartAsync();
+
+        var pipeB = ApprovalChannel.GeneratePipeName();
+        await using var channelB = new ApprovalChannel(pipeB, new DenyAllSink(), lockRegistry: registry,
+            lockTtl: TimeSpan.FromSeconds(30), lockMaxWait: TimeSpan.FromSeconds(1));
+        await channelB.StartAsync();
+
+        await using var connA = await ConnectAsync(pipeA);
+        var (readerA, writerA) = Open(connA);
+        await writerA.WriteLineAsync(new LockAcquireRequest("a.md", "owner-A").ToJson().ToJsonString());
+        var acq = LockAcquireResponse.FromJson((JsonObject)JsonNode.Parse(
+            await readerA.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no acquire"))!);
+        acq.Ok.Should().BeTrue();
+
+        // Channel B tries to release A's token.
+        await using var connB = await ConnectAsync(pipeB);
+        var (readerB, writerB) = Open(connB);
+        await writerB.WriteLineAsync(new LockReleaseRequest(acq.Token!).ToJson().ToJsonString());
+        var rel = LockReleaseResponse.FromJson((JsonObject)JsonNode.Parse(
+            await readerB.ReadLineAsync(TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("no release"))!);
+
+        rel.Ok.Should().BeFalse("channel B does not own the lock");
+        registry.Snapshot().Should().ContainSingle(e => e.FilePath == "a.md", "the lock must survive B's release attempt");
+    }
+
+    [Fact]
     public async Task Approval_messages_still_route_to_sink_alongside_lock_messages()
     {
         var registry = new LockRegistry(pollInterval: TimeSpan.FromMilliseconds(5));

@@ -48,17 +48,20 @@ internal sealed class ApprovalSidecarLauncher : IAsyncDisposable
         TimeSpan? lockMaxWait = null,
         Func<SessionExitRequest, CancellationToken, Task>? onSessionExit = null)
     {
+        var sidecarExe = string.IsNullOrEmpty(sidecarExecutable)
+            ? Environment.ProcessPath ?? throw new InvalidOperationException("Cannot resolve sidecar executable.")
+            : sidecarExecutable;
+
         var pipeName = ApprovalChannel.GeneratePipeName();
         _channel = new ApprovalChannel(pipeName, sink, _logger,
             lockRegistry: lockRegistry,
             lockTtl: lockTtl,
             lockMaxWait: lockMaxWait,
-            onSessionExit: onSessionExit);
+            onSessionExit: onSessionExit,
+            // M1: tell the channel which image the connecting sidecar should be so it can reject
+            // any other same-user process that tries to connect to the pipe.
+            expectedClientExecutable: sidecarExe);
         await _channel.StartAsync().ConfigureAwait(false);
-
-        var sidecarExe = string.IsNullOrEmpty(sidecarExecutable)
-            ? Environment.ProcessPath ?? throw new InvalidOperationException("Cannot resolve sidecar executable.")
-            : sidecarExecutable;
 
         var argsForConfig = new JsonArray();
         var prefix = sidecarArgs ?? new[] { "--mcp-approval-server" };

@@ -15,10 +15,18 @@ public interface IAutoApplyExecutor
     /// (disposition unchanged); findings that couldn't apply or that the gate failed reverted
     /// are in <see cref="AutoApplyResult.Demoted"/> with <see cref="Disposition.NeedsUser"/>.
     /// </summary>
+    /// <param name="allowedRelativePaths">
+    /// The repo-root-relative paths the review actually covered (<see cref="ReviewScope.Files"/>).
+    /// When non-null, any finding whose target file is not in this set is demoted to
+    /// <see cref="Disposition.NeedsUser"/> instead of being written (C4 — a fix that creates or
+    /// edits a file outside the reviewed set is a common prompt-injection payload). Null skips
+    /// the scope constraint; the unconditional <c>.git/</c>/CI/build-file denylist still applies.
+    /// </param>
     Task<AutoApplyResult> ApplyAsync(
         string repoRoot,
         IReadOnlyList<ConsolidatedFinding> findings,
-        CancellationToken ct);
+        CancellationToken ct,
+        IReadOnlyCollection<string>? allowedRelativePaths = null);
 }
 
 /// <summary>

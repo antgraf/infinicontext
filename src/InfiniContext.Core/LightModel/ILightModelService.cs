@@ -32,11 +32,18 @@ public interface ILightModelService
 
 public sealed record CategoryResult(string Category, SafetyConfidence Confidence);
 
+/// <param name="UnderVersionControl">
+/// Host-verified fact (M4): true when <see cref="Cwd"/> is inside a git working tree. The safety
+/// gate conditions its "in-cwd edits are reversible" exemption on this rather than assuming it, and
+/// still carves out <c>.git/</c> writes and history/uncommitted-work-destroying commands. Defaults
+/// to false so a caller that doesn't verify gets the strict (treat-writes-as-destructive) default.
+/// </param>
 public sealed record SafetyReviewRequest(
     string ToolName,
     JsonObject Input,
     string? Cwd = null,
-    string? AdditionalContext = null);
+    string? AdditionalContext = null,
+    bool UnderVersionControl = false);
 
 /// <summary>
 /// Structured safety verdict on a single tool call. <see cref="Decision"/> is what the auto-approval

@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
 using InfiniContext.Core.Mcp;
+using InfiniContext.Tests.Supervision;
 using FluentAssertions;
 
 namespace InfiniContext.Tests.Mcp;
@@ -78,6 +79,38 @@ public class ApprovalE2ETests
         second!["behavior"]!.GetValue<string>().Should().Be("deny");
 
         sink.Calls.Should().Be(2);
+    }
+
+    [WindowsOnlyFact]
+    public async Task Connection_from_unexpected_client_image_is_rejected()
+    {
+        // M1: a same-user process that is NOT the expected sidecar image must be refused. The
+        // in-process client's image is the test runner; pointing the channel at a bogus expected
+        // image makes the identity check fail, so the peer is disconnected before any request is
+        // served. (Enforcement is Windows-only — on Unix the check is best-effort and allows.)
+        var sink = new ScriptedSink(req => ApprovalResponse.Allow(req.Input));
+        await using var channel = new ApprovalChannel(
+            ApprovalChannel.GeneratePipeName(), sink,
+            expectedClientExecutable: @"C:\__infinicontext_nonexistent__\bogus-sidecar.exe");
+        await channel.StartAsync();
+
+        await using var pipe = await ConnectAsync(channel.PipeName);
+        var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
+        var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+
+        string? response = null;
+        try
+        {
+            // The rejection can break the pipe before or during the write, so guard both.
+            await writer.WriteLineAsync(new ApprovalRequest("Bash", new JsonObject { ["command"] = "ls" }).ToJson().ToJsonString());
+            var read = reader.ReadLineAsync();
+            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(3)));
+            if (done == read) response = await read;
+        }
+        catch (IOException) { /* broken pipe is also an acceptable rejection signal */ }
+
+        response.Should().BeNull("a rejected peer must receive no approval response");
+        sink.Calls.Should().Be(0, "the approval sink must never see a request from a rejected peer");
     }
 
     private static async Task<JsonObject> SendOneRequestAsync(string pipeName, ApprovalRequest request)

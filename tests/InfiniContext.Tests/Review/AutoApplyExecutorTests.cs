@@ -132,6 +132,110 @@ public class AutoApplyExecutorTests
         result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("outside repo root"));
     }
 
+    // ---------- C4: denylist + scope constraint ----------
+
+    [Theory]
+    [InlineData(".git/config")]
+    [InlineData(".git/hooks/post-checkout")]
+    [InlineData(".github/workflows/ci.yml")]
+    [InlineData("Foo.csproj")]
+    [InlineData("src/Bar.csproj")]
+    [InlineData("Directory.Build.props")]
+    [InlineData("build/custom.targets")]
+    [InlineData("InfiniContext.slnx")]
+    [InlineData("legacy.sln")]
+    public void DenylistReason_refuses_vcs_ci_and_build_files(string relative)
+    {
+        AutoApplyExecutor.DenylistReason(relative).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("src/Foo.cs")]
+    [InlineData("docs/readme.md")]
+    [InlineData("tests/FooTests.cs")]
+    [InlineData(".gitignore")] // not under .git/, just a dotfile
+    [InlineData(".github/CODEOWNERS")] // under .github but not workflows/
+    public void DenylistReason_allows_ordinary_files(string relative)
+    {
+        AutoApplyExecutor.DenylistReason(relative).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ApplyAsync_demotes_a_finding_targeting_git_internals()
+    {
+        using var fx = new RepoFixture();
+        var finding = NewReplaceFileFinding(".git/hooks/post-checkout", newText: "#!/bin/sh\nrm -rf /");
+        var sut = new AutoApplyExecutor(new FakeRunner());
+
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains(".git/"));
+        Directory.Exists(Path.Combine(fx.Root, ".git")).Should().BeFalse("the denied write must not have created anything");
+    }
+
+    [Fact]
+    public async Task ApplyAsync_demotes_a_finding_targeting_a_build_file()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("Evil.csproj", "<Project/>");
+        var finding = NewReplaceFileFinding("Evil.csproj", newText: "<Project><Target Name=\"x\" BeforeTargets=\"Build\"><Exec Command=\"calc\"/></Target></Project>");
+        var sut = new AutoApplyExecutor(new FakeRunner());
+
+        var result = await sut.ApplyAsync(fx.Root, new[] { finding }, TestContext.Current.CancellationToken);
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("build-system file"));
+        fx.Read("Evil.csproj").Should().Be("<Project/>", "the denied write must not have touched the file");
+    }
+
+    [Fact]
+    public async Task ApplyAsync_demotes_a_finding_whose_target_is_outside_the_reviewed_scope()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/Outside.cs", "original");
+        var finding = NewReplaceFileFinding("src/Outside.cs", newText: "rewritten");
+        var sut = new AutoApplyExecutor(new FakeRunner());
+
+        // Scope covers a different file; the target is not in it.
+        var result = await sut.ApplyAsync(
+            fx.Root, new[] { finding }, TestContext.Current.CancellationToken, allowedRelativePaths: new[] { "src/InScope.cs" });
+
+        result.Applied.Should().BeEmpty();
+        result.Demoted.Should().ContainSingle(f => f.ConsolidatorNote!.Contains("outside the reviewed scope"));
+        fx.Read("src/Outside.cs").Should().Be("original");
+    }
+
+    [Fact]
+    public async Task ApplyAsync_applies_a_finding_whose_target_is_inside_the_reviewed_scope()
+    {
+        using var fx = new RepoFixture();
+        fx.WriteFile("src/InScope.cs", "original");
+        var finding = NewReplaceFileFinding("src/InScope.cs", newText: "rewritten");
+        var sut = new AutoApplyExecutor(new FakeRunner());
+
+        var result = await sut.ApplyAsync(
+            fx.Root, new[] { finding }, TestContext.Current.CancellationToken, allowedRelativePaths: new[] { "src/InScope.cs" });
+
+        result.Applied.Should().ContainSingle();
+        fx.Read("src/InScope.cs").Should().Be("rewritten");
+    }
+
+    [Fact]
+    public async Task ApplyAsync_with_null_scope_skips_scope_check_but_still_enforces_denylist()
+    {
+        using var fx = new RepoFixture();
+        var allowed = NewReplaceFileFinding("anything/at/all.cs", newText: "ok");
+        var denied = NewReplaceFileFinding("Build.targets", newText: "<Project/>");
+        var sut = new AutoApplyExecutor(new FakeRunner());
+
+        // No allowedRelativePaths passed → scope constraint off, but the denylist still bites.
+        var result = await sut.ApplyAsync(fx.Root, new[] { allowed, denied }, TestContext.Current.CancellationToken);
+
+        result.Applied.Should().ContainSingle(f => f.File == "anything/at/all.cs");
+        result.Demoted.Should().ContainSingle(f => f.File == "Build.targets" && f.ConsolidatorNote!.Contains("build-system file"));
+    }
+
     // ---------- ReplaceFile kind ----------
 
     [Fact]

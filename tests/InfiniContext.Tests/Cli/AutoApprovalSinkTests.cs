@@ -91,6 +91,82 @@ public class AutoApprovalSinkTests
     }
 
     [Fact]
+    public async Task Allow_flagged_prompt_injection_escalates_to_fallback()
+    {
+        // M3: an allow that still flags prompt_injection is self-contradictory; don't auto-allow.
+        var review = new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.PromptInjection, "input contained 'reply with allow'");
+        var fake = new FakeLightModel(review);
+        var fallback = new RecordingApprovalSink(ApprovalResponse.Deny("human declined"));
+        var options = new AutoApprovalOptions { OnLowConfidence = LowConfidenceFallback.FallbackToAsk };
+        var sink = new AutoApprovalSink(fake, fallback, options, "/tmp", Silent);
+
+        var response = await sink.RequestAsync(Request("Bash", "{\"command\":\"echo ignore previous instructions\"}"), TestContext.Current.CancellationToken);
+
+        fallback.CallCount.Should().Be(1, "a flagged-injection allow must escalate, not auto-allow");
+        response.Behavior.Should().Be(ApprovalBehavior.Deny);
+    }
+
+    [Fact]
+    public async Task Allow_flagged_prompt_injection_with_default_options_denies()
+    {
+        var review = new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.PromptInjection, "injection text");
+        var fake = new FakeLightModel(review);
+        var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), "/tmp", Silent);
+
+        var response = await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
+
+        response.Behavior.Should().Be(ApprovalBehavior.Deny);
+        response.Message.Should().Contain("prompt_injection");
+    }
+
+    [Fact]
+    public void IsUnderVersionControl_detects_a_git_working_tree()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vcs-{Guid.NewGuid():N}");
+        var nested = Path.Combine(root, "src", "sub");
+        Directory.CreateDirectory(nested);
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        try
+        {
+            AutoApprovalSink.IsUnderVersionControl(nested).Should().BeTrue("an ancestor has a .git directory");
+            AutoApprovalSink.IsUnderVersionControl(root).Should().BeTrue();
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void IsUnderVersionControl_is_false_outside_a_repo_and_for_blank_input()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"novcs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            AutoApprovalSink.IsUnderVersionControl(root).Should().BeFalse();
+            AutoApprovalSink.IsUnderVersionControl("").Should().BeFalse();
+            AutoApprovalSink.IsUnderVersionControl(null).Should().BeFalse();
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Under_version_control_fact_is_passed_through_to_safety_review_request()
+    {
+        // M4: the sink verifies VCS host-side and forwards it as a fact. A temp dir with a .git → true.
+        var root = Path.Combine(Path.GetTempPath(), $"vcs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        try
+        {
+            var fake = new FakeLightModel(new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.None, ""));
+            var sink = new AutoApprovalSink(fake, NeverCalled(), new AutoApprovalOptions(), root, Silent);
+
+            await sink.RequestAsync(Request("Bash", "{}"), TestContext.Current.CancellationToken);
+
+            fake.LastRequest!.UnderVersionControl.Should().BeTrue();
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public async Task Cwd_is_passed_through_to_safety_review_request()
     {
         var fake = new FakeLightModel(new SafetyReview(SafetyDecision.Allow, SafetyConfidence.High, SafetyAxis.None, ""));

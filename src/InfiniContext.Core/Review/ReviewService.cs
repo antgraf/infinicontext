@@ -179,7 +179,11 @@ public sealed class ReviewService
         }
         else
         {
-            var executorResult = await _autoApply.ApplyAsync(request.RepoRoot, autoApplyCandidates, ct).ConfigureAwait(false);
+            // C4: constrain auto-apply writes to the files this review actually covered. Anything
+            // the coordinator points at outside that set (or in the .git/CI/build-file denylist) is
+            // demoted to the user rather than written and then executed by the build/test gate.
+            var allowedPaths = request.Scope.Files.Select(f => f.RelativePath).ToList();
+            var executorResult = await _autoApply.ApplyAsync(request.RepoRoot, autoApplyCandidates, ct, allowedPaths).ConfigureAwait(false);
             appliedBucket = executorResult.Applied;
             foreach (var f in executorResult.Demoted) awaitingBucket.Add(f);
             gatePassed = executorResult.BuildTestGatePassed;

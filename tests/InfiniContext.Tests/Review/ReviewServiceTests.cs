@@ -491,12 +491,14 @@ public class ReviewServiceTests
     private sealed class FakeAutoApplyExecutor : IAutoApplyExecutor
     {
         public List<(string repoRoot, IReadOnlyList<ConsolidatedFinding> findings)> Calls { get; } = new();
+        public IReadOnlyCollection<string>? LastAllowedPaths { get; private set; }
         public (IReadOnlyList<ConsolidatedFinding> applied, IReadOnlyList<ConsolidatedFinding> demoted, bool gatePassed, string? gateReason) Outcome { get; set; }
             = (Array.Empty<ConsolidatedFinding>(), Array.Empty<ConsolidatedFinding>(), true, null);
 
-        public Task<AutoApplyResult> ApplyAsync(string repoRoot, IReadOnlyList<ConsolidatedFinding> findings, CancellationToken ct)
+        public Task<AutoApplyResult> ApplyAsync(string repoRoot, IReadOnlyList<ConsolidatedFinding> findings, CancellationToken ct, IReadOnlyCollection<string>? allowedRelativePaths = null)
         {
             Calls.Add((repoRoot, findings));
+            LastAllowedPaths = allowedRelativePaths;
             return Task.FromResult(new AutoApplyResult(Outcome.applied, Outcome.demoted, Outcome.gatePassed, Outcome.gateReason));
         }
     }

@@ -110,11 +110,27 @@ public sealed class LockRegistry
     }
 
     /// <summary>
-    /// Release a previously granted lock. Returns <c>false</c> if the token is unknown — either
-    /// because the caller never held the lock or because the TTL already expired and another
-    /// session has since taken over.
+    /// Release a previously granted lock with no ownership check. For trusted in-process callers
+    /// (the host's own <c>TaskCommandHandler</c> / <c>IssueService</c>, which acquire and release
+    /// under their own owner id in the same call). Returns <c>false</c> if the token is unknown —
+    /// either because the caller never held the lock or because the TTL already expired and
+    /// another session has since taken over.
     /// </summary>
-    public bool Release(string token)
+    public bool Release(string token) => ReleaseCore(token, expectedOwner: null);
+
+    /// <summary>
+    /// Release a lock only if it is currently held under <paramref name="expectedOwner"/> (M2).
+    /// The MCP <see cref="ApprovalChannel"/> calls this with its own pipe name so a connection
+    /// cannot release a lock another session holds even if it learns or guesses the token. Returns
+    /// <c>false</c> when the token is unknown, stale, or held under a different owner.
+    /// </summary>
+    public bool Release(string token, string expectedOwner)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedOwner);
+        return ReleaseCore(token, expectedOwner);
+    }
+
+    private bool ReleaseCore(string token, string? expectedOwner)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         lock (_sync)
@@ -124,6 +140,15 @@ public sealed class LockRegistry
             {
                 // Stale mapping — the byFile entry has moved on to another holder.
                 _filesByToken.Remove(token);
+                return false;
+            }
+            if (expectedOwner is not null && !string.Equals(entry.OwnerId, expectedOwner, StringComparison.Ordinal))
+            {
+                // Token is valid but held by a different owner — refuse (M2). Do NOT remove the
+                // token mapping: that would let a hostile caller evict the real holder's bookkeeping.
+                _logger.Warning(
+                    "lock: release denied — file={File} held by owner={Owner}, caller claimed owner={Caller}",
+                    file, entry.OwnerId, expectedOwner);
                 return false;
             }
             _byFile.Remove(file);

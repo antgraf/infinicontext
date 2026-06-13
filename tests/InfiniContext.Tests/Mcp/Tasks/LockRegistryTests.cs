@@ -65,6 +65,21 @@ public class LockRegistryTests
     }
 
     [Fact]
+    public async Task Owner_checked_release_denies_a_caller_that_does_not_own_the_token()
+    {
+        var registry = NewRegistry();
+        var outcome = await registry.AcquireAsync("a.md", "owner-A", TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+
+        // M2: a caller claiming a different owner cannot release the lock, even with the real token.
+        registry.Release(outcome.Token!, "owner-B").Should().BeFalse("a non-owner must not release the lock");
+        registry.Snapshot().Should().ContainSingle(e => e.FilePath == "a.md", "the lock must survive the denied release");
+
+        // The legitimate owner still can.
+        registry.Release(outcome.Token!, "owner-A").Should().BeTrue();
+        registry.Snapshot().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Ttl_expiry_lets_the_next_acquire_win()
     {
         // FakeClock — no Task.Delay-driven contention path needed because the second acquire

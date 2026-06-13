@@ -24,6 +24,7 @@ public sealed class AutoApprovalSink : IApprovalSink
     private readonly IApprovalSink _fallback;
     private readonly AutoApprovalOptions _options;
     private readonly string _cwd;
+    private readonly bool _underVersionControl;
     private readonly ILogger _logger;
 
     public AutoApprovalSink(
@@ -37,6 +38,9 @@ public sealed class AutoApprovalSink : IApprovalSink
         _fallback = fallback;
         _options = options;
         _cwd = cwd;
+        // M4: verify the version-control fact host-side once (cwd is fixed per sink) and pass it to
+        // the safety review, instead of letting the prompt assume the cwd is under VCS.
+        _underVersionControl = IsUnderVersionControl(cwd);
         _logger = logger;
     }
 
@@ -52,7 +56,7 @@ public sealed class AutoApprovalSink : IApprovalSink
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.TimeoutSeconds));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
             review = await _lightModel.ReviewToolCallSafetyAsync(
-                new SafetyReviewRequest(request.ToolName, request.Input, _cwd),
+                new SafetyReviewRequest(request.ToolName, request.Input, _cwd, UnderVersionControl: _underVersionControl),
                 linked.Token).ConfigureAwait(false);
             sw.Stop();
         }
@@ -78,6 +82,14 @@ public sealed class AutoApprovalSink : IApprovalSink
         if (review.Decision == SafetyDecision.Deny)
             return ApprovalResponse.Deny($"auto-deny [{review.Axis}]: {review.Reason}");
 
+        // M3: an "allow" that still flags prompt_injection is self-contradictory — the model saw
+        // injection-shaped text yet cleared the call. Don't trust it: a single cheap model judging
+        // adversarial text it must also obey is a weak gate, so escalate to the human fallback
+        // rather than auto-allowing.
+        if (review.Axis == SafetyAxis.PromptInjection)
+            return await ApplyFallbackAsync(request, cancellationToken,
+                $"auto: allow flagged prompt_injection — escalating ({review.Reason})").ConfigureAwait(false);
+
         if (review.Confidence == SafetyConfidence.Low)
             return await ApplyFallbackAsync(request, cancellationToken,
                 $"auto: low-confidence allow ({review.Reason})").ConfigureAwait(false);
@@ -91,4 +103,28 @@ public sealed class AutoApprovalSink : IApprovalSink
             LowConfidenceFallback.FallbackToAsk => _fallback.RequestAsync(request, ct),
             _ => Task.FromResult(ApprovalResponse.Deny(denyReason)),
         };
+
+    /// <summary>
+    /// M4: does <paramref name="cwd"/> sit inside a git working tree? Walks up the directory chain
+    /// looking for a <c>.git</c> directory (normal clone) or file (a worktree/submodule gitlink).
+    /// Conservative: any error or unreadable path returns false so the safety gate falls back to its
+    /// strict "treat writes as destructive" default rather than over-trusting an unverified cwd.
+    /// </summary>
+    internal static bool IsUnderVersionControl(string? cwd)
+    {
+        if (string.IsNullOrWhiteSpace(cwd)) return false;
+        try
+        {
+            for (var dir = new DirectoryInfo(Path.GetFullPath(cwd)); dir is not null; dir = dir.Parent)
+            {
+                var gitPath = Path.Combine(dir.FullName, ".git");
+                if (Directory.Exists(gitPath) || File.Exists(gitPath)) return true;
+            }
+        }
+        catch
+        {
+            // Malformed path, permission error, etc. — fail closed to the strict default.
+        }
+        return false;
+    }
 }
