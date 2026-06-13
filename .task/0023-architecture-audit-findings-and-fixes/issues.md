@@ -41,3 +41,21 @@
   FakeClaude/SupervisorHostProbe — everything the cross-platform + `[MacOnlyFact]` suite needs.
   Resolved in this phase rather than deferred because a working dispatch is the deliverable for
   audit item 7.
+
+## 0004 - M21 sub-point deferred: transcript panel virtualization
+- **Logged:** 2026-06-12 by (Phase F session)
+- **Kind:** followup
+- **Where:** src/InfiniContext.Gui/Views/MainWindow.axaml.cs (ShowTranscript) + MainWindow.axaml (TranscriptScroll)
+- **Status:** open
+- **Body:** M21's fix list includes "virtualize transcript panels". The other three M21 items shipped
+  (deleted the dead `TranscriptViewModel`; capped `Turns` at 500 with front-eviction; auto-retire the
+  rotation predecessor + a manual close affordance). True virtualization was deferred: the transcript
+  is a code-behind-built non-virtualizing `ItemsControl` wrapped in a pinned `ThemeVariantScope` inside
+  the outer `TranscriptScroll` `ScrollViewer`, and auto-scroll drives that outer scroller. Avalonia's
+  `ItemsControl` won't virtualize unless it owns its scrolling, so engaging virtualization means
+  swapping to a `ListBox`/`ItemsRepeater` that scrolls internally and rewiring auto-scroll + the
+  theme-variant pinning — the exact area whose detach/re-resolve cascade caused the task 0014/0015
+  InvalidCastException crashes, and it has thin automated coverage. Capping `Turns` already bounds the
+  realized visual tree per session (the unbounded growth was the actual leak), so the remaining win is
+  incremental. Pick up alongside the broader Stage 3 GUI virtualization items in `docs/todo.md` §D
+  ("Lazy-loading large tool results" / `VirtualizingStackPanel`). Source: `docs/architecture-review-2026-06-11.md` M21.

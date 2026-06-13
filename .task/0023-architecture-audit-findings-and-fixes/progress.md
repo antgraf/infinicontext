@@ -172,3 +172,138 @@
 - Phases A–E DONE, verified on Windows, **and Phase E validated on macOS** (ci-macos green).
   `main` @ `bb135a4`, working tree clean.
 - Remaining: Phase F (C1 startup sentinel lock; M19–M22 GUI bounding). See plan.md.
+
+## 2026-06-12 (Phase F — C1 sentinel lock)
+
+- **C1 DONE** (single-host enforcement, cheap path). New `HostInstanceLock`
+  (`src/InfiniContext.Core/Sessions/HostInstanceLock.cs`): opens `~/.infinicontext/host.lock` with
+  `FileMode.OpenOrCreate, FileShare.None, FileOptions.DeleteOnClose`. The OS share-lock on the open
+  handle is the guard (file existence is not); `DeleteOnClose` removes the sentinel even on a hard
+  crash so a stale file never wedges the next host. A second host's open fails → wrapped in
+  `HostAlreadyRunningException` ("Another InfiniContext host is already running …").
+  - **CLI** (`Program.cs`): acquires right after logging is configured (before TaskStore/SessionManager);
+    on `HostAlreadyRunningException` prints to stderr and `return 4`. `using var` releases on exit.
+  - **GUI** (`SessionHost.StartAsync`): acquires before opening any shared state; on failure flushes
+    the logger and rethrows (App shows it in the placeholder VM's `StatusText`). Threaded through the
+    private ctor; `_hostLock.Dispose()` added to `DisposeAsync` (after supervisor, before logging).
+  - **Test-isolation knob:** `HostInstanceLock.DefaultPath()` honors `INFINICONTEXT__HOSTLOCKPATH`
+    (read directly, mirroring `INFINICONTEXT__GUI__SETTINGSPATH`) so concurrent CLI smoke tests — and
+    a dev running tests with the real GUI open — don't all collide on the one real sentinel and fail
+    to start. Wired into `ReplSmokeTests.RunCliAsync` (unique temp file per spawn) and
+    `GuiAppHarness` (sandbox `host.lock`). Sidecar mode short-circuits before the lock, so
+    `SidecarSmokeTests` is unaffected.
+  - **Tests:** new `HostInstanceLockTests` (6 cases: second-acquire-throws, dispose-releases,
+    DeleteOnClose-removes-file, parent-dir-created, env-override honored + fallback). Green with
+    ReplSmokeTests (11 passed). Full Release build clean, 0 warnings.
+  - **Docs:** added the deferred real-multi-host item to `docs/todo.md` §D (SQLite claims + WAL +
+    cross-process locks; the sentinel is the guard to relax later).
+- Remaining in Phase F: M19 (replay buffer), M20 (promote wiring to Core), M21 (GUI bounding/retire),
+  M22 (per-command CTS + batched writes).
+
+- **M19 DONE** (bounded replay buffer on `SessionContext`). The per-session `SessionTranscriptReader`
+  starts pumping inside `SessionManager.CreateAsync` before the GUI row VM can subscribe, so events
+  in that window (for a task-bound seed prompt, potentially the whole first turn) were permanently
+  lost; the old code only patched the `IsReady` flag via a "catch-up" band-aid, not the lost content.
+  - **Core (`SessionContext.cs`):** replaced the public `event EventObserved` with a bounded ring
+    (`EventReplayCapacity = 1024`) + `IDisposable SubscribeWithReplay(Action<ClaudeEvent>)`. Under one
+    gate that also guards `RaiseEventObserved`, subscribe atomically replays the buffered window (FIFO)
+    then attaches for future events — a subscriber racing a raise sees each event exactly once (replay
+    XOR live), gap-free. Mirrors `TranscriptModel.Snapshot()` + `FragmentAppended`. The ring bounds
+    retention for sessions that never replay (CLI never calls SubscribeWithReplay). `RaiseEventObserved`
+    stays internal (manager + tests drive it).
+  - **GUI (`SessionRowViewModel.cs`):** ctor now `_eventSubscription = context.SubscribeWithReplay(_onEvent)`;
+    `Dispose()` disposes the token. **Removed the catch-up band-aid** in `ApplyEvent` (the
+    `!_initSeen && ev is not SystemInitEvent` arm) — replay now always delivers `system/init` first
+    through the normal init arm; the `result-fallback` gate stays as defense for a genuinely init-less
+    stream. Kept the free-session ctor readiness (claude defers init until first stdin).
+  - **Tests:** new Core `SessionContextReplayTests` (replay-in-order, live-no-dup, dispose-stops,
+    empty-buffer). Rewrote the GUI `Taskbound_assistant_before_init_catchup_flips_ready` band-aid test
+    into `Taskbound_events_before_subscribe_are_replayed_M19` — drives a full turn BEFORE constructing
+    the row VM and asserts the replayed assistant text renders into `Turns` (the real M19 regression;
+    pre-fix `Turns` was empty + `IsReady` false). Full suite green: 1166 passed / 5 platform-skipped;
+    headless GUI suite green.
+- Remaining in Phase F: M20 (promote wiring to Core), M21 (GUI bounding/retire), M22 (per-command CTS
+  + batched writes).
+
+- **M20 DONE** (promote duplicated host wiring to Core). The GUI had copied the CLI's review-stack
+  ("ported verbatim") and approval-sink construction; the approval copies had already drifted (GUI Ask
+  path skipped the echo wrapper, log prefixes differed).
+  - **Review stack → Core `ReviewStackFactory.Build(settings, supervisor, logger)`** returning a
+    `ReviewStack(ReviewService, ScopeResolver)` record (`src/InfiniContext.Core/Review/`). Replaced
+    the ~45-line block in `Program.cs` and the ~35-line `SessionHost.BuildReviewStack` body with calls
+    to it (GUI keeps its try/catch → "(unavailable)").
+  - **Approval sink → Core `ApprovalSinkBuilder`** (`src/InfiniContext.Core/Mcp/`). Owns the shared
+    decision: mode→sink mapping, Auto light-model construct-with-ask-fallback, `AutoApprovalSink`
+    wiring, and the mode-decision logging. `BuildInner(...)` returns `ApprovalSinkBuildResult(Sink,
+    EffectiveMode, LightModelError)`. Host **presentation stays local** (legitimate per-host policy):
+    the CLI `ApprovalSinkFactory` keeps its console banners (ALLOW warning, auto back-end notice,
+    construct-failure line via the surfaced `LightModelError`) and echo-wraps every mode; the GUI
+    `BuildApprovalSink` logs only and returns the Ask sink BARE (pane UI carries closure) while
+    echo-wrapping non-ask. Parameterized via ctor: `writeTranscriptBanner` (CLI true / GUI false),
+    `cosmetics` (CLI `settings.Cosmetics.Approval` / GUI null), and the light-model factory delegate.
+  - **Cleanup:** dropped the CLI factory's now-unused `_logger` field and the GUI host's vestigial
+    `_approvalTimeout` field + ctor param + `askTimeout` plumbing (the builder derives the Ask timeout
+    from `settings.Approval.TimeoutSeconds`, the same source).
+  - **Tests:** new Core `ApprovalSinkBuilderTests` (each mode + effort threading + Auto-throws→Ask
+    fallback surfaces the exception) and `ReviewStackFactoryTests` (wired stack; distinct
+    reviewer/coordinator models). All existing `ApprovalSinkFactoryTests` (console banners, echo,
+    DefaultFactory back-end selection) pass unchanged. Full suite green: 1173 passed / 5 skipped;
+    `dotnet format --verify-no-changes` clean.
+- Remaining in Phase F: M21 (GUI bounding/retire), M22 (per-command CTS + batched writes).
+
+- **M21 MOSTLY DONE** (bound & retire GUI accumulation; 3 of 4 sub-fixes shipped, virtualization
+  deferred → issues.md#0004). The audit named three compounding growth problems:
+  - **(b) Deleted the dead `TranscriptViewModel`.** Nothing bound its `Fragments` (the central pane
+    renders `row.Turns`); it was a second unbounded transcript copy per session, dispatcher-posting
+    every fragment forever. Removed the file + `SessionRowViewModel.Transcript` property + its
+    construction/dispose. (Core's `TranscriptModel` ring, 10k, remains the durable scrollback.)
+  - **(a) Capped `Turns`** at `SessionRowViewModel.MaxTurns = 500` via a single `AddTurn` helper that
+    evicts from the front (oldest, already-closed turns; in-flight/queued live at the tail). All four
+    `Turns.Add` sites route through it. Bounds the realized visual tree + per-turn pretty-printed JSON,
+    which the auto-rotation workflow (mints sessions by design) turned into a guaranteed leak.
+  - **(c) Retire dead sessions.** `SpawnRotatedSessionAsync` now `CloseSessionAsync`es the rotation
+    predecessor after the successor spawns — that was the exact leak ("auto-rotation mints a new
+    session while the dead one keeps its context in `_sessions` as a broadcast target"). Added a manual
+    `CloseSessionCommand` (✕ row-action button) routed through the same `CloseSessionAsync`, so the
+    operator can retire any pane (kills a live child / reclaims a dead context).
+  - **DEFERRED — transcript panel virtualization (issues.md#0004).** True virtualization means swapping
+    the code-behind `ItemsControl`/pinned-`ThemeVariantScope`/outer-`ScrollViewer` for an internally-
+    scrolling control + rewiring auto-scroll — the fragile theme area behind the 0014/0015 crash cascade,
+    thinly covered. Capping `Turns` already bounds the realized tree (the real leak), so the remaining
+    gain is incremental; folded into the Stage 3 `docs/todo.md` §D virtualization items.
+  - **Tests:** new `Turns_are_capped_at_MaxTurns_evicting_oldest_M21` (count bounded + front-eviction
+    order). Host-dependent close paths follow the existing "covered by manual GUI smoke" convention
+    (no fake SessionHost). GUI VM (32) + headless (2) green; full suite 1174 passed / 5 skipped;
+    `dotnet format --verify-no-changes` clean.
+- Remaining in Phase F: M22 (per-command CTS + batched dispatcher writes).
+
+- **M22 DONE** (per-command CTS + batched dispatcher writes; overlap-rejection was already in place).
+  - **Batched output:** new `BatchingOutputSink` (`src/InfiniContext.Gui/Services/`) buffers writes in a
+    `StringBuilder` and flushes once per `IUiTimer` tick (75ms). `RunHostSlashCommandAsync` builds ONE
+    sink wrapping `target.AppendHostCommandOutput` and points BOTH the renderer and the
+    `TranscriptTextWriter` at `sink.Append`, so all output coalesces in FIFO order. Also gave
+    `TranscriptTextWriter` bulk overrides (`Write(char[],int,int)`, `WriteLine`) so a string/line is one
+    append, not N. Together this kills the O(n²) path (per-char dispatcher post + `Detail += oneChar`):
+    now one post + one concat per tick.
+  - **Per-command CTS:** added `_shutdownCts` on the VM, cancelled+disposed in `DisposeAsync`.
+    `RunHostSlashCommandAsync` creates a linked CTS, passes its token to `cmd.ExecuteAsync` (was
+    `CancellationToken.None`), and catches `OperationCanceledException` to render a "cancelled" line.
+    So a minutes-long `/task review` (6 sub-agents) is cancelled on shutdown instead of abandoned.
+  - **Stop affordance:** the CTS is attached to the row (`AttachHostCommandCancellation` /
+    `CancelHostCommand` / detach); `HostCommandRunning` made `[ObservableProperty]`; new
+    `StopHostCommandCommand` + a ■ row-action button (visible only while `HostCommandRunning`).
+  - **Overlap rejection** was already handled (the `HostCommandRunning` guard in `TryHandleSlashCommand`,
+    task 0017) — verified, no change needed.
+  - **Tests:** new `BatchingOutputSinkTests` (coalesce-on-tick, empty-tick-no-flush, dispose-flushes-tail,
+    timer-starts) + `CancelHostCommand_cancels_the_attached_cts_and_is_a_noop_after_detach_M22`. Full
+    suite green: 1179 passed / 5 skipped; headless green; `dotnet format --verify-no-changes` clean.
+
+### Handoff to next session (post-Phase-F)
+- **Phase F DONE** (C1, M19, M20, M21 [virtualization deferred → issues.md#0004], M22). All Windows-
+  verified: full Release build 0 warnings, `InfiniContext.Tests` 1179 passed / 5 platform-skipped,
+  `Gui.HeadlessTests` green, `dotnet format --verify-no-changes` clean.
+- **All audit phases A–F are now complete.** Working tree has Phase F changes UNCOMMITTED (operator
+  pushes on request, per prior phases). Suggest `/task review` before declaring the task done.
+- Not run this session: `ci-uia.yml` (GUI E2E — M21/M22 touched GUI; worth a dispatch before a GUI
+  release) and `ci-macos.yml` (no POSIX/supervisor code changed in Phase F, so not needed).
+- New deferred follow-up: issues.md#0004 (transcript panel virtualization).

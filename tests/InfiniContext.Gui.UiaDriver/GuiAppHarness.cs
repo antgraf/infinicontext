@@ -85,6 +85,9 @@ public sealed class GuiAppHarness : IDisposable
         startInfo.Environment["FAKE_CLAUDE_SCRIPT"] = scriptPath;
         startInfo.Environment["INFINICONTEXT__TASKS__DBPATH"] = Path.Combine(SandboxDir, "smoke.db");
         startInfo.Environment["INFINICONTEXT__GUI__SETTINGSPATH"] = guiSettingsPath;
+        // C1: isolate the single-host sentinel into the sandbox so the harness never collides with
+        // the operator's real running host (these tests take over the interactive desktop).
+        startInfo.Environment["INFINICONTEXT__HOSTLOCKPATH"] = Path.Combine(SandboxDir, "host.lock");
 
         _automation = new UIA3Automation();
         _app = FlaUI.Core.Application.Launch(startInfo);

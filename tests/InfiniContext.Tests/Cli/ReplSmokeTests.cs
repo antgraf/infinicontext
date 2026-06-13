@@ -128,6 +128,11 @@ public class ReplSmokeTests
         };
         // Redirect the task registry to in-memory so smoke tests don't touch ~/.infinicontext/.
         psi.Environment["INFINICONTEXT__TASKS__DBPATH"] = ":memory:";
+        // C1: isolate the single-host sentinel to a unique temp file so concurrent smoke tests (and
+        // a developer running tests with the real GUI open) don't all collide on the one real lock
+        // and fail to start with "another host running".
+        psi.Environment["INFINICONTEXT__HOSTLOCKPATH"] =
+            Path.Combine(Path.GetTempPath(), $"icx-hostlock-{Guid.NewGuid():N}.lock");
         foreach (var a in argv) psi.ArgumentList.Add(a);
 
         using var proc = new Process { StartInfo = psi };

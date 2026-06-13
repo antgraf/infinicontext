@@ -61,12 +61,14 @@ Ordered by risk/leverage and by "isolated & high-confidence first".
       build can't compile the Windows-only UIA projects on macOS — scoped to `InfiniContext.Tests`; issues.md#0003).
       Dispatched + green on `macos-latest`: the MacOnly Posix tests ran (not skipped) and passed.
 
-### Phase F — GUI bounding & shared wiring
-- [ ] C1  — startup sentinel lock under `~/.infinicontext/` (single-host enforcement). [see decision above]
-- [ ] M19 — `SessionContext` bounded replay buffer + atomic subscribe-with-replay; delete IsReady band-aid.
-- [ ] M20 — promote approval-sink + review-stack construction to Core; parameterize UI bits.
-- [ ] M21 — cap/collapse `Turns`; delete or bind `TranscriptViewModel`; auto-retire `Exited` sessions; virtualize panels.
-- [ ] M22 — per-command CTS (cancel on shutdown + stop affordance); reject overlapping; batch dispatcher writes.
+### Phase F — GUI bounding & shared wiring — DONE 2026-06-12 (Windows-verified: 1179 pass / 5 skip; format clean)
+- [x] C1  — `HostInstanceLock` sentinel under `~/.infinicontext/host.lock` (FileShare.None + DeleteOnClose);
+      CLI exits 4 / GUI shows banner on a second host. `INFINICONTEXT__HOSTLOCKPATH` isolates tests. Full multi-host → docs/todo.md §D.
+- [x] M19 — `SessionContext` bounded replay ring + `SubscribeWithReplay` (atomic replay+subscribe); deleted the GUI catch-up band-aid.
+- [x] M20 — Core `ReviewStackFactory` + `ApprovalSinkBuilder`; CLI & GUI delegate (presentation stays host-local).
+- [x] M21 — capped `Turns` (500, front-evict); deleted dead `TranscriptViewModel`; retire rotation predecessor + manual close ✕.
+      DEFERRED: transcript panel virtualization (fragile theme/scroll area; Turns cap already bounds the tree). see issues.md#0004.
+- [x] M22 — per-command linked CTS (cancel on shutdown + ■ stop affordance); `BatchingOutputSink` (timer-flushed) kills the O(n²) per-char path. Overlap-reject was already in place (task 0017).
 
 ## Notes
 - M19/M20 (Core replay surface + promote wiring) are prerequisites flagged in thematic improvements;

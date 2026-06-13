@@ -27,6 +27,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private readonly TaskNodeViewModel _unattached = new(null);
     private int _disposed;
 
+    /// <summary>M22: cancelled on host teardown so an in-flight host slash-command (e.g. a minutes-long
+    /// <c>/task review</c> spawning six sub-agents) is asked to stop instead of being abandoned while
+    /// its resources are torn out from under it. Each command links its own CTS to this one.</summary>
+    private readonly CancellationTokenSource _shutdownCts = new();
+
     /// <summary>The host-handled slash-commands, built from the single registration site shared
     /// with the CLI (task 0015). Typed slash input is dispatched through this in
     /// <see cref="SendToSessionAsync"/> before falling through to claude's stdin.</summary>
@@ -217,6 +222,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     public IAsyncRelayCommand<SessionRowViewModel?> SendContinueCommand { get; }
     public IAsyncRelayCommand<SessionRowViewModel?> SendWhatsNextCommand { get; }
 
+    /// <summary>M21: operator affordance to retire a session (alive or dead). Routes through
+    /// <see cref="SessionHost.CloseSessionAsync"/> — the same path the respawn and auto-rotation
+    /// retirements use — so a dead pane the operator is done with stops being a broadcast target and
+    /// frees its subscriptions + realized visuals instead of lingering until app restart.</summary>
+    public IAsyncRelayCommand<SessionRowViewModel?> CloseSessionCommand { get; }
+
+    /// <summary>M22: Stop affordance for an in-flight host slash-command (e.g. a long
+    /// <c>/task review</c>). Cancels the row's per-command CTS; no-op when nothing is running.</summary>
+    public IRelayCommand<SessionRowViewModel?> StopHostCommandCommand { get; }
+
     /// <summary>Inspector "Apply (respawn)" button. Kills the focused session and spawns a fresh
     /// one in the same cwd/task with <see cref="SelectedInspectorModel"/>. Enabled only when the
     /// selection differs from the running model (see <see cref="CanApplyModel"/>).</summary>
@@ -270,6 +285,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         InterruptCommand = new AsyncRelayCommand(InterruptAsync, CanInterrupt);
         SendContinueCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, ContinuePromptText));
         SendWhatsNextCommand = new AsyncRelayCommand<SessionRowViewModel?>(s => SendCannedAsync(s, WhatsNextPromptText));
+        CloseSessionCommand = new AsyncRelayCommand<SessionRowViewModel?>(CloseSessionAsync);
+        StopHostCommandCommand = new RelayCommand<SessionRowViewModel?>(row => (row ?? FocusedSession)?.CancelHostCommand());
         ApplyModelCommand = new AsyncRelayCommand(ApplyModelAsync, () => CanApplyModel);
         // _unattached is added lazily on first free-session spawn and removed when emptied -
         // keeps the tree clean for users who only work via task-bound sessions.
@@ -642,6 +659,27 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         await SpawnIntoAsync(cwd, taskId, choice.Id).ConfigureAwait(true);
     }
 
+    /// <summary>M21: retire <paramref name="row"/> (defaults to the focused session). Closing a live
+    /// session kills its child; closing a dead one just reclaims the lingering context. Routes
+    /// through <see cref="SessionHost.CloseSessionAsync"/>; <see cref="OnSessionClosed"/> disposes
+    /// the row and prunes the tree.</summary>
+    private async Task CloseSessionAsync(SessionRowViewModel? row)
+    {
+        var target = row ?? FocusedSession;
+        if (_host is null || target is null) return;
+        try
+        {
+            StatusText = $"Closing {target.ShortId}...";
+            await _host.CloseSessionAsync(target.Id).ConfigureAwait(true);
+            StatusText = $"Closed {target.ShortId}.";
+        }
+        catch (Exception ex)
+        {
+            _host.Logger.Error(ex, "gui-main: close session {SessionId} failed", target.Id);
+            StatusText = $"Close failed for {target.ShortId}: {ex.Message}";
+        }
+    }
+
     /// <summary>Build the row VM for a freshly-spawned context, hang it under its task node,
     /// focus it, and render the optional seed prompt. Shared between manual spawns
     /// (<see cref="SpawnSessionForTaskAsync"/>) and the Core auto-rotation path
@@ -782,24 +820,41 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private async Task RunHostSlashCommandAsync(
         SessionRowViewModel target, ISlashCommand cmd, string head, string argLine, string fullText)
     {
-        var renderer = new GuiSlashCommandRenderer(target.AppendHostCommandOutput);
-        var writer = new TranscriptTextWriter(target.AppendHostCommandOutput);
+        // M22: one BatchingOutputSink shared by the renderer AND the handler's TextWriter, so all
+        // output coalesces in FIFO order and flushes a few times a second instead of per character.
+        using var sink = new BatchingOutputSink(target.AppendHostCommandOutput, _timerFactory);
+        var renderer = new GuiSlashCommandRenderer(sink.Append);
+        var writer = new TranscriptTextWriter(sink.Append);
         var ctx = BuildSlashContext(target, renderer, writer);
+
+        // M22: per-command CTS linked to the host-shutdown token, so a minutes-long command
+        // (/task review = 6 sub-agents + build/test gate) is cancelled on shutdown rather than
+        // abandoned mid-flight, and the Stop affordance can cancel it. Attached to the row for the
+        // run so the Stop button can reach it; detached in the finally.
+        using var cmdCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+        target.AttachHostCommandCancellation(cmdCts);
         StatusText = $"Running {head}...";
         target.BeginHostCommandTurn(fullText);
         try
         {
-            await cmd.ExecuteAsync(ctx, argLine, CancellationToken.None).ConfigureAwait(true);
+            await cmd.ExecuteAsync(ctx, argLine, cmdCts.Token).ConfigureAwait(true);
             StatusText = $"{head} done.";
+        }
+        catch (OperationCanceledException) when (cmdCts.IsCancellationRequested)
+        {
+            sink.Append($"[{head.TrimStart('/')}] cancelled.\n");
+            StatusText = $"{head} cancelled.";
         }
         catch (Exception ex)
         {
-            target.AppendHostCommandOutput($"[{head.TrimStart('/')}] error: {ex.Message}\n");
+            sink.Append($"[{head.TrimStart('/')}] error: {ex.Message}\n");
             StatusText = $"{head} failed: {ex.Message}";
             _host!.Logger.Warning(ex, "gui-slash: {Cmd} threw", head);
         }
         finally
         {
+            target.DetachHostCommandCancellation();
+            sink.Flush(); // ensure the tail (incl. any error/cancel line above) lands before the card closes
             target.EndHostCommandTurn();
         }
     }
@@ -989,6 +1044,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
             var driftSuffix = plan.Drift is { Count: > 0 } d ? $" drift: {string.Join(", ", d)} (agent will reconcile)." : "";
             StatusText = $"{label} flush detected - auto-rotated to task {plan.Task.Id:D4} \"{plan.Task.Title}\" ({row.ShortId}).{driftSuffix} Warming up...";
             _host.Logger.Information("gui-auto-rotate: task {TaskId} reason={Reason} new-session={SessionId}", plan.Task.Id, proposal.Reason, ctx.Id);
+
+            // M21: retire the now-dead predecessor. Rotation fires after the source session has
+            // flushed to its task artifacts and exited; left alone its context lingers in the
+            // SessionManager as a broadcast target with live subscriptions and a realized (dead)
+            // pane, and the auto-rotation workflow mints one of these per rotation. CloseSessionAsync
+            // is idempotent (no-op if already gone); OnSessionClosed disposes the row + prunes the
+            // tree. FocusedSession is already the successor, so this won't steal focus.
+            try { await _host.CloseSessionAsync(proposal.Session.Id).ConfigureAwait(true); }
+            catch (Exception closeEx) { _host.Logger.Warning(closeEx, "gui-auto-rotate: retiring predecessor {SessionId} failed", proposal.Session.Id); }
         }
         catch (Exception ex)
         {
@@ -1071,6 +1135,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
         // second Shutdown().
         if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
+        // M22: signal in-flight host slash-commands to stop before we tear their resources out.
+        try { _shutdownCts.Cancel(); } catch { /* best-effort */ }
+
         // Stay on the UI thread for the pre-host steps. SaveLayoutAsync previously used
         // ConfigureAwait(false), moving the continuation to the thread pool — then per-row
         // Dispose() (stops a thread-affine DispatcherTimer) and TaskNodes.Clear() (a TreeView-bound
@@ -1098,6 +1165,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
                 _host.AutoRotationProposed -= OnAutoRotationProposed;
                 await _host.DisposeAsync().ConfigureAwait(false);
             }
+            _shutdownCts.Dispose();
         }
     }
 }

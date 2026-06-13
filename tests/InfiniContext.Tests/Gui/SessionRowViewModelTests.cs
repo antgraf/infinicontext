@@ -102,17 +102,68 @@ public class SessionRowViewModelTests
     }
 
     [Fact]
-    public void Taskbound_assistant_before_init_catchup_flips_ready()
+    public void Taskbound_events_before_subscribe_are_replayed_M19()
     {
-        // Race scenario: reader drained init before the row VM subscribed; we observe an
-        // assistant event as the first event. Catch-up sets _initSeen AND IsReady.
+        // M19 regression: the per-session reader pumps events before the row VM can subscribe. With
+        // the old plain `+=` subscription those events were permanently lost — for a task-bound seed
+        // prompt that can be the WHOLE first turn, leaving a blank card with disabled buttons. The
+        // old "catch-up" band-aid flipped only the readiness flag, not the lost content.
+        // SubscribeWithReplay must replay the entire pre-subscribe window, in order.
         var f = new SessionContextFactory(activeTaskId: 42);
+
+        // A full first turn streams BEFORE the row VM exists.
+        f.RaiseEvent(SessionContextFactory.MakeInit());
+        f.RaiseEvent(SessionContextFactory.MakeAssistantText("seed acknowledged"));
+        f.RaiseEvent(SessionContextFactory.MakeResult(numTurns: 1, costUsd: 0.0012m));
+
         var row = BuildRow(f);
 
-        f.RaiseEvent(SessionContextFactory.MakeAssistantText("partial response"));
+        row.IsReady.Should().BeTrue("the replayed system/init flips the readiness gate.");
+        row.Turns.Should().NotBeEmpty("the pre-subscribe turn was replayed, not dropped.");
+        row.Turns.Select(t => t.Headline).Should().Contain(
+            "seed acknowledged",
+            "the replayed assistant text must render into a turn rather than vanishing (the M19 bug).");
+    }
 
-        row.IsReady.Should().BeTrue(
-            "any non-init event is proof init happened (channel preserves FIFO), so catch-up flips IsReady.");
+    [Fact]
+    public void Turns_are_capped_at_MaxTurns_evicting_oldest_M21()
+    {
+        // M21: Turns kept full pretty-printed JSON of every tool call forever, rendered by a
+        // non-virtualizing ItemsControl; the auto-rotation workflow turns that into a guaranteed
+        // leak. Turns must evict the oldest beyond the cap.
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+
+        const int overflow = 25;
+        for (var i = 0; i < SessionRowViewModel.MaxTurns + overflow; i++)
+            row.BeginUserTurn($"turn {i}");
+
+        row.Turns.Count.Should().Be(SessionRowViewModel.MaxTurns, "the collection is bounded (M21).");
+        row.Turns[0].UserPrompt.Should().Be($"turn {overflow}",
+            "eviction is from the front, so the oldest 'overflow' turns are gone.");
+        row.Turns[^1].UserPrompt.Should().Be($"turn {SessionRowViewModel.MaxTurns + overflow - 1}",
+            "the most recent turn is retained.");
+    }
+
+    [Fact]
+    public void CancelHostCommand_cancels_the_attached_cts_and_is_a_noop_after_detach_M22()
+    {
+        var f = new SessionContextFactory(activeTaskId: null);
+        var row = BuildRow(f);
+        using var cts = new CancellationTokenSource();
+
+        row.CancelHostCommand(); // nothing attached -> no throw, no cancel
+        cts.IsCancellationRequested.Should().BeFalse();
+
+        row.AttachHostCommandCancellation(cts);
+        row.CancelHostCommand();
+        cts.IsCancellationRequested.Should().BeTrue("the Stop affordance cancels the in-flight command's CTS.");
+
+        using var cts2 = new CancellationTokenSource();
+        row.AttachHostCommandCancellation(cts2);
+        row.DetachHostCommandCancellation();
+        row.CancelHostCommand();
+        cts2.IsCancellationRequested.Should().BeFalse("after detach there is nothing to cancel.");
     }
 
     [Fact]

@@ -36,9 +36,9 @@ internal sealed class ApprovalSinkFactory
     private readonly InfiniContextSettings _settings;
     private readonly object _writeLock;
     private readonly TextWriter _output;
-    private readonly ILogger _logger;
     private readonly LightModelServiceFactory _lightModelServiceFactory;
     private readonly Func<ApprovalAutoEffort, ILightModelService> _lightModelFactory;
+    private readonly ApprovalSinkBuilder _builder;
 
     public ApprovalSinkFactory(
         InfiniContextSettings settings,
@@ -52,9 +52,14 @@ internal sealed class ApprovalSinkFactory
         _settings = settings;
         _writeLock = writeLock;
         _output = output;
-        _logger = logger;
         _lightModelServiceFactory = lightModelServiceFactory ?? new LightModelServiceFactory(settings, logger, supervisor);
         _lightModelFactory = lightModelFactory ?? DefaultFactory;
+        // M20: the mode→sink decision (+ Auto construct/fallback + AutoApprovalSink wiring) lives in
+        // Core's ApprovalSinkBuilder, shared with the GUI. The CLI keeps its console banners and
+        // echo-wraps every mode (below). writeTranscriptBanner=true / cosmetics matches the prior
+        // BuildAsk behaviour.
+        _builder = new ApprovalSinkBuilder(settings, logger, _lightModelFactory,
+            writeTranscriptBanner: true, cosmetics: settings.Cosmetics.Approval);
     }
 
     // Auto-mode lifecycle is governed by approval.auto.mode (NOT models.light.cli.mode — that's
@@ -69,63 +74,37 @@ internal sealed class ApprovalSinkFactory
         ArgumentNullException.ThrowIfNull(transcript);
         ArgumentNullException.ThrowIfNull(cwd);
 
-        var inner = BuildInner(mode, slot, transcript, cwd, announce, out effectiveMode);
+        // Console banners are emitted BEFORE the (possibly slow) Auto construct so the operator sees
+        // the back-end context up front. The Core builder owns the rest of the decision + logging.
+        if (announce)
+        {
+            switch (mode)
+            {
+                case ApprovalMode.Allow:
+                    EmitAllowWarning();
+                    break;
+                case ApprovalMode.Auto:
+                    EmitAutoModeBanner(
+                        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")),
+                        _settings.Approval.Auto.Effort);
+                    break;
+            }
+        }
+
+        var result = _builder.BuildInner(mode, slot, transcript, cwd);
+        effectiveMode = result.EffectiveMode;
+        if (announce && result.LightModelError is { } err)
+        {
+            Write($"[approval] failed to construct light model ({err.GetType().Name}); falling back to ask\n");
+        }
+
         // Wrap every constructed sink so decisions land in the originating session's transcript
         // for ALL modes. ApprovalChannel already logs at Information for every request/response,
         // which covers the file side; the decorator covers the user-visible side. Phase 5 routes
         // the line through transcript.Append so the right session's pane gets the echo (rather
         // than the host-shared console stream).
-        return new ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "\n"));
+        return new ConsoleEchoingApprovalSink(result.Sink, line => transcript.Append(line + "\n"));
     }
-
-    private IApprovalSink BuildInner(ApprovalMode mode, PendingApprovalSlot slot, TranscriptModel transcript, string cwd, bool announce, out ApprovalMode effectiveMode)
-    {
-        effectiveMode = mode;
-
-        switch (mode)
-        {
-            case ApprovalMode.Ask:
-                return BuildAsk(slot, transcript);
-
-            case ApprovalMode.Deny:
-                _logger.Information("approval-mode: deny — all tool calls auto-denied");
-                return new StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)");
-
-            case ApprovalMode.Allow:
-                if (announce) EmitAllowWarning();
-                _logger.Warning("approval-mode: ALLOW — every tool call will be auto-approved without review");
-                return new StaticApprovalSink(ApprovalBehavior.Allow);
-
-            case ApprovalMode.Auto:
-                var effort = _settings.Approval.Auto.Effort;
-                var hasApiKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
-                if (announce) EmitAutoModeBanner(hasApiKey, effort);
-                _logger.Information(
-                    "approval-mode: auto — back-end={Backend} light-model={LightModel} effort={Effort} on-low-confidence={OnLowConfidence} timeout={Timeout}s",
-                    hasApiKey ? "sdk" : "cli",
-                    _settings.Models.Light.Id, effort,
-                    _settings.Approval.Auto.OnLowConfidence, _settings.Approval.Auto.TimeoutSeconds);
-                ILightModelService light;
-                try { light = _lightModelFactory(effort); }
-                catch (Exception ex)
-                {
-                    if (announce) Write($"[approval] failed to construct light model ({ex.GetType().Name}); falling back to ask\n");
-                    _logger.Error(ex, "approval-mode: failed to construct light model; falling back to ask");
-                    effectiveMode = ApprovalMode.Ask;
-                    return BuildAsk(slot, transcript);
-                }
-                return new AutoApprovalSink(light, BuildAsk(slot, transcript), _settings.Approval.Auto, cwd, _logger);
-
-            default:
-                throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
-        }
-    }
-
-    private IApprovalSink BuildAsk(PendingApprovalSlot slot, TranscriptModel transcript) => new SlotApprovalSink(
-        slot,
-        transcript,
-        timeout: TimeSpan.FromSeconds(_settings.Approval.TimeoutSeconds),
-        cosmetics: _settings.Cosmetics.Approval);
 
     private void EmitAllowWarning()
     {

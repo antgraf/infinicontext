@@ -68,16 +68,86 @@ public sealed class SessionContext : IAsyncDisposable
     /// <summary>Turn count reported by the most recent <c>ResultEvent</c>.</summary>
     public int? LastNumTurns { get; internal set; }
 
-    /// <summary>
-    /// Fired for every <see cref="ClaudeEvent"/> the <see cref="SessionTranscriptReader"/> pulls
-    /// off the session's events channel. UI consumers (e.g. Stage 3 GUI's structured turn tree)
-    /// subscribe here for raw event access without reaching into <see cref="SessionManager"/>'s
-    /// private reader registry. Handlers run on the reader's loop thread and must not block;
-    /// marshal to the UI thread inside the handler if needed.
-    /// </summary>
-    public event Action<ClaudeEvent>? EventObserved;
+    /// <summary>Capacity of the event replay ring (M19). Bounds the per-session retention so a
+    /// session whose events are never replayed (e.g. a CLI session, which never calls
+    /// <see cref="SubscribeWithReplay"/>) holds at most this many <see cref="ClaudeEvent"/>
+    /// references. Generous enough to cover a full seed-prompt turn streaming before any UI
+    /// consumer attaches.</summary>
+    public const int EventReplayCapacity = 1024;
 
-    internal void RaiseEventObserved(ClaudeEvent ev) => EventObserved?.Invoke(ev);
+    private readonly object _eventGate = new();
+    private readonly Queue<ClaudeEvent> _eventReplayBuffer = new(EventReplayCapacity);
+    private Action<ClaudeEvent>? _eventObserved;
+
+    /// <summary>
+    /// Atomically replay the buffered event window to <paramref name="handler"/> and then subscribe
+    /// it for all future events — under a lock that also guards <see cref="RaiseEventObserved"/>.
+    ///
+    /// <para>
+    /// M19: the per-session <see cref="SessionTranscriptReader"/> starts pumping inside
+    /// <see cref="SessionManager.CreateAsync"/> <i>before</i> any UI consumer can attach (the GUI
+    /// subscribes in a later UI-thread continuation). A plain multicast <c>+=</c> subscription
+    /// permanently loses every event observed in that window — for a task-bound spawn whose seed
+    /// prompt starts streaming immediately, that can be the whole first turn. Replaying the buffer
+    /// under the gate gives the handler a gap-free, in-order sequence (<c>[buffered] ++ [future]</c>)
+    /// with no duplicates, mirroring <see cref="TranscriptModel.Snapshot"/> + <c>FragmentAppended</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// Handlers run on the calling thread during replay (while the gate is held — they must not
+    /// block) and on the reader's loop thread for future events. Marshal to the UI thread inside the
+    /// handler if needed. Dispose the returned token to unsubscribe.
+    /// </para>
+    /// </summary>
+    public IDisposable SubscribeWithReplay(Action<ClaudeEvent> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_eventGate)
+        {
+            foreach (var ev in _eventReplayBuffer) handler(ev);
+            _eventObserved += handler;
+        }
+        return new EventSubscription(this, handler);
+    }
+
+    /// <summary>
+    /// Append <paramref name="ev"/> to the bounded replay buffer and deliver it to current
+    /// subscribers, atomically with respect to <see cref="SubscribeWithReplay"/>. Called by the
+    /// <see cref="SessionManager"/>'s reader hook (and by tests) for every event pulled off the
+    /// session's channel. The buffer append and the snapshot of subscribers happen under the gate
+    /// so a subscribe racing this call sees the event either via replay or via live delivery —
+    /// never both, never neither.
+    /// </summary>
+    internal void RaiseEventObserved(ClaudeEvent ev)
+    {
+        Action<ClaudeEvent>? handlers;
+        lock (_eventGate)
+        {
+            if (_eventReplayBuffer.Count == EventReplayCapacity) _eventReplayBuffer.Dequeue();
+            _eventReplayBuffer.Enqueue(ev);
+            handlers = _eventObserved;
+        }
+        handlers?.Invoke(ev);
+    }
+
+    private void Unsubscribe(Action<ClaudeEvent> handler)
+    {
+        lock (_eventGate) _eventObserved -= handler;
+    }
+
+    private sealed class EventSubscription : IDisposable
+    {
+        private SessionContext? _ctx;
+        private readonly Action<ClaudeEvent> _handler;
+
+        public EventSubscription(SessionContext ctx, Action<ClaudeEvent> handler)
+        {
+            _ctx = ctx;
+            _handler = handler;
+        }
+
+        public void Dispose() => Interlocked.Exchange(ref _ctx, null)?.Unsubscribe(_handler);
+    }
 
     private int _rotationReason; // 0=None, 1=Soft, 2=Hard; see RotationReason.
 

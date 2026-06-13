@@ -118,6 +118,24 @@ logging.Logger.Information(
     parsed.Cwd, parsed.Model ?? settings.Session.Model ?? "<default>", parsed.ResumeSessionId ?? "<none>",
     parsed.IncludePartialMessages || settings.Session.IncludePartialMessages, loaded.SourcesLoaded);
 
+// C1: enforce the single-host contract. The CLI and GUI both open the same ~/.infinicontext SQLite
+// registry and each build their own in-process LockRegistry/TaskActivityCoordinator, so a second
+// host would silently break every cross-session invariant (D9 lost updates, SQLITE_BUSY, migration
+// races). Acquire an exclusive sentinel lock before touching any shared state and refuse to start
+// if another host already holds it. Released on dispose / process exit (DeleteOnClose).
+HostInstanceLock hostLock;
+try
+{
+    hostLock = HostInstanceLock.Acquire(logger: logging.Logger);
+}
+catch (HostAlreadyRunningException ex)
+{
+    Console.Error.WriteLine($"infinicontext: {ex.Message}");
+    logging.Logger.Error(ex, "host-lock: refused to start (another host running)");
+    return 4;
+}
+using var _hostLock = hostLock;
+
 // Install the user-level infinicontext-task skill so spawned `claude` sessions auto-discover it.
 // Cheap and idempotent — see InfiniContext.Core.Tasks.Skill.SkillInstaller. Failure here is a soft
 // warning: the skill is a UX nicety, not a correctness requirement, so we don't fail startup.
@@ -183,62 +201,17 @@ if (taskStore is not null)
         lightModelForTasks = lightModelServiceFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
         taskService = new TaskService(taskStore, lightModelForTasks);
 
-        // Review subsystem wiring. Reviewer agent uses settings.review.reviewerModel (null falls
-        // back to the user's main model id); coordinator uses settings.review.coordinatorModel
-        // (null falls back to the reviewer model). When both null, all six agents share the main
-        // model. Auto-apply gates through dotnet build / dotnet test.
-        var reviewSettings = settings.Review;
-        var reviewerModelId = string.IsNullOrWhiteSpace(reviewSettings.ReviewerModel)
-            ? settings.Models.Main.Id
-            : reviewSettings.ReviewerModel!;
-        var coordinatorModelId = string.IsNullOrWhiteSpace(reviewSettings.CoordinatorModel)
-            ? reviewerModelId
-            : reviewSettings.CoordinatorModel!;
-        var reviewerAgent = new InfiniContext.Core.Review.CliReviewerAgentService(
-            new InfiniContext.Core.Review.ReviewerAgentOptions
-            {
-                Model = reviewerModelId,
-                InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds,
-            },
-            supervisor: supervisor,
-            logger: logging.Logger);
-        // Reuse the same instance when the model ids match: avoids spinning two identical CLI
-        // children's worth of resources for what is the common case (no override configured).
-        var coordinatorAgent = string.Equals(coordinatorModelId, reviewerModelId, StringComparison.Ordinal)
-            ? reviewerAgent
-            : new InfiniContext.Core.Review.CliReviewerAgentService(
-                new InfiniContext.Core.Review.ReviewerAgentOptions
-                {
-                    Model = coordinatorModelId,
-                    InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds,
-                },
-                supervisor: supervisor,
-                logger: logging.Logger);
-        var autoApplyExecutor = new InfiniContext.Core.Review.AutoApplyExecutor(
-            new InfiniContext.Core.Review.ProcessBuildTestRunner(supervisor: supervisor),
-            new InfiniContext.Core.Review.AutoApplyOptions
-            {
-                ConfidenceFloor = reviewSettings.ConfidenceFloor,
-                MaxLinesPerFinding = reviewSettings.AutoApplyMaxLinesPerFinding,
-                MaxFilesPerFinding = reviewSettings.AutoApplyMaxFilesPerFinding,
-                SkipBuildTestGate = reviewSettings.SkipBuildTestGate,
-            },
-            logger: logging.Logger);
-        var reviewService = new InfiniContext.Core.Review.ReviewService(
-            reviewerAgent,
-            coordinatorAgent,
-            autoApplyExecutor,
-            logger: logging.Logger);
-        var scopeResolver = new InfiniContext.Core.Review.ScopeResolver(
-            new InfiniContext.Core.Review.ProcessGitRunner(supervisor: supervisor),
-            byteCap: reviewSettings.PerFileByteCap);
+        // Review subsystem wiring. M20: the stack construction (reviewer/coordinator agents, model
+        // fallback chain, auto-apply executor + git/build runners) lives in Core's ReviewStackFactory
+        // so the CLI and GUI share one copy. Auto-apply gates through dotnet build / dotnet test.
+        var reviewStack = InfiniContext.Core.Review.ReviewStackFactory.Build(settings, supervisor, logging.Logger);
 
         taskCommandHandler = new TaskCommandHandler(
             taskService,
             Console.Out,
             consoleWriteLock,
-            reviewService: reviewService,
-            scopeResolver: scopeResolver,
+            reviewService: reviewStack.ReviewService,
+            scopeResolver: reviewStack.ScopeResolver,
             input: Console.In,
             lockRegistry: lockRegistry);
         logging.Logger.Information("tasks: subsystem ready (db={DbPath}); review: ready", settings.Tasks.ResolvedDbPath());

@@ -22,13 +22,13 @@ namespace InfiniContext.Gui.Services;
 public sealed class SessionHost : IAsyncDisposable
 {
     private readonly LoggingHandle _logging;
+    private readonly HostInstanceLock _hostLock;
     private readonly IProcessSupervisor _supervisor;
     private readonly LockRegistry _lockRegistry;
     private readonly SessionManager _sessionManager;
     private readonly TaskStore? _taskStore;
     private readonly TaskService? _taskService;
     private readonly LightModelServiceFactory _lightModelFactory;
-    private readonly TimeSpan _approvalTimeout;
     private readonly ModeHolder _modeHolder;
     private readonly AutoRotationService? _autoRotationService;
     private readonly ReviewService? _reviewService;
@@ -70,13 +70,13 @@ public sealed class SessionHost : IAsyncDisposable
     private SessionHost(
         InfiniContextSettings settings,
         LoggingHandle logging,
+        HostInstanceLock hostLock,
         IProcessSupervisor supervisor,
         LockRegistry lockRegistry,
         SessionManager sessionManager,
         TaskStore? taskStore,
         TaskService? taskService,
         LightModelServiceFactory lightModelFactory,
-        TimeSpan approvalTimeout,
         ModeHolder modeHolder,
         AutoRotationService? autoRotationService,
         ReviewService? reviewService,
@@ -85,13 +85,13 @@ public sealed class SessionHost : IAsyncDisposable
     {
         Settings = settings;
         _logging = logging;
+        _hostLock = hostLock;
         _supervisor = supervisor;
         _lockRegistry = lockRegistry;
         _sessionManager = sessionManager;
         _taskStore = taskStore;
         _taskService = taskService;
         _lightModelFactory = lightModelFactory;
-        _approvalTimeout = approvalTimeout;
         _modeHolder = modeHolder;
         _autoRotationService = autoRotationService;
         _reviewService = reviewService;
@@ -123,6 +123,25 @@ public sealed class SessionHost : IAsyncDisposable
         logging.Logger.Information("InfiniContext.Gui starting log={LogPath} sources={Sources}",
             logging.LogFilePath, loaded.SourcesLoaded);
 
+        // C1: enforce the single-host contract before opening any shared ~/.infinicontext state.
+        // A GUI running alongside a CLI host (or a second GUI) breaks every cross-session invariant
+        // because each process coordinates locks only in-memory. HostInstanceLock.Acquire throws
+        // HostAlreadyRunningException if another host holds the sentinel; that propagates out of
+        // CreateAsync and the App shows it in the startup banner. Flush the logger we just opened
+        // before rethrowing so the refusal is recorded. Held for the host's life, released in
+        // DisposeAsync (and by the OS on crash via DeleteOnClose).
+        HostInstanceLock hostLock;
+        try
+        {
+            hostLock = HostInstanceLock.Acquire(logger: logging.Logger);
+        }
+        catch (HostAlreadyRunningException ex)
+        {
+            logging.Logger.Error(ex, "host-lock: refused to start (another host running)");
+            await logging.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
         var supervisor = ProcessSupervisor.CreateForCurrentPlatform(logging.Logger);
         var lockRegistry = new LockRegistry(logger: logging.Logger);
 
@@ -146,13 +165,12 @@ public sealed class SessionHost : IAsyncDisposable
         // a shared ModeHolder that both the per-session sink factory below AND SessionHost itself
         // point at. Session-create reads it; SwitchApprovalMode mutates it. Auto -> Ask fallback
         // pins the post-fallback value so the next session-create observes the resolved mode.
-        var approvalTimeout = TimeSpan.FromSeconds(settings.Approval.TimeoutSeconds);
         var lightModelFactory = new LightModelServiceFactory(settings, logging.Logger, supervisor);
         var initialMode = settings.Approval.Mode;
         var modeHolder = new ModeHolder(initialMode);
         SessionApprovalSinkFactory approvalFactory = (slot, transcript, cwd) =>
         {
-            var inner = BuildApprovalSink(modeHolder.Mode, settings, slot, transcript, cwd, approvalTimeout, lightModelFactory, logging.Logger, out var effective);
+            var inner = BuildApprovalSink(modeHolder.Mode, settings, slot, transcript, cwd, lightModelFactory, logging.Logger, out var effective);
             modeHolder.Mode = effective;
             return inner;
         };
@@ -205,48 +223,23 @@ public sealed class SessionHost : IAsyncDisposable
                 (id, ct) => taskService.PrepareSwitchAsync(id, ct),
                 logging.Logger);
 
-        return new SessionHost(settings, logging, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, approvalTimeout, modeHolder, autoRotationService, reviewService, scopeResolver, issueService);
+        return new SessionHost(settings, logging, hostLock, supervisor, lockRegistry, manager, taskStore, taskService, lightModelFactory, modeHolder, autoRotationService, reviewService, scopeResolver, issueService);
     }
 
     /// <summary>
     /// Build the review-subsystem objects (<see cref="ReviewService"/> + <see cref="ScopeResolver"/>)
-    /// used by <c>/task review</c>. Ported verbatim from the CLI's <c>Program.cs</c> wiring so both
-    /// hosts produce identical review behaviour. Returns <c>(null, null)</c> on failure; the caller
-    /// degrades <c>/task review</c> to an "unavailable" message rather than crashing the GUI.
+    /// used by <c>/task review</c>. M20: the wiring itself now lives in Core's
+    /// <see cref="ReviewStackFactory"/>, shared with the CLI (it used to be copied verbatim here).
+    /// Returns <c>(null, null)</c> on failure; the caller degrades <c>/task review</c> to an
+    /// "unavailable" message rather than crashing the GUI.
     /// </summary>
     private static (ReviewService?, ScopeResolver?) BuildReviewStack(
         InfiniContextSettings settings, IProcessSupervisor supervisor, ILogger logger)
     {
         try
         {
-            var reviewSettings = settings.Review;
-            var reviewerModelId = string.IsNullOrWhiteSpace(reviewSettings.ReviewerModel)
-                ? settings.Models.Main.Id
-                : reviewSettings.ReviewerModel!;
-            var coordinatorModelId = string.IsNullOrWhiteSpace(reviewSettings.CoordinatorModel)
-                ? reviewerModelId
-                : reviewSettings.CoordinatorModel!;
-            var reviewerAgent = new CliReviewerAgentService(
-                new ReviewerAgentOptions { Model = reviewerModelId, InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds },
-                supervisor: supervisor, logger: logger);
-            var coordinatorAgent = string.Equals(coordinatorModelId, reviewerModelId, StringComparison.Ordinal)
-                ? reviewerAgent
-                : new CliReviewerAgentService(
-                    new ReviewerAgentOptions { Model = coordinatorModelId, InvocationTimeoutSeconds = reviewSettings.InvocationTimeoutSeconds },
-                    supervisor: supervisor, logger: logger);
-            var autoApplyExecutor = new AutoApplyExecutor(
-                new ProcessBuildTestRunner(supervisor: supervisor),
-                new AutoApplyOptions
-                {
-                    ConfidenceFloor = reviewSettings.ConfidenceFloor,
-                    MaxLinesPerFinding = reviewSettings.AutoApplyMaxLinesPerFinding,
-                    MaxFilesPerFinding = reviewSettings.AutoApplyMaxFilesPerFinding,
-                    SkipBuildTestGate = reviewSettings.SkipBuildTestGate,
-                },
-                logger: logger);
-            var reviewService = new ReviewService(reviewerAgent, coordinatorAgent, autoApplyExecutor, logger: logger);
-            var scopeResolver = new ScopeResolver(new ProcessGitRunner(supervisor: supervisor), byteCap: reviewSettings.PerFileByteCap);
-            return (reviewService, scopeResolver);
+            var stack = ReviewStackFactory.Build(settings, supervisor, logger);
+            return (stack.ReviewService, stack.ScopeResolver);
         }
         catch (Exception ex)
         {
@@ -301,7 +294,6 @@ public sealed class SessionHost : IAsyncDisposable
                 ctx.ApprovalSlot,
                 ctx.Transcript,
                 ctx.Cwd ?? string.Empty,
-                _approvalTimeout,
                 _lightModelFactory,
                 _logging.Logger,
                 out effective);
@@ -321,60 +313,29 @@ public sealed class SessionHost : IAsyncDisposable
         PendingApprovalSlot slot,
         TranscriptModel transcript,
         string cwd,
-        TimeSpan askTimeout,
         LightModelServiceFactory lightModelFactory,
         ILogger logger,
         out ApprovalMode effectiveMode)
     {
-        effectiveMode = mode;
-        var slotSink = new SlotApprovalSink(slot, transcript, timeout: askTimeout, writeTranscriptBanner: false);
-        IApprovalSink inner;
-        switch (mode)
-        {
-            case ApprovalMode.Ask:
-                // Ask returns bare: the banner UI in the focused pane carries closure visually,
-                // so a trailing transcript echo would be redundant clutter. Slice 4i intentionally
-                // set writeTranscriptBanner=false on the slot sink for the same reason.
-                return slotSink;
+        // M20: the mode→sink decision (+ Auto construct/fallback + AutoApprovalSink wiring + logging)
+        // is Core's ApprovalSinkBuilder, shared with the CLI. The GUI's host-specific policy is
+        // writeTranscriptBanner=false (the focused pane's banner UI carries closure) and returning
+        // the Ask sink BARE — no transcript echo — while non-ask sinks are echo-wrapped so Deny/Allow
+        // leave a record and the Auto light-model verdict surfaces in the pane. The Ask timeout is
+        // derived inside the builder from settings.Approval.TimeoutSeconds.
+        var builder = new ApprovalSinkBuilder(
+            settings, logger,
+            effort => lightModelFactory.Create(thinking: effort == ApprovalAutoEffort.High, cliMode: settings.Approval.Auto.Mode),
+            writeTranscriptBanner: false);
 
-            case ApprovalMode.Deny:
-                logger.Information("gui-approval: mode=deny; all tool calls auto-denied for session cwd={Cwd}", cwd);
-                inner = new StaticApprovalSink(ApprovalBehavior.Deny, "auto-deny (approval mode=deny)");
-                break;
+        var result = builder.BuildInner(mode, slot, transcript, cwd);
+        effectiveMode = result.EffectiveMode;
 
-            case ApprovalMode.Allow:
-                logger.Warning("gui-approval: mode=ALLOW; every tool call will be auto-approved without review (cwd={Cwd})", cwd);
-                inner = new StaticApprovalSink(ApprovalBehavior.Allow);
-                break;
-
-            case ApprovalMode.Auto:
-                var effort = settings.Approval.Auto.Effort;
-                ILightModelService light;
-                try
-                {
-                    light = lightModelFactory.Create(thinking: effort == ApprovalAutoEffort.High, cliMode: settings.Approval.Auto.Mode);
-                }
-                catch (Exception ex)
-                {
-                    logger.Error(ex, "gui-approval: mode=auto; failed to construct light model - falling back to ask for cwd={Cwd}", cwd);
-                    effectiveMode = ApprovalMode.Ask;
-                    return slotSink;
-                }
-                logger.Information(
-                    "gui-approval: mode=auto effort={Effort} on-low-confidence={OnLowConfidence} timeout={Timeout}s cwd={Cwd}",
-                    effort, settings.Approval.Auto.OnLowConfidence, settings.Approval.Auto.TimeoutSeconds, cwd);
-                inner = new AutoApprovalSink(light, slotSink, settings.Approval.Auto, cwd, logger);
-                break;
-
-            default:
-                throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown approval mode");
-        }
-
-        // Wrap non-ask sinks so every decision is echoed into the originating session's transcript.
-        // For Deny/Allow this gives operators a record that the tool call happened and what was
-        // decided; for Auto this is the only place the light-model verdict surfaces in the UI
-        // (Serilog still logs centrally). Format matches the CLI: "[approval] Tool -> ALLOW (Nms)".
-        return new ConsoleEchoingApprovalSink(inner, line => transcript.Append(line + "\n"));
+        // Ask (including an Auto→Ask fallback) returns bare: a trailing transcript echo would be
+        // redundant clutter next to the banner UI. All other modes echo their decision into the
+        // originating session's transcript. Format matches the CLI: "[approval] Tool -> ALLOW (Nms)".
+        if (effectiveMode == ApprovalMode.Ask) return result.Sink;
+        return new ConsoleEchoingApprovalSink(result.Sink, line => transcript.Append(line + "\n"));
     }
 
     public async Task<SessionContext> CreateSessionAsync(
@@ -463,6 +424,9 @@ public sealed class SessionHost : IAsyncDisposable
             catch { /* best-effort */ }
         }
         _supervisor.Dispose();
+        // C1: release the single-host sentinel last among shared-state owners so a fresh host can
+        // start as soon as this one has torn down its registry/index writers.
+        _hostLock.Dispose();
         await _logging.DisposeAsync().ConfigureAwait(false);
     }
 }

@@ -245,6 +245,21 @@
                             IsEnabled="{Binding IsReady}"
                             Command="{Binding $parent[TreeView].DataContext.SendWhatsNextCommand}"
                             CommandParameter="{Binding}" />
+                    <!-- M22: stop the in-flight host slash-command on this row (e.g. /task review).
+                         Only visible while one is running. -->
+                    <Button Content="&#x25A0;"
+                            Classes="rowAction"
+                            IsVisible="{Binding HostCommandRunning}"
+                            ToolTip.Tip="Stop the running command on this session"
+                            Command="{Binding $parent[TreeView].DataContext.StopHostCommandCommand}"
+                            CommandParameter="{Binding}" />
+                    <!-- M21: close/retire this session. Works on a live (kills the child) or dead
+                         (reclaims the lingering context) session; routed through CloseSessionAsync. -->
+                    <Button Content="&#x2715;"
+                            Classes="rowAction"
+                            ToolTip.Tip="Close this session (retires it; kills the child if still running)"
+                            Command="{Binding $parent[TreeView].DataContext.CloseSessionCommand}"
+                            CommandParameter="{Binding}" />
                   </StackPanel>
                 </StackPanel>
               </TreeDataTemplate>

@@ -15,8 +15,9 @@ namespace InfiniContext.Gui.ViewModels;
 /// <see cref="SessionContext"/> and exposes (a) row metadata, and (b) the structured per-turn
 /// transcript that drives the central column.
 ///
-/// Subscribes to <see cref="SessionContext.EventObserved"/> on construction and groups events
-/// into <see cref="TurnNodeViewModel"/>s.
+/// Subscribes via <see cref="SessionContext.SubscribeWithReplay"/> on construction (M19 — replays
+/// any events the reader pumped before this VM existed) and groups events into
+/// <see cref="TurnNodeViewModel"/>s.
 /// </summary>
 public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
 {
@@ -31,10 +32,16 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     /// <summary>The effective model this session is running, for the inspector. Fixed for the
     /// session's life (claude's <c>--model</c> can't change in-flight).</summary>
     public string ModelDisplay => Context.Model ?? "(host default)";
-    public TranscriptViewModel Transcript { get; }
 
-    /// <summary>Per-turn structured view of the conversation.</summary>
+    /// <summary>Per-turn structured view of the conversation. Bounded (M21): only the most recent
+    /// <see cref="MaxTurns"/> turns are retained — older ones are evicted to cap the realized visual
+    /// tree and the pretty-printed tool-call JSON each turn holds. Core's <c>TranscriptModel</c> ring
+    /// (10k fragments, D4/D20) remains the durable scrollback; this is the live structured view.</summary>
     public ObservableCollection<TurnNodeViewModel> Turns { get; } = new();
+
+    /// <summary>Cap on retained turns (M21). Sized to hold a long working session's recent history
+    /// while bounding unbounded growth in the auto-rotation workflow, which mints sessions by design.</summary>
+    public const int MaxTurns = 500;
 
     [ObservableProperty]
     private bool _isFocused;
@@ -114,6 +121,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private readonly IUiDispatcher _dispatcher;
     private readonly IUiTimer _deadlineTimer;
 
+    /// <summary>M19: token from <see cref="SessionContext.SubscribeWithReplay"/>. Disposing it
+    /// detaches <see cref="_onEvent"/>.</summary>
+    private readonly IDisposable _eventSubscription;
+
     /// <summary>The turn whose <c>ResultEvent</c> we are currently awaiting. Assistant and
     /// user (tool-result) events attach to this turn's tree. Promoted from
     /// <see cref="_queuedTurns"/> when the preceding turn's <c>ResultEvent</c> arrives, or
@@ -161,7 +172,6 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         Context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         if (timerFactory is null) throw new ArgumentNullException(nameof(timerFactory));
-        Transcript = new TranscriptViewModel(context.Transcript, dispatcher);
         _logger = logger;
         _onTransition = OnStateTransition;
         _onEvent = OnEvent;
@@ -171,16 +181,22 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         _deadlineTimer = timerFactory.Create(TimeSpan.FromSeconds(1));
         _deadlineTimer.Tick += OnDeadlineTick;
         context.Session.State.Transitioned += _onTransition;
-        context.EventObserved += _onEvent;
+        // M19: subscribe-with-replay. The per-session reader starts pumping inside
+        // SessionManager.CreateAsync, before this VM exists; SubscribeWithReplay atomically replays
+        // every event observed in that window (in order, no gaps/dupes) then attaches for future
+        // events. So any events that streamed before we got here — for a task-bound seed prompt,
+        // potentially the whole first turn — are rendered, and system/init is always observed
+        // through the normal init arm. Replay runs synchronously on this (ctor) thread; every field
+        // ApplyEvent touches is already initialized above.
+        _eventSubscription = context.SubscribeWithReplay(_onEvent);
         context.ApprovalSlot.Changed += _onApprovalChanged;
         PendingApproval = context.ApprovalSlot.Current;
         StatusGlyph = ViewModels.StatusGlyph.ForSession(context.Session.State.State, IsAwaitingApproval);
 
-        // Race protection (companion to the catch-up in ApplyEvent): if events have already
-        // flowed before we got to subscribe, Session.SessionId is non-null (it's assigned the
-        // moment claude's first event carries a session_id - see ClaudeSession.StdoutLoopAsync).
-        // A non-null sessionId at ctor time proves system/init has fired, which is the gate
-        // for both free and task-bound sessions under the new contract.
+        // Free-session readiness: a non-null sessionId proves system/init already fired (replay
+        // above will have flipped IsReady via the init arm — this is a redundant fast path). For a
+        // free session with no events yet, claude defers system/init until it reads the operator's
+        // first prompt, so nothing can flip IsReady; do it here so Send is enabled immediately.
         var sessionIdAtCtor = context.Session.SessionId;
         if (sessionIdAtCtor is not null)
         {
@@ -273,7 +289,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         var turn = new TurnNodeViewModel(promptText);
         void Apply()
         {
-            Turns.Add(turn);
+            AddTurn(turn);
             if (_inFlightTurn is null)
             {
                 _inFlightTurn = turn;
@@ -301,12 +317,30 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     private TurnNodeViewModel? _hostCommandTurn;
     private TurnContentItemViewModel? _hostCommandContent;
 
+    /// <summary>M22: cancellation handle for the in-flight host slash-command. The host VM attaches a
+    /// per-command CTS (linked to the host-shutdown token) for the duration of the run so the Stop
+    /// affordance — and host teardown — can cancel a long /task review. Null when nothing runs.</summary>
+    private CancellationTokenSource? _hostCommandCts;
+
     /// <summary>True while a host slash-command card is open on this row (between
     /// <see cref="BeginHostCommandTurn"/> and <see cref="EndHostCommandTurn"/>). The dispatcher
     /// reads it to reject a second concurrent command on the same session - the card uses single
     /// <c>_hostCommandTurn</c>/<c>_hostCommandContent</c> fields, so overlapping commands would
-    /// clobber each other's output (task 0017). Toggled on the UI thread inside Begin/End.</summary>
-    public bool HostCommandRunning { get; private set; }
+    /// clobber each other's output (task 0017). Observable so the Stop affordance can bind its
+    /// visibility/enablement to it. Toggled on the UI thread inside Begin/End.</summary>
+    [ObservableProperty]
+    private bool _hostCommandRunning;
+
+    /// <summary>M22: attach the per-command cancellation source for the duration of a host
+    /// slash-command run (set by the host VM). Cleared via <see cref="DetachHostCommandCancellation"/>.</summary>
+    internal void AttachHostCommandCancellation(CancellationTokenSource cts) => _hostCommandCts = cts;
+
+    /// <summary>M22: clear the per-command cancellation source once the run ends.</summary>
+    internal void DetachHostCommandCancellation() => _hostCommandCts = null;
+
+    /// <summary>M22: request cancellation of the running host slash-command, if any. Wired to the
+    /// Stop affordance; no-op when nothing is running.</summary>
+    public void CancelHostCommand() => _hostCommandCts?.Cancel();
 
     /// <summary>Open a card for a host slash-command invocation. <paramref name="commandLine"/> is
     /// the full text the operator typed (e.g. "/task review"); it shows in the Operator block and
@@ -328,7 +362,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 IsExpanded = true,
             };
             turn.Children.Add(content);
-            Turns.Add(turn);
+            AddTurn(turn);
             _hostCommandTurn = turn;
             _hostCommandContent = content;
             HostCommandRunning = true;
@@ -405,7 +439,7 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             if (_pendingBundleTurn is null)
             {
                 _pendingBundleTurn = new TurnNodeViewModel(text) { IsQueued = true };
-                Turns.Add(_pendingBundleTurn);
+                AddTurn(_pendingBundleTurn);
             }
             else
             {
@@ -492,23 +526,11 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             "gui-row[{Row}] event observed: type={Type} subtype={Subtype} initSeen={InitSeen} isReady={IsReady} activeTaskId={TaskId} lastNumTurns={LastNumTurns}",
             ShortId, ev.Type, ev.Subtype, _initSeen, IsReady, Context.ActiveTaskId, Context.LastNumTurns);
 
-        // Race protection: the per-session reader is started inside SessionManager.CreateAsync
-        // BEFORE this row VM has a chance to subscribe to Context.EventObserved, so the very
-        // first SystemInitEvent can be dispatched-and-dropped if the reader's background loop
-        // beats the GUI's row-VM construction. Without this guard _initSeen would stay false
-        // forever and IsReady would never flip on subsequent events - the original "buttons
-        // stay disabled forever" symptom. Claude emits system/init before any other event and
-        // the events channel preserves FIFO, so observing ANY non-init event proves init has
-        // already happened: treat that as proof and catch up.
-        if (!_initSeen && ev is not SystemInitEvent)
-        {
-            _initSeen = true;
-            _logger?.Information("gui-row[{Row}] catch-up: _initSeen flipped on first non-init event type={Type}", ShortId, ev.Type);
-            // Under the new contract both free and task-bound sessions become ready as soon as
-            // claude is listening. If the catch-up arm fires, claude is already past init - so
-            // it's safe to flip IsReady regardless of ActiveTaskId.
-            SetIsReady("catch-up");
-        }
+        // M19 removed the "catch-up" band-aid that used to flip _initSeen/IsReady on the first
+        // non-init event. It existed only because the row VM could miss the SystemInitEvent if the
+        // reader pumped it before this VM subscribed. SubscribeWithReplay now replays that window in
+        // FIFO order, so system/init is always observed through the init arm below; the
+        // result-fallback gate stays as defense for a genuinely init-less stream (parser anomaly).
 
         switch (ev)
         {
@@ -589,9 +611,19 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
     {
         if (_inFlightTurn is { } existing) return existing;
         var turn = new TurnNodeViewModel(initialPrompt);
-        Turns.Add(turn);
+        AddTurn(turn);
         _inFlightTurn = turn;
         return turn;
+    }
+
+    /// <summary>Append a turn to <see cref="Turns"/> and evict the oldest beyond
+    /// <see cref="MaxTurns"/> (M21). Eviction is from the front (oldest, already-closed turns); the
+    /// in-flight and queued turns live at the tail, so at any realistic cap they are never the
+    /// eviction target. Runs on the UI thread alongside every other <see cref="Turns"/> mutation.</summary>
+    private void AddTurn(TurnNodeViewModel turn)
+    {
+        Turns.Add(turn);
+        while (Turns.Count > MaxTurns) Turns.RemoveAt(0);
     }
 
     private static void AppendAssistantContent(TurnNodeViewModel turn, AssistantEvent asst)
@@ -747,9 +779,8 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
         if (_disposed) return;
         _disposed = true;
         try { Context.Session.State.Transitioned -= _onTransition; } catch { /* best-effort */ }
-        try { Context.EventObserved -= _onEvent; } catch { /* best-effort */ }
+        try { _eventSubscription.Dispose(); } catch { /* best-effort */ }
         try { Context.ApprovalSlot.Changed -= _onApprovalChanged; } catch { /* best-effort */ }
         try { _deadlineTimer.Stop(); _deadlineTimer.Tick -= OnDeadlineTick; } catch { /* best-effort */ }
-        Transcript.Dispose();
     }
 }

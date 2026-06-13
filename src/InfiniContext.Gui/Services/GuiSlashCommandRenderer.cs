@@ -89,4 +89,16 @@ public sealed class TranscriptTextWriter : TextWriter
     public override Encoding Encoding => Encoding.UTF8;
     public override void Write(char value) => _append(value.ToString());
     public override void Write(string? value) { if (!string.IsNullOrEmpty(value)) _append(value); }
+
+    // M22: forward bulk writes as ONE append each rather than letting the base TextWriter fan a
+    // string/line out into per-character Write(char) calls. Combined with the BatchingOutputSink the
+    // _append delegate is pointed at, this kills the per-character dispatcher-post + Detail-rebuild
+    // O(n²) path for chatty commands (e.g. /task review).
+    public override void Write(char[] buffer, int index, int count)
+    {
+        if (count > 0) _append(new string(buffer, index, count));
+    }
+
+    public override void WriteLine(string? value) => _append((value ?? string.Empty) + "\n");
+    public override void WriteLine() => _append("\n");
 }
