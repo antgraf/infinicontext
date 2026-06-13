@@ -36,6 +36,7 @@
     <ProjectReference Include="..\..\src\InfiniContext.Cli\InfiniContext.Cli.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\InfiniContext.Gui\InfiniContext.Gui.csproj" />
     <ProjectReference Include="..\FakeClaude\FakeClaude.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\SupervisorHostProbe\SupervisorHostProbe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <!--

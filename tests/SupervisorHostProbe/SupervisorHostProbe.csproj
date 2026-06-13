@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SupervisorHostProbe — a minimal real host used by the POSIX host-lifecycle smoke
+    (tests/InfiniContext.Tests/Supervision/PosixSignalSupervisorTests.cs, task 0023 C2/C3).
+    It wires the production IProcessSupervisor exactly as the CLI host does so the smoke
+    validates the real signal -> reap -> terminate path, not a reimplementation.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\InfiniContext.Core\InfiniContext.Core.csproj" />
+  </ItemGroup>
+
+</Project>

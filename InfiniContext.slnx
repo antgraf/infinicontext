@@ -10,6 +10,7 @@
     <Project Path="tests/InfiniContext.Gui.UiaDriver/InfiniContext.Gui.UiaDriver.csproj" />
     <Project Path="tests/InfiniContext.Gui.UiaTests/InfiniContext.Gui.UiaTests.csproj" />
     <Project Path="tests/FakeClaude/FakeClaude.csproj" />
+    <Project Path="tests/SupervisorHostProbe/SupervisorHostProbe.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/InfiniContext.Recorder/InfiniContext.Recorder.csproj" />

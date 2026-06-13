@@ -154,6 +154,165 @@ public class PosixSignalSupervisorTests
         child.Dispose();
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Host-lifecycle smoke (task 0023 C2/C3). The reap-primitive tests above cannot observe the
+    // signal-handler *interaction* the audit flagged — that needs a real second process running a
+    // live supervisor that we then signal. SupervisorHostProbe is that process: it wires the
+    // production supervisor exactly as the CLI host does, attaches a child, mirrors the host's
+    // ownership of Ctrl+C, prints CHILD_PID + READY, and blocks. We drive it with real signals.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// C2: SIGINT is the interactive host's "interrupt the turn" gesture. The supervisor must NOT
+    /// register it, so a Ctrl+C leaves both the host and every session child alive. (Pre-fix the
+    /// supervisor reaped on SIGINT, killing the child within the grace window.)
+    /// </summary>
+    [MacOnlyFact]
+    public async Task HostLifecycle_SIGINT_leaves_host_and_child_alive()
+    {
+        var (probe, childPid) = await StartProbeAndWaitReadyAsync(TimeSpan.FromSeconds(20));
+        try
+        {
+            SendSignal(probe.Id, "INT");
+
+            // Wait comfortably past the supervisor's default grace (2s): on the pre-fix code the
+            // child would have been SIGTERM'd then SIGKILL'd by now. On the fixed code nothing reaps.
+            await Task.Delay(TimeSpan.FromSeconds(4));
+
+            probe.HasExited.Should().BeFalse("the host owns SIGINT (Cancel=true) and must stay alive");
+            IsAlive(childPid).Should().BeTrue($"child pid {childPid} must survive SIGINT — the supervisor must not reap on it (C2)");
+        }
+        finally
+        {
+            await KillProbeAndChildAsync(probe, childPid);
+        }
+    }
+
+    /// <summary>
+    /// C3: SIGTERM/SIGHUP/SIGQUIT mean "terminate the host". The supervisor reaps children and then
+    /// the host actually exits. (Pre-fix it set <c>ctx.Cancel = true</c>, leaving a zombie host with
+    /// dead sessions, clearable only by <c>kill -9</c>.)
+    /// </summary>
+    [MacOnlyFact]
+    public async Task HostLifecycle_SIGTERM_terminates_host_and_child()
+    {
+        var (probe, childPid) = await StartProbeAndWaitReadyAsync(TimeSpan.FromSeconds(20));
+        try
+        {
+            SendSignal(probe.Id, "TERM");
+
+            var hostExited = await WaitForProcessExitAsync(probe, TimeSpan.FromSeconds(10));
+            hostExited.Should().BeTrue("the host must terminate on SIGTERM, not zombie (C3)");
+
+            // After the host exits, the (SIGTERM'd) child is reparented to launchd/init and reaped,
+            // so its pid disappears. Poll for that within a generous window.
+            var childGone = await WaitForPidGoneAsync(childPid, TimeSpan.FromSeconds(5));
+            childGone.Should().BeTrue($"child pid {childPid} must die when the host is terminated");
+        }
+        finally
+        {
+            await KillProbeAndChildAsync(probe, childPid);
+        }
+    }
+
+    private static async Task<(Process probe, int childPid)> StartProbeAndWaitReadyAsync(TimeSpan timeout)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = SupervisorHostProbeRunner.ExecutablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        var probe = Process.Start(psi)!;
+
+        int? childPid = null;
+        var sawReady = false;
+        var deadline = DateTime.UtcNow + timeout;
+        while (!sawReady)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) break;
+
+            var readTask = probe.StandardOutput.ReadLineAsync();
+            var completed = await Task.WhenAny(readTask, Task.Delay(remaining));
+            if (completed != readTask) break;            // timed out waiting for a line
+            var line = await readTask;
+            if (line is null) break;                     // stream closed: probe died early
+
+            const string pidPrefix = "CHILD_PID=";
+            if (line.StartsWith(pidPrefix, StringComparison.Ordinal)
+                && int.TryParse(line.AsSpan(pidPrefix.Length), out var pid))
+                childPid = pid;
+            else if (line == "READY")
+                sawReady = true;
+        }
+
+        if (!sawReady || childPid is null)
+        {
+            try { probe.Kill(entireProcessTree: true); } catch { }
+            probe.Dispose();
+            throw new InvalidOperationException("SupervisorHostProbe did not report CHILD_PID + READY in time.");
+        }
+
+        return (probe, childPid.Value);
+    }
+
+    /// <summary>Sends a signal by name (e.g. "INT", "TERM") to a pid via <c>/bin/kill -s</c>.</summary>
+    private static void SendSignal(int pid, string name) => RunKill($"-s {name} {pid}");
+
+    /// <summary><c>kill -0</c> sends no signal; exit 0 means the pid exists (and is signalable).</summary>
+    private static bool IsAlive(int pid) => RunKill($"-0 {pid}") == 0;
+
+    private static int RunKill(string arguments)
+    {
+        using var p = Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/kill",
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        p.WaitForExit(5000);
+        return p.HasExited ? p.ExitCode : -1;
+    }
+
+    private static async Task<bool> WaitForProcessExitAsync(Process p, TimeSpan timeout)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            await p.WaitForExitAsync(cts.Token);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return p.HasExited;
+        }
+    }
+
+    private static async Task<bool> WaitForPidGoneAsync(int pid, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!IsAlive(pid)) return true;
+            await Task.Delay(100);
+        }
+        return !IsAlive(pid);
+    }
+
+    private static async Task KillProbeAndChildAsync(Process probe, int childPid)
+    {
+        try { if (!probe.HasExited) SendSignal(probe.Id, "KILL"); } catch { }
+        try { if (IsAlive(childPid)) SendSignal(childPid, "KILL"); } catch { }
+        try { await WaitForProcessExitAsync(probe, TimeSpan.FromSeconds(3)); } catch { }
+        probe.Dispose();
+    }
+
     /// <summary>Long-running child that survives until killed. /bin/sh is on macOS by default.</summary>
     private static Process StartLongRunningChild()
     {

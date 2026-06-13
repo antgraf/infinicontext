@@ -112,8 +112,48 @@
   fails intermittently under parallelism (toggles `ANTHROPIC_API_KEY`); passes in isolation. Logged
   to issues.md#0001.
 
+- **Phase D committed + pushed** to `main` as `40c0e2b` ("Task 0023: architecture audit fixes,
+  phase D (security/trust boundaries)", 22 files, +750/−93) per operator "push" instruction.
+
 ### Handoff to next session (post-Phase-D)
-- Phases A–D done & verified; all uncommitted on `main`. Recommend the operator branch + commit
-  Phase D before Phase E.
+- Phases A–D done, verified, committed & pushed (`main` @ `40c0e2b`). Working tree clean.
 - Remaining: Phase E (POSIX C2/C3 + macOS host-lifecycle smoke), Phase F (C1 sentinel lock, M19–M22
   GUI bounding). See plan.md.
+- Phase E entry points: `src/InfiniContext.Core/Supervision/Posix/PosixSignalSupervisor.cs`
+  (SIGINT-as-reap-trigger = C2; `Cancel=true` zombie-host = C3), `src/InfiniContext.Cli/Ui/
+  MultiSessionHost.cs:112-125` (host's `Console.CancelKeyPress` ownership of Ctrl+C), and
+  `docs/stage2/decisions.md` §10b Phase 7 (the incorrect "runtime still terminates" claim to correct).
+
+## 2026-06-12 (Phase E — POSIX signals)
+
+- **C2 DONE** (host owns SIGINT): `PosixSignalSupervisor` no longer registers `PosixSignal.SIGINT`.
+  Reap triggers are now SIGTERM/SIGHUP/SIGQUIT + `AppDomain.ProcessExit` + `Dispose`. Rationale: the
+  interactive host owns Ctrl+C via `Console.CancelKeyPress` (`e.Cancel = true`) as "interrupt the
+  turn"; the old dual-registration reaped every session's children on that gesture while the host
+  stayed alive (Windows unaffected — Job Object ignores Ctrl+C, so the platforms diverged). A
+  SIGINT that *does* terminate the host (no console handler) still reaps via the ProcessExit hook.
+- **C3 DONE** (no zombie host): `OnSignal` now reaps children synchronously then
+  `Environment.Exit(128 + signum)` — chose the audit's deterministic option over "leave Cancel=false
+  and rely on the runtime's default disposition" because a host blocked on an infinite stdin read
+  doesn't cooperatively unwind, so the default-disposition path is not reliably terminal. The old
+  `ctx.Cancel = true` cancelled termination outright → zombie host clearable only by `kill -9`.
+- **Docs corrected:** `docs/stage2/decisions.md` §"macOS supervisor + C7 + T4 (Phase 7)" — the
+  `ctx.Cancel = true` bullet rewritten with a dated C3 correction + new C2 bullet; the best-effort
+  signal list and the startup-scan bullet updated to drop SIGINT from the supervisor's handlers.
+- **Host-lifecycle smoke (audit item 7) DONE:** new `tests/SupervisorHostProbe` minimal real host
+  wires the production `ProcessSupervisor.CreateForCurrentPlatform()` exactly as the CLI does,
+  attaches a `/bin/sh -c "sleep 600"` child, mirrors the host's `Console.CancelKeyPress` ownership,
+  prints `CHILD_PID`/`READY`, and blocks. Two `[MacOnlyFact]` tests in `PosixSignalSupervisorTests`
+  drive it with real signals: `HostLifecycle_SIGINT_leaves_host_and_child_alive` (C2 regression — old
+  code would have reaped the child within the 2s grace) and `HostLifecycle_SIGTERM_terminates_host_and_child`
+  (C3 regression — old code left the host a zombie). Added the probe to `InfiniContext.slnx` + the
+  test csproj (`ReferenceOutputAssembly=false`) + `SupervisorHostProbeRunner` locator (mirrors
+  `FakeClaudeRunner`). `ci-macos.yml` header updated to describe the two test layers.
+- **Verified (Windows):** full solution builds clean in Release; `dotnet format --verify-no-changes`
+  clean; Supervision suite green (11 passed / 5 MacOnly-skipped, incl. the 2 new). The macOS smoke
+  itself can only run via `ci-macos.yml` dispatch (10×-billed) — **not yet dispatched**.
+
+### Handoff to next session (post-Phase-E)
+- Phases A–E code done + verified on Windows; **Phase E macOS validation pending a `ci-macos.yml`
+  dispatch** (operator decision — costs 10× minutes). Working tree has Phase E changes uncommitted.
+- Remaining: Phase F (C1 startup sentinel lock; M19–M22 GUI bounding). See plan.md.

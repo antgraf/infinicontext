@@ -53,10 +53,11 @@ Ordered by risk/leverage and by "isolated & high-confidence first".
       DEFERRED: "always route shell/network tools to ask" (disables auto-approve for Bash — operator call). see issues.md#0002.
 - [x] M4  — host-verified `UnderVersionControl` fact; prompt carves out `.git/`, history/uncommitted-destroying ops.
 
-### Phase E — POSIX signals (re-validate on macOS)
-- [ ] C2  — host owns SIGINT; supervisor reaps only on SIGTERM/SIGHUP/SIGQUIT/Dispose (or suppression hook).
-- [ ] C3  — leave `Cancel=false` (or `Environment.Exit(128+sig)`); correct `docs/stage2/decisions.md`.
-- [ ] (after C2/C3) add a host-lifecycle smoke to `ci-macos.yml`; dispatch it.
+### Phase E — POSIX signals (re-validate on macOS) — code DONE 2026-06-12 (build + format + Win tests green; macOS smoke pending dispatch)
+- [x] C2  — supervisor no longer registers SIGINT (host owns Ctrl+C); reaps only on SIGTERM/SIGHUP/SIGQUIT + ProcessExit/Dispose.
+- [x] C3  — `OnSignal` reaps then `Environment.Exit(128+signum)` (deterministic over Cancel=false); corrected `docs/stage2/decisions.md` §"macOS supervisor".
+- [x] (after C2/C3) host-lifecycle smoke added: new `tests/SupervisorHostProbe` real-host + two `[MacOnlyFact]`
+      `HostLifecycle_SIGINT_*` / `HostLifecycle_SIGTERM_*` tests; `ci-macos.yml` header updated. **Pending: dispatch `ci-macos.yml` to validate.**
 
 ### Phase F — GUI bounding & shared wiring
 - [ ] C1  — startup sentinel lock under `~/.infinicontext/` (single-host enforcement). [see decision above]

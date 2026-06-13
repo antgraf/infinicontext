@@ -7,7 +7,7 @@ namespace InfiniContext.Core.Supervision.Posix;
 
 /// <summary>
 /// Stage 2B Phase 7 macOS/Linux backend for <see cref="IProcessSupervisor"/>. Tracks attached
-/// child PIDs in-process and, on any of {clean dispose, host-process exit, SIGINT/SIGTERM/SIGHUP/SIGQUIT
+/// child PIDs in-process and, on any of {clean dispose, host-process exit, SIGTERM/SIGHUP/SIGQUIT
 /// delivered to the host}, sends SIGTERM to every survivor, waits up to <see cref="GracePeriod"/>
 /// for them to leave, then sends SIGKILL.
 ///
@@ -17,12 +17,22 @@ namespace InfiniContext.Core.Supervision.Posix;
 /// rely on. The compromise:
 /// </para>
 /// <list type="bullet">
-///   <item><see cref="PosixSignalRegistration"/> covers the four signals normally responsible for a
-///   clean shutdown (cmd-C, <c>kill</c>, terminal close, <c>kill -3</c>). Inside the handler we
-///   set <c>cancel=true</c> so the runtime's default handler doesn't fire first, then synchronously
-///   reap children before returning — at which point the runtime delivers its post-handler exit.</item>
+///   <item><see cref="PosixSignalRegistration"/> covers the three signals that mean "terminate the
+///   host" (<c>kill</c>, terminal close, <c>kill -3</c>). Inside the handler we synchronously reap
+///   children and then <b>terminate the host via <see cref="Environment.Exit(int)"/></b> (exit code
+///   <c>128 + signum</c>) — so the host actually exits after its children are gone, rather than
+///   lingering as a zombie (audit C3). The earlier design set <c>ctx.Cancel = true</c>, which
+///   cancelled the runtime's default termination and produced exactly that zombie.</item>
+///   <item><b>SIGINT (Ctrl+C) is deliberately NOT registered</b> (audit C2). On an interactive host
+///   Ctrl+C is the "interrupt the current turn" gesture, owned by <c>MultiSessionHost</c> via
+///   <c>Console.CancelKeyPress</c> (<c>e.Cancel = true</c>); reaping every session's children on that
+///   gesture would destroy all sessions while the host kept running. If a SIGINT is instead allowed
+///   to terminate the host (no console handler), .NET's default disposition raises
+///   <see cref="AppDomain.ProcessExit"/>, which still reaps. So Ctrl+C never orphans children on a
+///   real exit, but it also never kills them on an interrupt.</item>
 ///   <item><see cref="AppDomain.ProcessExit"/> covers clean managed shutdown (e.g. <c>return</c>
-///   from <c>Main</c>) and is the path for tests that don't signal-kill.</item>
+///   from <c>Main</c>, <c>Environment.Exit</c>, and the post-handler exit of an uncancelled signal)
+///   and is the path for tests that don't signal-kill.</item>
 ///   <item>SIGKILL of the host (<c>kill -9</c>) cannot be intercepted — children are orphaned.
 ///   That's the documented limitation in <c>docs/infinicontext-initial-design.md</c> §5.</item>
 /// </list>
@@ -59,7 +69,9 @@ public sealed class PosixSignalSupervisor : IProcessSupervisor
 
         // PosixSignalRegistration is the cross-platform .NET wrapper around sigaction. Each
         // registration cookie is disposable; we hold them in a list and dispose on teardown.
-        TryRegisterSignal(PosixSignal.SIGINT);
+        // SIGINT is intentionally NOT registered — the interactive host owns Ctrl+C as "interrupt
+        // the turn" (audit C2). Only the host-terminating signals trigger a reap here; a
+        // SIGINT-driven exit still reaps via the ProcessExit hook.
         TryRegisterSignal(PosixSignal.SIGTERM);
         TryRegisterSignal(PosixSignal.SIGHUP);
         TryRegisterSignal(PosixSignal.SIGQUIT);
@@ -67,7 +79,7 @@ public sealed class PosixSignalSupervisor : IProcessSupervisor
         _processExitHandler = (_, _) => ReapAll(reason: "process-exit");
         AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
 
-        _logger.Information("supervisor: PosixSignalSupervisor active (grace={GraceMs}ms; SIGINT/SIGTERM/SIGHUP/SIGQUIT + ProcessExit)",
+        _logger.Information("supervisor: PosixSignalSupervisor active (grace={GraceMs}ms; SIGTERM/SIGHUP/SIGQUIT + ProcessExit)",
             (int)GracePeriod.TotalMilliseconds);
     }
 
@@ -165,12 +177,33 @@ public sealed class PosixSignalSupervisor : IProcessSupervisor
 
     private void OnSignal(PosixSignalContext ctx)
     {
-        // Suppress the runtime's default handling so we get to reap before the host disappears.
-        // The runtime will still terminate the process once we return — Cancel=true only stops the
-        // *default* handler, not the eventual exit cycle that ProcessExit also fires from.
-        ctx.Cancel = true;
+        // Only the host-terminating signals (SIGTERM/SIGHUP/SIGQUIT) are registered — SIGINT is the
+        // interactive host's "interrupt the turn" gesture and is owned elsewhere (audit C2). Reap
+        // children synchronously, then deterministically terminate the host via Environment.Exit.
+        //
+        // The C3 bug was `ctx.Cancel = true`, which cancelled the runtime's default termination and
+        // left a zombie host (dead sessions, host still alive, clearable only by `kill -9`). The
+        // audit's two fixes were "leave Cancel=false and let the default disposition run" or
+        // "Environment.Exit(128+signal) after the reap"; we take the latter because it terminates
+        // the host *deterministically* on every POSIX platform, independent of whatever the main
+        // thread is blocked on and of per-signal default-disposition nuances. Environment.Exit
+        // raises AppDomain.ProcessExit (re-entering ReapAll, which finds no survivors and returns)
+        // and then exits with the conventional 128+signum code.
         ReapAll(reason: $"signal:{ctx.Signal}");
+        Environment.Exit(128 + SignalNumber(ctx.Signal));
     }
+
+    // PosixSignal is an abstract enum whose values are NOT the POSIX signal numbers, so map the
+    // three we register to their conventional numbers for the 128+N exit code. SIGINT (2) is here
+    // only for completeness; it is not registered.
+    private static int SignalNumber(PosixSignal signal) => signal switch
+    {
+        PosixSignal.SIGHUP => 1,
+        PosixSignal.SIGINT => 2,
+        PosixSignal.SIGQUIT => 3,
+        PosixSignal.SIGTERM => 15,
+        _ => 0,
+    };
 
     private void ReapAll(string reason)
     {
