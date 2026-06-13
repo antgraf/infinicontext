@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -18,7 +19,11 @@ public sealed class StreamJsonParser
 {
     private int _unknownEventCount;
     private int _malformedLineCount;
-    private readonly Dictionary<string, int> _unknownTypeHistogram = new(StringComparer.Ordinal);
+    // ConcurrentDictionary, not Dictionary: the stdout parse loop Bump()s this on a background
+    // reader thread while /state (StateCommand) enumerates it from the command thread. A plain
+    // Dictionary tears or throws InvalidOperationException exactly when an operator checks during
+    // active drift — and the drift histogram is the documented load-bearing safety net (M12).
+    private readonly ConcurrentDictionary<string, int> _unknownTypeHistogram = new(StringComparer.Ordinal);
 
     public int UnknownEventCount => _unknownEventCount;
     public int MalformedLineCount => _malformedLineCount;
@@ -282,10 +287,7 @@ public sealed class StreamJsonParser
     }
 
     private void Bump(string key)
-    {
-        _unknownTypeHistogram.TryGetValue(key, out var count);
-        _unknownTypeHistogram[key] = count + 1;
-    }
+        => _unknownTypeHistogram.AddOrUpdate(key, 1, static (_, count) => count + 1);
 
     private static Guid? TryParseGuid(JsonNode? node)
     {

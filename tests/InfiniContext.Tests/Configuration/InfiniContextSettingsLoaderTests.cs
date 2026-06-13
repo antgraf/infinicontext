@@ -357,8 +357,7 @@ public class InfiniContextSettingsLoaderTests
                 "autoApplyMaxLinesPerFinding": 30,
                 "autoApplyMaxFilesPerFinding": 2,
                 "perFileByteCap": 102400,
-                "invocationTimeoutSeconds": 300,
-                "skipBuildTestGate": true
+                "invocationTimeoutSeconds": 300
               }
             }
             """);
@@ -371,7 +370,59 @@ public class InfiniContextSettingsLoaderTests
         result.Settings.Review.AutoApplyMaxFilesPerFinding.Should().Be(2);
         result.Settings.Review.PerFileByteCap.Should().Be(102_400);
         result.Settings.Review.InvocationTimeoutSeconds.Should().Be(300);
-        result.Settings.Review.SkipBuildTestGate.Should().BeTrue();
+        // skipBuildTestGate:true is intentionally NOT exercised here — it is a hard validation
+        // error as a persisted default (M26); see SkipBuildTestGate_true_fails_validation.
+    }
+
+    // M26: review.* used to pass through unvalidated. A confidenceFloor typo (0.09 for 0.9)
+    // would silently auto-apply low-confidence edits.
+    [Theory]
+    [InlineData("-0.1")]
+    [InlineData("1.5")]
+    public void Review_confidenceFloor_outside_bounds_fails_validation(string value)
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), $$"""
+            { "review": { "confidenceFloor": {{value}} } }
+            """);
+
+        var act = () => LoadIsolated(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+            .Which.Errors.Should().Contain(e => e.Contains("review.confidenceFloor must be in [0, 1]"));
+    }
+
+    [Fact]
+    public void Review_skipBuildTestGate_true_fails_validation()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), """
+            { "review": { "skipBuildTestGate": true } }
+            """);
+
+        var act = () => LoadIsolated(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+            .Which.Errors.Should().Contain(e => e.Contains("review.skipBuildTestGate"));
+    }
+
+    [Theory]
+    [InlineData("\"autoApplyMaxLinesPerFinding\": 0", "review.autoApplyMaxLinesPerFinding")]
+    [InlineData("\"autoApplyMaxFilesPerFinding\": 0", "review.autoApplyMaxFilesPerFinding")]
+    [InlineData("\"perFileByteCap\": 0", "review.perFileByteCap")]
+    [InlineData("\"invocationTimeoutSeconds\": 0", "review.invocationTimeoutSeconds")]
+    [InlineData("\"invocationTimeoutSeconds\": 99999", "review.invocationTimeoutSeconds")]
+    public void Review_numeric_settings_outside_bounds_fail_validation(string fragment, string expectedError)
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "settings.json"), $$"""
+            { "review": { {{fragment}} } }
+            """);
+
+        var act = () => LoadIsolated(temp.Path);
+
+        act.Should().Throw<InfiniContextSettingsException>()
+            .Which.Errors.Should().Contain(e => e.Contains(expectedError));
     }
 
     [Fact]

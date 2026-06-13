@@ -179,6 +179,58 @@ public class TaskFolderTests
         drift.Should().BeEmpty();
     }
 
+    // M17: drift report covers BOTH directions.
+    [Fact]
+    public async Task DetectDriftReport_surfaces_missing_indexed_files()
+    {
+        using var tmp = new TempDir();
+        var folder = new TaskFolder(tmp.Path, 1, "alpha");
+        Directory.CreateDirectory(folder.Path);
+        // index.md references research.md, but research.md does not exist on disk.
+        await File.WriteAllTextAsync(Path.Combine(folder.Path, "index.md"), """
+            # Task index
+
+            | File | Description | Last updated |
+            |------|-------------|--------------|
+            | description.md | Full task spec | 2026-05-07 |
+            | research.md | Investigation notes | 2026-05-07 |
+            """, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(folder.Path, "description.md"), "spec", TestContext.Current.CancellationToken);
+
+        var report = await folder.DetectDriftReportAsync(TestContext.Current.CancellationToken);
+
+        report.MissingFiles.Should().Equal(new[] { "research.md" });
+        report.UnindexedFiles.Should().BeEmpty();
+        report.HasDrift.Should().BeTrue();
+    }
+
+    // M17: an unrelated markdown table elsewhere in index.md must not be parsed as file rows,
+    // which would silently mask drift.
+    [Fact]
+    public async Task IndexedFiles_anchors_to_canonical_header_and_ignores_stray_tables()
+    {
+        using var tmp = new TempDir();
+        var folder = new TaskFolder(tmp.Path, 1, "alpha");
+        Directory.CreateDirectory(folder.Path);
+        await File.WriteAllTextAsync(Path.Combine(folder.Path, "index.md"), """
+            # Task index
+
+            | File | Description | Last updated |
+            |------|-------------|--------------|
+            | description.md | Full task spec | 2026-05-07 |
+
+            Some notes with an unrelated table:
+
+            | Phase | Status |
+            |-------|--------|
+            | one   | done   |
+            """, TestContext.Current.CancellationToken);
+
+        var indexed = await folder.IndexedFilesAsync(TestContext.Current.CancellationToken);
+
+        indexed.Should().Equal(new[] { "description.md" });
+    }
+
     [Fact]
     public async Task CopyArtifacts_preserves_mtimes_and_creates_destination()
     {

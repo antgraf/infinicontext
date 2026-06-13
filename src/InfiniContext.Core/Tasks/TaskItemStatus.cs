@@ -15,3 +15,20 @@ public enum TaskItemStatus
     InProgress,
     Idle,
 }
+
+/// <summary>Outcome of <see cref="TaskStore.DeleteIfNotInProgressAsync"/> (M16).</summary>
+public enum DeleteOutcomeKind
+{
+    /// <summary>No row with that id existed.</summary>
+    NotFound,
+
+    /// <summary>The row was <see cref="TaskItemStatus.InProgress"/>; deletion was refused.</summary>
+    RefusedInProgress,
+
+    /// <summary>The row was deleted.</summary>
+    Deleted,
+}
+
+/// <param name="Kind">What happened.</param>
+/// <param name="OrphanedChildren">Children whose <c>parent_task_id</c> was nulled (only meaningful for <see cref="DeleteOutcomeKind.Deleted"/>).</param>
+public sealed record DeleteOutcome(DeleteOutcomeKind Kind, int OrphanedChildren);

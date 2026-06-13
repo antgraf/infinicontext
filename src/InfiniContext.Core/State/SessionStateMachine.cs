@@ -86,6 +86,23 @@ public sealed class SessionStateMachine
         }
     }
 
+    /// <summary>
+    /// Roll back the most recent <see cref="BeginSend"/> when the corresponding stdin write threw
+    /// or was cancelled (M6). Decrements <see cref="PendingSendCount"/> and, if this was the only
+    /// in-flight send and the machine never advanced past <see cref="SessionState.Sending"/>,
+    /// returns it to <see cref="SessionState.Idle"/> — otherwise the session is stuck "busy"
+    /// forever and rotation / status logic sees a phantom turn.
+    /// </summary>
+    public void AbortSend()
+    {
+        lock (_sync)
+        {
+            if (PendingSendCount > 0) PendingSendCount--;
+            if (PendingSendCount == 0 && State == SessionState.Sending)
+                Transition(SessionState.Idle, "AbortSend", null);
+        }
+    }
+
     public void Cancel()
     {
         lock (_sync)
@@ -103,6 +120,9 @@ public sealed class SessionStateMachine
         {
             if (State != SessionState.Exited)
             {
+                // Process is gone: no tool_result will ever arrive for an open slot. Drain so the
+                // correlation map doesn't leak and consumers see the tools abandoned (M10).
+                DrainOpenToolUses("process exit");
                 Transition(SessionState.Exited, $"ProcessExit(exitCode={exitCode?.ToString() ?? "<null>"})", null);
             }
         }
@@ -132,6 +152,10 @@ public sealed class SessionStateMachine
                     // (defensive against parser anomalies / future claude behaviour we haven't
                     // seen yet).
                     if (PendingSendCount > 0) PendingSendCount--;
+                    // A result ends a turn: any tool_use still open never got its tool_result
+                    // (interrupt mid-tool, abandoned call, dropped event). Drain it so slots don't
+                    // leak across long sessions and ghost "running tools" don't linger (M10).
+                    DrainOpenToolUses($"turn ended (result/{result.Subtype ?? "<null>"})");
                     if (PendingSendCount > 0)
                     {
                         // Buffered sends remain: claude has finished the current turn and is
@@ -231,6 +255,22 @@ public sealed class SessionStateMachine
         if (!_openToolUses.TryGetValue(toolUseId, out var slot)) return;
         _openToolUses.Remove(toolUseId);
         ToolStackChanged?.Invoke(new ToolStackChange(ToolStackChangeKind.Closed, slot, _clock()));
+    }
+
+    /// <summary>
+    /// Force-close every open tool-use slot, emitting an <see cref="ToolStackChangeKind.Abandoned"/>
+    /// notification per slot. Called at turn boundaries (<c>ResultEvent</c>) and process exit so
+    /// slots whose <c>tool_result</c> never arrived don't leak forever (M10). Must be called under
+    /// <see cref="_sync"/>.
+    /// </summary>
+    private void DrainOpenToolUses(string reason)
+    {
+        if (_openToolUses.Count == 0) return;
+        var slots = _openToolUses.Values.ToList();
+        _openToolUses.Clear();
+        var now = _clock();
+        foreach (var slot in slots)
+            ToolStackChanged?.Invoke(new ToolStackChange(ToolStackChangeKind.Abandoned, slot, now));
     }
 
     private void Transition(SessionState to, string reason, ClaudeEvent? cause)

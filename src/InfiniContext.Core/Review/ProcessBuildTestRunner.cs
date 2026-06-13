@@ -89,8 +89,12 @@ public sealed class ProcessBuildTestRunner : IBuildTestRunner
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            // Timeout. Kill and report.
-            try { proc.Kill(entireProcessTree: false); } catch { }
+            // Timeout. Tree-kill: `dotnet build`/`test` spawn MSBuild workers and testhost that
+            // hold bin/obj locks; killing only the top-level dotnet leaves them running and makes
+            // a subsequent revert/baseline gate fail spuriously mid-auto-apply (M24). D12's
+            // tree-kill prohibition applies only to the light-model child (no descendants by
+            // construction); this is the opposite case.
+            try { proc.Kill(entireProcessTree: true); } catch { }
             return new BuildTestOutcome(Passed: false, FailureSummary: $"timed out after {timeoutSeconds}s");
         }
 

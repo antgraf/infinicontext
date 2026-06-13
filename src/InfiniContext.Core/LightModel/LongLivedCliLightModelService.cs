@@ -32,6 +32,12 @@ public sealed class LongLivedCliLightModelService : CliLightModelServiceBase, IA
 
     private readonly IProcessSupervisor? _supervisor;
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+    // Serializes a whole call — spawn + real turn + the trailing /clear turn — against any other
+    // caller (M25). _lifecycleLock only guards the _child field; without this, two concurrent
+    // ExecuteAsync callers would run competing ReadLineAsync loops on the one child's stdout and
+    // attribute each other's answers (or one's /clear would swallow the other's result). The
+    // factory hands this instance to general consumers, so the single-caller assumption can't hold.
+    private readonly SemaphoreSlim _turnLock = new(1, 1);
 
     private CliLightModelChild? _child;
     private string? _pinnedSystemPrompt;
@@ -55,47 +61,57 @@ public sealed class LongLivedCliLightModelService : CliLightModelServiceBase, IA
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Options.TimeoutSeconds));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        var child = await GetOrSpawnChildAsync(systemPrompt, linked.Token).ConfigureAwait(false);
-
-        string text;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        // Serialize the entire call (M25). The wait counts against the per-call timeout so a stuck
+        // prior turn can't block this one indefinitely.
+        await _turnLock.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            text = await child.RunTurnAsync(userPayload, linked.Token).ConfigureAwait(false);
-            sw.Stop();
-            Logger.Debug("cli-light-model: long-lived turn ok latency={LatencyMs}ms", sw.ElapsedMilliseconds);
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-        {
-            await KillCurrentChildAsync().ConfigureAwait(false);
-            throw new TimeoutException($"cli-light-model: long-lived call exceeded {Options.TimeoutSeconds}s deadline");
-        }
-        catch
-        {
-            // Real-turn failure leaves the stream in an indeterminate state. Kill so the next
-            // caller gets a fresh child rather than a half-broken one.
-            await KillCurrentChildAsync().ConfigureAwait(false);
-            throw;
-        }
+            var child = await GetOrSpawnChildAsync(systemPrompt, linked.Token).ConfigureAwait(false);
 
-        // /clear after the real turn, per user direction. We wait for the model's reply (one
-        // turn's worth of stream events terminating in a `result`) so subsequent calls don't see
-        // overlapping streams. The reply text is discarded — its content doesn't matter; the
-        // arrival of `result` is the "confirmation" we wait for.
-        try
-        {
-            await child.RunTurnAsync(ClearCommand, linked.Token).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // /clear failures don't fail the caller's call — they got their answer above. But the
-            // child is now in an indeterminate state (mid-stream of a /clear that didn't finish),
-            // so kill it; the next call will respawn cleanly.
-            Logger.Warning(ex, "cli-light-model: /clear after turn failed; killing child for fresh respawn next call");
-            await KillCurrentChildAsync().ConfigureAwait(false);
-        }
+            string text;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                text = await child.RunTurnAsync(userPayload, linked.Token).ConfigureAwait(false);
+                sw.Stop();
+                Logger.Debug("cli-light-model: long-lived turn ok latency={LatencyMs}ms", sw.ElapsedMilliseconds);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                await KillCurrentChildAsync().ConfigureAwait(false);
+                throw new TimeoutException($"cli-light-model: long-lived call exceeded {Options.TimeoutSeconds}s deadline");
+            }
+            catch
+            {
+                // Real-turn failure leaves the stream in an indeterminate state. Kill so the next
+                // caller gets a fresh child rather than a half-broken one.
+                await KillCurrentChildAsync().ConfigureAwait(false);
+                throw;
+            }
 
-        return text;
+            // /clear after the real turn, per user direction. We wait for the model's reply (one
+            // turn's worth of stream events terminating in a `result`) so subsequent calls don't see
+            // overlapping streams. The reply text is discarded — its content doesn't matter; the
+            // arrival of `result` is the "confirmation" we wait for.
+            try
+            {
+                await child.RunTurnAsync(ClearCommand, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // /clear failures don't fail the caller's call — they got their answer above. But the
+                // child is now in an indeterminate state (mid-stream of a /clear that didn't finish),
+                // so kill it; the next call will respawn cleanly.
+                Logger.Warning(ex, "cli-light-model: /clear after turn failed; killing child for fresh respawn next call");
+                await KillCurrentChildAsync().ConfigureAwait(false);
+            }
+
+            return text;
+        }
+        finally
+        {
+            _turnLock.Release();
+        }
     }
 
     private async Task<CliLightModelChild> GetOrSpawnChildAsync(string systemPrompt, CancellationToken cancellationToken)
@@ -159,5 +175,6 @@ public sealed class LongLivedCliLightModelService : CliLightModelServiceBase, IA
         if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
         await KillCurrentChildAsync().ConfigureAwait(false);
         _lifecycleLock.Dispose();
+        _turnLock.Dispose();
     }
 }

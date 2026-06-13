@@ -25,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
     private readonly IUiDispatcher _dispatcher;
     private readonly IUiTimerFactory _timerFactory;
     private readonly TaskNodeViewModel _unattached = new(null);
+    private int _disposed;
 
     /// <summary>The host-handled slash-commands, built from the single registration site shared
     /// with the CLI (task 0015). Typed slash input is dispatched through this in
@@ -1066,17 +1067,37 @@ public sealed partial class MainWindowViewModel : ObservableObject, IAsyncDispos
 
     public async ValueTask DisposeAsync()
     {
-        // Save layout before the host disposes (the logger lives on the host).
-        await SaveLayoutAsync().ConfigureAwait(false);
-        foreach (var node in TaskNodes)
-            foreach (var s in node.Sessions) s.Dispose();
-        TaskNodes.Clear();
-        if (_host is not null)
+        // Re-entrancy guard (C5): a second close click must not start a concurrent dispose and a
+        // second Shutdown().
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
+
+        // Stay on the UI thread for the pre-host steps. SaveLayoutAsync previously used
+        // ConfigureAwait(false), moving the continuation to the thread pool — then per-row
+        // Dispose() (stops a thread-affine DispatcherTimer) and TaskNodes.Clear() (a TreeView-bound
+        // ObservableCollection) ran off the UI thread, and any throw skipped _host.DisposeAsync()
+        // entirely (losing the graceful SessionManager close, session-index persistence, and
+        // Serilog flush). Keep UI-thread affinity (ConfigureAwait(true)) and wrap the pre-host
+        // steps in try/finally so the host teardown always runs.
+        try
         {
-            _host.SessionClosed -= OnSessionClosed;
-            _host.ApprovalModeChanged -= OnHostApprovalModeChanged;
-            _host.AutoRotationProposed -= OnAutoRotationProposed;
-            await _host.DisposeAsync().ConfigureAwait(false);
+            await SaveLayoutAsync().ConfigureAwait(true);
+            foreach (var node in TaskNodes)
+                foreach (var s in node.Sessions) s.Dispose();
+            TaskNodes.Clear();
+        }
+        catch (Exception ex)
+        {
+            _host?.Logger.Warning(ex, "gui-dispose: pre-host teardown threw; continuing to host dispose");
+        }
+        finally
+        {
+            if (_host is not null)
+            {
+                _host.SessionClosed -= OnSessionClosed;
+                _host.ApprovalModeChanged -= OnHostApprovalModeChanged;
+                _host.AutoRotationProposed -= OnAutoRotationProposed;
+                await _host.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 }

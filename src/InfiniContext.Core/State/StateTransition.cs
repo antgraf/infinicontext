@@ -27,7 +27,9 @@ public sealed record ToolUseSlot(
     DateTimeOffset OpenedAt,
     string? ParentToolUseId);
 
-public enum ToolStackChangeKind { Opened, Closed }
+// Closed = a matching tool_result arrived. Abandoned = the slot was force-drained at a turn
+// boundary or process exit without a result (interrupt mid-tool, dropped event, early exit) — M10.
+public enum ToolStackChangeKind { Opened, Closed, Abandoned }
 
 public sealed record ToolStackChange(
     ToolStackChangeKind Kind,

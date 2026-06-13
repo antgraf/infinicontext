@@ -61,6 +61,11 @@ public sealed class SessionManager : IAsyncDisposable
     private readonly List<SessionIndexEntry> _recent;
     private readonly string _indexPath;
     private readonly Func<DateTimeOffset> _clock;
+    // Single-flight gate for index persistence (M9): _recent mutates under _gate but the file
+    // write must not race a concurrent close, or two out-of-order writes can leave the file as
+    // the older snapshot and silently lose a resume row. Mutation + snapshot + save run as a
+    // unit under this semaphore.
+    private readonly SemaphoreSlim _saveLock = new(1, 1);
     private int _disposed;
 
     /// <summary>Hard cap on rows persisted to <c>~/.infinicontext/index.json</c> (D24). Older rows
@@ -75,6 +80,13 @@ public sealed class SessionManager : IAsyncDisposable
     /// the manager having to know about rotation policy. Handlers run synchronously inside
     /// <see cref="CreateAsync"/>; do not block.</summary>
     public event Action<SessionContext>? SessionCreated;
+
+    /// <summary>Raised with the host session id after a session has been closed (via
+    /// <see cref="CloseAsync"/>) or torn down during <see cref="DisposeAsync"/>. The session is
+    /// already disposed when this fires. Lets the host make session close the release point for
+    /// task claims (M15) without coupling the manager to <c>TaskActivityCoordinator</c> (D21).
+    /// Handlers run synchronously; do not block.</summary>
+    public event Action<Guid>? SessionClosed;
 
     public SessionManager(
         InfiniContextSettings settings,
@@ -270,12 +282,30 @@ public sealed class SessionManager : IAsyncDisposable
         };
         reader.Start();
 
+        bool registrationRefused;
         lock (_gate)
         {
-            _sessions[id] = ctx;
-            _startMetadata[id] = new SessionStartMetadata(request.Cwd, request.Model, createdAt);
-            _readers[id] = reader;
+            // Re-check under the lock (M8): ThrowIfDisposed ran at entry, but StartAsync awaited a
+            // process spawn for hundreds of ms. If DisposeAsync ran in that window its snapshot
+            // already missed this session — registering now would orphan a live session (child,
+            // sidecar pipe, temp mcp-config, reader loop) that nothing ever disposes.
+            registrationRefused = Volatile.Read(ref _disposed) != 0;
+            if (!registrationRefused)
+            {
+                _sessions[id] = ctx;
+                _startMetadata[id] = new SessionStartMetadata(request.Cwd, request.Model, createdAt);
+                _readers[id] = reader;
+            }
         }
+
+        if (registrationRefused)
+        {
+            _logger.Warning("session-manager: refused to register {HostSessionId} — manager disposed during StartAsync; tearing down", id);
+            try { await reader.DisposeAsync().ConfigureAwait(false); } catch (Exception ex) { _logger.Warning(ex, "session-manager: reader dispose after refused registration failed"); }
+            try { await ctx.DisposeAsync().ConfigureAwait(false); } catch (Exception ex) { _logger.Warning(ex, "session-manager: ctx dispose after refused registration failed"); }
+            throw new ObjectDisposedException(nameof(SessionManager));
+        }
+
         _logger.Information("session-manager: opened {HostSessionId} cwd={Cwd} task={TaskId} resume={Resume}",
             id, request.Cwd, request.ActiveTaskId, request.ResumeSessionId ?? "<none>");
 
@@ -331,6 +361,9 @@ public sealed class SessionManager : IAsyncDisposable
         }
 
         await TryRecordIndexEntryAsync(meta, claudeSessionId, lastState).ConfigureAwait(false);
+
+        try { SessionClosed?.Invoke(id); }
+        catch (Exception ex) { _logger.Warning(ex, "session-manager: SessionClosed subscriber threw for {HostSessionId}", id); }
     }
 
     /// <summary>
@@ -375,24 +408,32 @@ public sealed class SessionManager : IAsyncDisposable
             LastState = lastState,
         };
 
-        SessionIndex snapshot;
-        lock (_gate)
-        {
-            // Drop any prior row for the same session id — re-running --resume would otherwise
-            // duplicate entries (one per host run).
-            _recent.RemoveAll(e => string.Equals(e.SessionId, entry.SessionId, StringComparison.Ordinal));
-            _recent.Insert(0, entry);
-            while (_recent.Count > RecentSessionsCap) _recent.RemoveAt(_recent.Count - 1);
-            snapshot = new SessionIndex { Sessions = _recent.ToList() };
-        }
-
+        // Single-flight (M9): hold _saveLock across mutate + snapshot + save so two concurrent
+        // closes can't write the file out of order and lose a row. The second waiter re-snapshots
+        // under _gate AFTER the first's write completes, so its file includes both entries.
+        await _saveLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            SessionIndex snapshot;
+            lock (_gate)
+            {
+                // Drop any prior row for the same session id — re-running --resume would otherwise
+                // duplicate entries (one per host run).
+                _recent.RemoveAll(e => string.Equals(e.SessionId, entry.SessionId, StringComparison.Ordinal));
+                _recent.Insert(0, entry);
+                while (_recent.Count > RecentSessionsCap) _recent.RemoveAt(_recent.Count - 1);
+                snapshot = new SessionIndex { Sessions = _recent.ToList() };
+            }
+
             await snapshot.SaveAsync(_indexPath).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.Warning(ex, "session-index: failed to persist {Path}", _indexPath);
+        }
+        finally
+        {
+            _saveLock.Release();
         }
     }
 
@@ -481,6 +522,9 @@ public sealed class SessionManager : IAsyncDisposable
             try { await ctx.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) { _logger.Warning(ex, "session-manager: dispose {HostSessionId} during shutdown failed", ctx.Id); }
             await TryRecordIndexEntryAsync(meta, claudeSessionId, lastState).ConfigureAwait(false);
+
+            try { SessionClosed?.Invoke(ctx.Id); }
+            catch (Exception ex) { _logger.Warning(ex, "session-manager: SessionClosed subscriber threw during shutdown for {HostSessionId}", ctx.Id); }
         }
     }
 

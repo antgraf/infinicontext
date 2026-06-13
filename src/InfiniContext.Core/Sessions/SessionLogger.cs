@@ -73,7 +73,12 @@ internal sealed class SessionLogger
 
     private void OnToolStackChange(ToolStackChange c)
     {
-        var sign = c.Kind == ToolStackChangeKind.Opened ? "+" : "-";
+        var sign = c.Kind switch
+        {
+            ToolStackChangeKind.Opened => "+",
+            ToolStackChangeKind.Abandoned => "~", // force-drained without a tool_result (M10)
+            _ => "-",
+        };
         _logger.Information(
             "tool {Sign}{Name}#{Id} (parent={ParentId}, open={Open})",
             sign, c.Slot.Name, c.Slot.Id, c.Slot.ParentToolUseId ?? "<root>", _state.OpenToolUses.Count);

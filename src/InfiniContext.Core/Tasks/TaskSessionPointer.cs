@@ -17,18 +17,37 @@ public static class TaskSessionPointer
     /// empty list when there is no drift.
     /// </summary>
     public static string ComposeFirstMessage(int taskId, string slug, string title, IReadOnlyList<string> drift)
+        => ComposeFirstMessage(taskId, slug, title, drift, Array.Empty<string>());
+
+    /// <summary>
+    /// Build the pointer string with bidirectional drift (M17). <paramref name="unindexedFiles"/>
+    /// are present on disk but missing from <c>index.md</c>; <paramref name="missingFiles"/> are
+    /// listed in <c>index.md</c> but absent from disk. Each non-empty direction prepends its own
+    /// reconcile note so a fresh session fixes a stale table of contents before doing other work.
+    /// </summary>
+    public static string ComposeFirstMessage(
+        int taskId,
+        string slug,
+        string title,
+        IReadOnlyList<string> unindexedFiles,
+        IReadOnlyList<string> missingFiles)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(slug);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        ArgumentNullException.ThrowIfNull(drift);
+        ArgumentNullException.ThrowIfNull(unindexedFiles);
+        ArgumentNullException.ThrowIfNull(missingFiles);
         if (taskId <= 0) throw new ArgumentOutOfRangeException(nameof(taskId), "taskId must be positive.");
 
         var folder = $".task/{taskId:D4}-{slug}/";
         var pointer = $"Working on task {taskId:D4} (\"{title}\"). Task folder: {folder}. Use the infinicontext-task skill.";
 
-        if (drift.Count == 0) return pointer;
+        var notes = new List<string>();
+        if (unindexedFiles.Count > 0)
+            notes.Add($"Note: {string.Join(", ", unindexedFiles)} exist on disk but are missing from index.md — please reconcile.");
+        if (missingFiles.Count > 0)
+            notes.Add($"Note: {string.Join(", ", missingFiles)} are listed in index.md but do not exist on disk — please reconcile.");
 
-        var driftList = string.Join(", ", drift);
-        return $"Note: {driftList} exist on disk but are missing from index.md — please reconcile.\n\n{pointer}";
+        if (notes.Count == 0) return pointer;
+        return $"{string.Join("\n", notes)}\n\n{pointer}";
     }
 }

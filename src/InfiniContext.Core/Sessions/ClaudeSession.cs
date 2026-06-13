@@ -45,6 +45,11 @@ public sealed class ClaudeSession : IClaudeSession
     private readonly Queue<string> _stderrRing = new();
     private readonly object _stderrLock = new();
     private readonly TaskCompletionSource _exitTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Completes when the first-user-message (task pointer) delivery attempt finishes, success OR
+    // failure (M11). Always completes — never faults — so an un-awaited instance can't raise an
+    // unobserved-task-exception; failure is surfaced via FirstMessageError. When no first message
+    // is configured it is completed immediately in StartAsync.
+    private readonly TaskCompletionSource _firstMessageTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ILogger _baseLogger;
     private readonly IProcessSupervisor? _supervisor;
     private readonly IApprovalSink? _approvalSink;
@@ -61,6 +66,8 @@ public sealed class ClaudeSession : IClaudeSession
     private int _disposed;
     private int _interruptCounter;
     private ApprovalSidecarLauncher? _approvalLauncher;
+    private volatile bool _stdinPoisoned;
+    private volatile Exception? _firstMessageError;
 
     public ClaudeSession(
         ClaudeSessionOptions options,
@@ -105,6 +112,12 @@ public sealed class ClaudeSession : IClaudeSession
     public Guid? SessionId => _sessionId;
     public SessionStateMachine State => _state;
     public ChannelReader<ClaudeEvent> Events => _events.Reader;
+
+    /// <inheritdoc />
+    public Task FirstMessageDelivery => _firstMessageTcs.Task;
+
+    /// <inheritdoc />
+    public Exception? FirstMessageError => _firstMessageError;
 
     public int UnknownEventCount => _parser.UnknownEventCount;
     public int MalformedLineCount => _parser.MalformedLineCount;
@@ -207,13 +220,37 @@ public sealed class ClaudeSession : IClaudeSession
         {
             _ = SendFirstUserMessageAsync(_options.FirstUserMessage);
         }
+        else
+        {
+            // No pointer to deliver — ordering gate is satisfied immediately.
+            _firstMessageTcs.TrySetResult();
+        }
     }
 
     public async Task SendUserMessageAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
+        // Fail fast on an un-started session: _firstMessageTcs is only ever completed by
+        // StartAsync, so awaiting the gate below before this check would hang forever.
+        if (_process is null) throw new InvalidOperationException("Session has not been started.");
+        // Order guarantee (M11): the task pointer (first user message) must reach claude before any
+        // caller-driven prompt, or message order inverts and the agent runs without task context.
+        // FirstMessageDelivery completes when the pointer attempt finishes (success or failure); we
+        // await it before taking _writeLock. A failed pointer poisons stdin, so the core send below
+        // then fails cleanly rather than writing out of order.
+        var firstDelivery = _firstMessageTcs.Task;
+        if (!firstDelivery.IsCompleted)
+            await firstDelivery.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        await SendUserMessageCoreAsync(text, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendUserMessageCoreAsync(string text, CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _disposed) == 1) throw new ObjectDisposedException(nameof(ClaudeSession));
         if (_process is null) throw new InvalidOperationException("Session has not been started.");
         if (_process.HasExited) throw new InvalidOperationException("Child process has exited.");
+        if (_stdinPoisoned) throw new InvalidOperationException("Session stdin is poisoned after a failed/cancelled write; the session is shutting down.");
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -222,17 +259,43 @@ public sealed class ClaudeSession : IClaudeSession
         }, s_jsonOptions);
 
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var beganSend = false;
         try
         {
+            // Re-check under the lock: DisposeAsync may have run while we waited.
+            if (Volatile.Read(ref _disposed) == 1) throw new ObjectDisposedException(nameof(ClaudeSession));
             _state.BeginSend();
+            beganSend = true;
             _logger.Debug("tx: {Tx}", payload);
             await _process.StandardInput.WriteLineAsync(payload.AsMemory(), cancellationToken).ConfigureAwait(false);
             await _process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            beganSend = false; // delivered: the matching ResultEvent will decrement PendingSendCount
+        }
+        catch (Exception ex)
+        {
+            // The write threw or was cancelled mid-line. Roll back the pending-send count so the
+            // state machine isn't stuck Sending forever (M6), and poison stdin: a partial JSON
+            // line would corrupt the NEXT send, so no further sends are safe on this child.
+            if (beganSend) _state.AbortSend();
+            PoisonStdin(ex);
+            throw;
         }
         finally
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Mark stdin unusable after a failed/cancelled write and close it so the child exits cleanly
+    /// via EOF (M6). Idempotent. Must NOT be called while another path holds — and re-acquires —
+    /// <see cref="_writeLock"/>; callers here already hold it.
+    /// </summary>
+    private void PoisonStdin(Exception cause)
+    {
+        _stdinPoisoned = true;
+        _logger.Warning(cause, "stdin poisoned after a failed/cancelled write; closing stdin so the child exits via EOF");
+        try { _process?.StandardInput.Close(); } catch { /* child already gone */ }
     }
 
     public async Task InterruptAsync(CancellationToken cancellationToken = default)
@@ -381,12 +444,23 @@ public sealed class ClaudeSession : IClaudeSession
     {
         try
         {
-            await SendUserMessageAsync(message).ConfigureAwait(false);
+            // Use the core send directly: the public SendUserMessageAsync awaits FirstMessageDelivery,
+            // which is exactly the task this method backs — going through it would self-deadlock.
+            await SendUserMessageCoreAsync(message, CancellationToken.None).ConfigureAwait(false);
             _logger.Information("first user message sent ({Bytes} bytes)", message.Length);
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "first user message send failed");
+            // Surface to the context (M11): record the error for the host to inspect rather than
+            // running the whole session silently without task context.
+            _firstMessageError = ex;
+            _logger.Warning(ex, "first user message send failed — session has no task context; check FirstMessageError");
+        }
+        finally
+        {
+            // Always complete (never fault) so awaiters get an ordering signal and an un-awaited
+            // instance can't raise an unobserved-task-exception.
+            _firstMessageTcs.TrySetResult();
         }
     }
 
@@ -490,6 +564,12 @@ public sealed class ClaudeSession : IClaudeSession
             try { await _approvalLauncher.DisposeAsync().ConfigureAwait(false); } catch { }
         }
 
-        _writeLock.Dispose();
+        // Deliberately NOT disposing _writeLock (M7). Disposing a SemaphoreSlim does not release
+        // tasks parked in WaitAsync — they would hang forever, and a holder's Release() would
+        // throw ObjectDisposedException. Reachable via fire-and-forget ThresholdInjector nudges
+        // and SessionManager.BroadcastAsync racing CloseAsync (a stranded waiter inside a
+        // broadcast makes its Task.WhenAll never complete). We never touch AvailableWaitHandle,
+        // so the semaphore holds no unmanaged resource and letting the GC reclaim it is safe.
+        // Send paths fail-fast on the _disposed gate above.
     }
 }

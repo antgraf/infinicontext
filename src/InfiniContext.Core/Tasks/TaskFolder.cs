@@ -82,9 +82,16 @@ public sealed class TaskFolder
     }
 
     /// <summary>
-    /// Files referenced from the first column of the <c>index.md</c> markdown table. Returns
-    /// an empty list if the index doesn't exist or has no rows. Header rows (literal
-    /// <c>File</c>) and the separator row (<c>---</c>) are filtered out. Case is preserved.
+    /// Files referenced from the first column of the canonical <c>index.md</c> markdown table.
+    /// Returns an empty list if the index doesn't exist or has no rows. Case is preserved.
+    ///
+    /// <para>
+    /// Parsing is <em>anchored</em> to the canonical
+    /// <c>| File | Description | Last updated |</c> header (M17): only rows in the contiguous
+    /// table block following that header are treated as file references. Without the anchor, the
+    /// first cell of <em>any</em> markdown table row counts as a file, so an unrelated table
+    /// elsewhere in the index (or in a hand-written note) silently masks drift.
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyList<string>> IndexedFilesAsync(CancellationToken ct = default)
     {
@@ -93,44 +100,95 @@ public sealed class TaskFolder
 
         var lines = await File.ReadAllLinesAsync(indexPath, ct).ConfigureAwait(false);
         var files = new List<string>();
+        var inTable = false;
         foreach (var raw in lines)
         {
             var line = raw.TrimStart();
-            if (!line.StartsWith('|')) continue;
+            if (!line.StartsWith('|'))
+            {
+                // A non-table line ends the canonical block. (A blank line between the header and
+                // its rows is not expected in a well-formed table, so this is safe.)
+                if (inTable) break;
+                continue;
+            }
 
-            // Take the content of the first cell.
-            var firstPipe = 1; // skip leading '|'
-            var nextPipe = line.IndexOf('|', firstPipe);
-            if (nextPipe < 0) continue;
-            var firstCell = line[firstPipe..nextPipe].Trim();
+            var firstCell = FirstCell(line);
+            if (firstCell is null) continue;
 
-            if (firstCell.Length == 0) continue;
-            if (firstCell.Equals("File", StringComparison.OrdinalIgnoreCase)) continue;
-            if (IsSeparatorCell(firstCell)) continue;
+            if (!inTable)
+            {
+                // Look for the canonical header row to start the block. Until we see it, ignore
+                // any stray table rows.
+                if (IsCanonicalHeader(line)) inTable = true;
+                continue;
+            }
 
+            // Inside the canonical table: skip the separator row, collect file cells.
+            if (firstCell.Length == 0 || IsSeparatorCell(firstCell)) continue;
             files.Add(firstCell);
         }
         return files;
     }
 
     /// <summary>
-    /// Files present on disk but not referenced from <c>index.md</c>. <c>index.md</c> itself is
-    /// always excluded (it's the index, not an indexed entry). Result is sorted ordinal.
+    /// Bidirectional drift between the task folder and its <c>index.md</c> (M17):
+    /// <see cref="DriftReport.UnindexedFiles"/> = <c>*.md</c> on disk not referenced from the
+    /// index; <see cref="DriftReport.MissingFiles"/> = index rows pointing at files that no
+    /// longer exist on disk. Reporting only the first direction lets a stale index row (a file
+    /// was deleted but its row left behind) hand a fresh session a misleading table of contents.
+    /// <c>index.md</c> itself is excluded from the on-disk side (it's the index, not an entry).
+    /// Both lists are sorted ordinal.
     /// </summary>
-    public async Task<IReadOnlyList<string>> DetectDriftAsync(CancellationToken ct = default)
+    public async Task<DriftReport> DetectDriftReportAsync(CancellationToken ct = default)
     {
         var artifacts = await ListArtifactsAsync(ct).ConfigureAwait(false);
-        var indexed = (await IndexedFilesAsync(ct).ConfigureAwait(false))
-            .ToHashSet(FileSystemNaming.Comparer);
+        var indexedList = await IndexedFilesAsync(ct).ConfigureAwait(false);
+        var indexed = indexedList.ToHashSet(FileSystemNaming.Comparer);
+        var onDisk = artifacts.Select(a => a.Name).ToHashSet(FileSystemNaming.Comparer);
 
-        var drift = new List<string>();
+        var unindexed = new List<string>();
         foreach (var info in artifacts)
         {
             if (info.Name.Equals(ArtifactTemplates.IndexFileName, FileSystemNaming.Comparison)) continue;
-            if (!indexed.Contains(info.Name)) drift.Add(info.Name);
+            if (!indexed.Contains(info.Name)) unindexed.Add(info.Name);
         }
-        drift.Sort(StringComparer.Ordinal);
-        return drift;
+        unindexed.Sort(StringComparer.Ordinal);
+
+        var missing = new List<string>();
+        foreach (var name in indexedList)
+        {
+            if (name.Equals(ArtifactTemplates.IndexFileName, FileSystemNaming.Comparison)) continue;
+            if (!onDisk.Contains(name)) missing.Add(name);
+        }
+        missing.Sort(StringComparer.Ordinal);
+
+        return new DriftReport(unindexed, missing);
+    }
+
+    /// <summary>
+    /// Files present on disk but not referenced from <c>index.md</c> (the unindexed direction of
+    /// <see cref="DetectDriftReportAsync"/>). Retained for callers that only need that direction.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> DetectDriftAsync(CancellationToken ct = default)
+        => (await DetectDriftReportAsync(ct).ConfigureAwait(false)).UnindexedFiles;
+
+    private static string? FirstCell(string trimmedLine)
+    {
+        // trimmedLine starts with '|'. Take the content of the first cell.
+        var nextPipe = trimmedLine.IndexOf('|', 1);
+        if (nextPipe < 0) return null;
+        return trimmedLine[1..nextPipe].Trim();
+    }
+
+    private static bool IsCanonicalHeader(string trimmedLine)
+    {
+        // Match `| File | Description | Last updated |` case-insensitively on the three header
+        // cells, tolerating extra spacing. Splitting on '|' yields a leading/trailing empty cell.
+        var cells = trimmedLine.Split('|').Select(c => c.Trim()).Where(c => c.Length > 0).ToArray();
+        return cells.Length == 3
+            && cells[0].Equals("File", StringComparison.OrdinalIgnoreCase)
+            && cells[1].Equals("Description", StringComparison.OrdinalIgnoreCase)
+            && cells[2].Equals("Last updated", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -188,3 +246,17 @@ public sealed class TaskFolder
 /// <param name="Name">File name (no path).</param>
 /// <param name="LastModifiedUtc">Last-write timestamp in UTC.</param>
 public sealed record ArtifactInfo(string Name, DateTime LastModifiedUtc);
+
+/// <summary>
+/// Bidirectional drift between a task folder and its <c>index.md</c>
+/// (<see cref="TaskFolder.DetectDriftReportAsync"/>).
+/// </summary>
+/// <param name="UnindexedFiles"><c>*.md</c> on disk not referenced from <c>index.md</c>.</param>
+/// <param name="MissingFiles">Index rows pointing at files that no longer exist on disk.</param>
+public sealed record DriftReport(
+    IReadOnlyList<string> UnindexedFiles,
+    IReadOnlyList<string> MissingFiles)
+{
+    /// <summary>True when either direction has at least one entry.</summary>
+    public bool HasDrift => UnindexedFiles.Count > 0 || MissingFiles.Count > 0;
+}

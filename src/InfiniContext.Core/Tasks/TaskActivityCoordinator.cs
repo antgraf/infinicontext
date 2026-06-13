@@ -91,6 +91,36 @@ public sealed class TaskActivityCoordinator
             _logger.Warning(ex, "tasks: failed to mark {TaskId} Idle", taskId);
         }
     }
+
+    /// <summary>
+    /// Release every task claimed by <paramref name="sessionId"/> (M15). The release point for a
+    /// session is its close: <c>LeaveAsync</c> only ever ran for the focused task, so a spawned
+    /// pane that entered a task and then ended stranded the holder entry — re-spawning that task
+    /// was refused ("claimed by session &lt;dead-guid&gt;") for the rest of the host run, and the
+    /// DB row stayed InProgress. Hosts call this from their session-close callback.
+    /// </summary>
+    public async Task ReleaseAllForSessionAsync(Guid sessionId, CancellationToken ct = default)
+    {
+        List<int> taskIds;
+        lock (_gate)
+        {
+            taskIds = _holderByTaskId.Where(kv => kv.Value == sessionId).Select(kv => kv.Key).ToList();
+            foreach (var id in taskIds) _holderByTaskId.Remove(id);
+        }
+
+        foreach (var taskId in taskIds)
+        {
+            try
+            {
+                await _store.UpdateStatusAsync(taskId, TaskItemStatus.Idle, _clock().ToUnixTimeMilliseconds(), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "tasks: failed to mark {TaskId} Idle on session release", taskId);
+            }
+        }
+    }
 }
 
 /// <summary>

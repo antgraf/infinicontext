@@ -81,8 +81,10 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
 
         // Per-file backups so we can revert if the gate fails. Key is the absolute path on disk;
         // value is the original bytes (or null when the file didn't exist before the apply -- in
-        // which case revert = delete).
-        var backups = new Dictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        // which case revert = delete). Key with FileSystemNaming.Comparer, not OrdinalIgnoreCase:
+        // on a case-sensitive filesystem Foo.cs and foo.cs are distinct files and must not share a
+        // backup slot, or a gate-failure revert silently corrupts the working tree (M27).
+        var backups = new Dictionary<string, byte[]?>(FileSystemNaming.Comparer);
         var applied = new List<ConsolidatedFinding>();
         var demoted = new List<ConsolidatedFinding>();
 

@@ -115,7 +115,11 @@ public sealed class TaskService
         await sourceFolder.CopyArtifactsToAsync(childFolder, ct).ConfigureAwait(false);
 
         var nowMs = _clock().ToUnixTimeMilliseconds();
-        var childRecord = new TaskRecord(childId, source.HomeCwd, title, nowMs, nowMs, TaskItemStatus.InProgress, ParentTaskId: source.Id);
+        // Idle, not InProgress (M14): no session has entered the new task yet. The
+        // TaskActivityCoordinator flips it to InProgress when a session actually claims it; minting
+        // it InProgress here left it wedged (delete refuses InProgress) when the fork was never
+        // switched-to.
+        var childRecord = new TaskRecord(childId, source.HomeCwd, title, nowMs, nowMs, TaskItemStatus.Idle, ParentTaskId: source.Id);
         await _store.CreateAsync(childRecord, ct).ConfigureAwait(false);
         await _store.RecordForkAsync(source.Id, childId, ct).ConfigureAwait(false);
         return childRecord;
@@ -192,7 +196,9 @@ public sealed class TaskService
         await WriteMergedIndexAsync(mergedFolder, allNames, today, ct).ConfigureAwait(false);
 
         var nowMs = _clock().ToUnixTimeMilliseconds();
-        var record = new TaskRecord(mergedId, homeCwd, mergedTitle, nowMs, nowMs, TaskItemStatus.InProgress, ParentTaskId: null);
+        // Idle, not InProgress (M14): see ForkAsync — the coordinator owns the InProgress flip when
+        // a session enters the merged task.
+        var record = new TaskRecord(mergedId, homeCwd, mergedTitle, nowMs, nowMs, TaskItemStatus.Idle, ParentTaskId: null);
         await _store.CreateAsync(record, ct).ConfigureAwait(false);
         return record;
     }
@@ -211,24 +217,36 @@ public sealed class TaskService
     {
         var record = await _store.GetAsync(id, ct).ConfigureAwait(false);
         if (record is null) return null;
-        if (record.Status == TaskItemStatus.InProgress)
-            throw new InvalidOperationException(
-                $"Task {id:D4} is InProgress; mark it Idle (or end its session) before deleting.");
 
         var folder = new TaskFolder(record.HomeCwd, record.Id, Slugify.For(record.Title));
         var folderExisted = Directory.Exists(folder.Path);
+
+        // M16: delete the DB row FIRST, with the InProgress guard re-verified atomically inside the
+        // transaction. The prior code deleted the folder before the row and used a check-then-act
+        // status guard — a concurrent EnterAsync could flip the row to InProgress after the check,
+        // and a failure between folder-delete and row-delete left the user's content gone with a
+        // surviving "stale row". Removing the row first means a later folder-delete failure leaves
+        // recoverable content (folder present, row gone), never the reverse.
+        var outcome = await _store.DeleteIfNotInProgressAsync(id, ct).ConfigureAwait(false);
+        switch (outcome.Kind)
+        {
+            case DeleteOutcomeKind.NotFound:
+                return null; // raced with another deleter
+            case DeleteOutcomeKind.RefusedInProgress:
+                throw new InvalidOperationException(
+                    $"Task {id:D4} is InProgress; mark it Idle (or end its session) before deleting.");
+        }
+
         var folderRemoved = false;
         if (removeFolder && folderExisted)
         {
+            // Row is already gone; a failure here only orphans a folder (recoverable), so let it
+            // surface to the caller rather than trying to resurrect the row.
             Directory.Delete(folder.Path, recursive: true);
             folderRemoved = true;
         }
 
-        var orphaned = await _store.DeleteAsync(id, ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException(
-                $"Task {id:D4} disappeared between status check and delete; concurrent deletion suspected.");
-
-        return new TaskDeleteResult(record, folder.Path, folderExisted, folderRemoved, orphaned);
+        return new TaskDeleteResult(record, folder.Path, folderExisted, folderRemoved, outcome.OrphanedChildren);
     }
 
     public async Task<IReadOnlyList<TaskRecord>> ListAsync(ListFilter? filter = null, CancellationToken ct = default)
@@ -277,9 +295,10 @@ public sealed class TaskService
                 $"Task {id:D4} was scaffolded under \"{folder.Path}\" but that folder no longer exists. " +
                 $"Run /task delete {id:D4} to drop the stale row, or restore the folder.");
 
-        var drift = await folder.DetectDriftAsync(ct).ConfigureAwait(false);
-        var firstMessage = TaskSessionPointer.ComposeFirstMessage(record.Id, slug, record.Title, drift);
-        return new TaskSwitchPlan(record, slug, firstMessage, drift);
+        var driftReport = await folder.DetectDriftReportAsync(ct).ConfigureAwait(false);
+        var firstMessage = TaskSessionPointer.ComposeFirstMessage(
+            record.Id, slug, record.Title, driftReport.UnindexedFiles, driftReport.MissingFiles);
+        return new TaskSwitchPlan(record, slug, firstMessage, driftReport.UnindexedFiles, driftReport.MissingFiles);
     }
 
     /// <summary>

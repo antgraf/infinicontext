@@ -113,6 +113,88 @@ public class ToolStackTests
         sm.State.Should().Be(SessionState.Exited);
     }
 
+    // M10: a tool_use still open at turn end (no matching tool_result) is drained as Abandoned on
+    // the ResultEvent so the correlation map doesn't leak.
+    [Fact]
+    public void Result_drains_open_tool_uses_as_abandoned()
+    {
+        var sm = new SessionStateMachine(clock: () => DateTimeOffset.UnixEpoch);
+        var changes = new List<ToolStackChange>();
+        sm.ToolStackChanged += changes.Add;
+
+        sm.BeginSend();
+        sm.Apply(MakeAssistantWithToolUse("t1", "Bash"));
+        sm.OpenToolUses.Should().ContainKey("t1");
+
+        sm.Apply(MakeResultEvent()); // turn ends with no tool_result for t1
+
+        sm.OpenToolUses.Should().BeEmpty();
+        changes.Should().ContainSingle(c => c.Kind == ToolStackChangeKind.Abandoned && c.Slot.Id == "t1");
+        sm.State.Should().Be(SessionState.Idle);
+    }
+
+    // M10: process exit drains open tool uses as Abandoned.
+    [Fact]
+    public void ProcessExit_drains_open_tool_uses_as_abandoned()
+    {
+        var sm = new SessionStateMachine(clock: () => DateTimeOffset.UnixEpoch);
+        var changes = new List<ToolStackChange>();
+        sm.ToolStackChanged += changes.Add;
+
+        sm.BeginSend();
+        sm.Apply(MakeAssistantWithToolUse("t1", "Bash"));
+
+        sm.HandleProcessExit(exitCode: 137);
+
+        sm.OpenToolUses.Should().BeEmpty();
+        changes.Should().ContainSingle(c => c.Kind == ToolStackChangeKind.Abandoned && c.Slot.Id == "t1");
+    }
+
+    // M6: AbortSend rolls back a failed send so the machine isn't stuck Sending forever.
+    [Fact]
+    public void AbortSend_rolls_back_pending_send_and_returns_to_idle()
+    {
+        var sm = new SessionStateMachine(clock: () => DateTimeOffset.UnixEpoch);
+
+        sm.BeginSend();
+        sm.State.Should().Be(SessionState.Sending);
+        sm.PendingSendCount.Should().Be(1);
+
+        sm.AbortSend();
+
+        sm.PendingSendCount.Should().Be(0);
+        sm.State.Should().Be(SessionState.Idle);
+    }
+
+    // M6: aborting a buffered send (a prior turn still streaming) only decrements the count; the
+    // streaming turn keeps running.
+    [Fact]
+    public void AbortSend_on_buffered_send_keeps_streaming_turn()
+    {
+        var sm = new SessionStateMachine(clock: () => DateTimeOffset.UnixEpoch);
+
+        sm.BeginSend();
+        sm.Apply(MakeAssistantEvent()); // -> Streaming, count=1
+        sm.BeginSend();                  // buffered, count=2, still Streaming
+        sm.State.Should().Be(SessionState.Streaming);
+        sm.PendingSendCount.Should().Be(2);
+
+        sm.AbortSend();
+
+        sm.PendingSendCount.Should().Be(1);
+        sm.State.Should().Be(SessionState.Streaming);
+    }
+
+    private static AssistantEvent MakeAssistantWithToolUse(string id, string name) => new()
+    {
+        Type = "assistant",
+        Raw = new System.Text.Json.Nodes.JsonObject(),
+        Content = new ContentBlock[]
+        {
+            new ToolUseBlock { Type = "tool_use", Raw = new System.Text.Json.Nodes.JsonObject(), Id = id, Name = name },
+        },
+    };
+
     [Fact]
     public void UnknownEvent_IncrementsDriftCounter()
     {

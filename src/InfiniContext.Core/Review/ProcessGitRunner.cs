@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using InfiniContext.Core.Supervision;
 
 namespace InfiniContext.Core.Review;
 
@@ -10,6 +11,10 @@ namespace InfiniContext.Core.Review;
 public sealed class ProcessGitRunner : IGitRunner
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
+    private readonly IProcessSupervisor? _supervisor;
+
+    public ProcessGitRunner(IProcessSupervisor? supervisor = null) => _supervisor = supervisor;
 
     public Task<string?> ResolveHeadAsync(string repoRoot, CancellationToken ct)
         => RunForShaAsync(repoRoot, ["rev-parse", "HEAD"], ct);
@@ -28,7 +33,7 @@ public sealed class ProcessGitRunner : IGitRunner
             .ToList();
     }
 
-    private static async Task<string?> RunForShaAsync(string repoRoot, IReadOnlyList<string> argv, CancellationToken ct)
+    private async Task<string?> RunForShaAsync(string repoRoot, IReadOnlyList<string> argv, CancellationToken ct)
     {
         var stdout = await RunAsync(repoRoot, argv, ct).ConfigureAwait(false);
         if (stdout is null) return null;
@@ -36,10 +41,11 @@ public sealed class ProcessGitRunner : IGitRunner
         return Is40Hex(sha) ? sha : null;
     }
 
-    private static async Task<string?> RunAsync(string repoRoot, IReadOnlyList<string> argv, CancellationToken ct)
+    private async Task<string?> RunAsync(string repoRoot, IReadOnlyList<string> argv, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(repoRoot) || !Directory.Exists(repoRoot)) return null;
 
+        Process? proc = null;
         try
         {
             var psi = new ProcessStartInfo
@@ -53,22 +59,51 @@ public sealed class ProcessGitRunner : IGitRunner
             };
             foreach (var arg in argv) psi.ArgumentList.Add(arg);
 
-            using var proc = Process.Start(psi);
+            proc = Process.Start(psi);
             if (proc is null) return null;
+
+            // Attach to the host supervisor so a wedged git (e.g. a blocked credential helper)
+            // dies with the host instead of being orphaned past exit on POSIX (M23).
+            if (_supervisor is not null)
+            {
+                try { _supervisor.Attach(proc); }
+                catch { /* best-effort */ }
+            }
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(Budget);
 
-            string stdout;
-            try { stdout = await proc.StandardOutput.ReadToEndAsync(cts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { try { proc.Kill(entireProcessTree: false); } catch { } return null; }
+            // Drain BOTH streams concurrently: stderr is redirected, and a chatty git that fills
+            // the stderr pipe buffer (~64 KB) while we only read stdout would block on write and
+            // deadlock WaitForExitAsync (M23).
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
 
-            await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-            return proc.ExitCode == 0 ? stdout : null;
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+
+            return proc.ExitCode == 0 ? stdoutTask.Result : null;
         }
         catch
         {
             return null;
+        }
+        finally
+        {
+            // Kill the (possibly wedged) git and its descendants on every exit path — timeout,
+            // host-token cancellation, or an unexpected throw — so nothing is left running.
+            if (proc is not null)
+            {
+                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+                proc.Dispose();
+            }
         }
     }
 

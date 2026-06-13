@@ -10,8 +10,10 @@ namespace InfiniContext.Core.Tasks;
 /// <param name="Slug">Slug recovered from the title via <see cref="Slugify.For"/>.</param>
 /// <param name="FirstUserMessage">Pointer string to send into the new session.</param>
 /// <param name="Drift">Files on disk under the task folder that aren't referenced from <c>index.md</c>.</param>
+/// <param name="MissingFiles">Index rows pointing at files that no longer exist on disk (M17).</param>
 public sealed record TaskSwitchPlan(
     TaskRecord Task,
     string Slug,
     string FirstUserMessage,
-    IReadOnlyList<string> Drift);
+    IReadOnlyList<string> Drift,
+    IReadOnlyList<string>? MissingFiles = null);

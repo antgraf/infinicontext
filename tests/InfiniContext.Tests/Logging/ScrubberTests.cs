@@ -100,6 +100,38 @@ public class ScrubberTests
         rendered.Should().Contain("<redacted>");
     }
 
+    // M5: secrets buried in a raw rx: payload (logged under the name-immune "Raw" property) are
+    // scrubbed by value shape, not property name.
+    [Theory]
+    [InlineData("DB_PASSWORD=hunter2supersecret")]
+    [InlineData("github_token: ghp_0123456789abcdefghij")]
+    [InlineData("aws=AKIAIOSFODNN7EXAMPLE")]
+    [InlineData("slack xoxb-1234567890-abcdefghijkl")]
+    public void Value_shape_scrubs_secrets_in_non_secret_named_property(string payload)
+    {
+        // "Raw" is deliberately NOT a secret-shaped property name.
+        var rendered = RenderWithScrubber("rx={Raw}", new ScalarValue(payload), "Raw");
+        rendered.Should().Contain("<redacted>");
+        rendered.Should().NotContain("hunter2supersecret")
+            .And.NotContain("ghp_0123456789abcdefghij")
+            .And.NotContain("AKIAIOSFODNN7EXAMPLE")
+            .And.NotContain("xoxb-1234567890-abcdefghijkl");
+    }
+
+    // M5: a redacted-but-still-huge string is still truncated (the old code returned early on a
+    // redaction and skipped the byte-cap branch).
+    [Fact]
+    public void Truncation_still_applies_after_redaction()
+    {
+        const int max = 256;
+        var big = "DB_PASSWORD=hunter2supersecret " + new string('x', max * 4);
+        var rendered = RenderWithScrubber("rx={Raw}", new ScalarValue(big), "Raw", maxFieldBytes: max);
+
+        rendered.Should().Contain("<redacted>");
+        rendered.Should().Contain("bytes elided>");
+        rendered.Should().NotContain("hunter2supersecret");
+    }
+
     private static string RenderWithScrubber(
         string messageTemplate,
         LogEventPropertyValue value,

@@ -32,12 +32,23 @@ public sealed class SecretScrubbingEnricher : ILogEventEnricher
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Value-shape patterns that look like secrets regardless of property name. Catches
-    // ExtraArgs items like "--header=Authorization: Bearer eyJ..." that wouldn't otherwise scrub.
+    // ExtraArgs items like "--header=Authorization: Bearer eyJ..." AND secrets buried in raw
+    // rx: payloads logged under the name-redaction-immune "Raw" property — e.g. a tool_result
+    // that read a .env file (DB_PASSWORD=…, ghp_…, AKIA…, xox…) (M5).
     private static readonly Regex ValueLooksLikeSecret = new(
         @"(sk-[A-Za-z0-9_-]{16,})|" +                       // Anthropic / OpenAI-style API keys
         @"(eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_=-]+)|" + // JWT (3 dot-separated b64 segments)
         @"(?i:Bearer\s+[A-Za-z0-9._=-]{8,})|" +              // Bearer <token>
-        @"(?i:Authorization\s*[:=]\s*\S{8,})",               // Authorization: <anything-of-length>
+        @"(?i:Authorization\s*[:=]\s*\S{8,})|" +             // Authorization: <anything-of-length>
+        @"(ghp_[A-Za-z0-9]{16,})|" +                         // GitHub personal access token (classic)
+        @"(github_pat_[A-Za-z0-9_]{20,})|" +                 // GitHub fine-grained PAT
+        @"(gh[oprsu]_[A-Za-z0-9]{16,})|" +                   // Other GitHub token classes
+        @"(AKIA[0-9A-Z]{16})|" +                             // AWS access key id
+        @"(xox[abprs]-[A-Za-z0-9-]{10,})|" +                 // Slack tokens
+                                                             // Generic key=value / "key": "value" shape: a credential-ish key followed by a separator
+                                                             // and a value. Tolerates optional quotes/whitespace so it matches both .env lines and
+                                                             // JSON. Requires a 3+ char value to avoid trivial false positives.
+        @"(?i)[\w.-]*(?:key|token|secret|password|passwd|pwd|credential)s?[""']?\s*[:=]\s*[""']?[^\s""',}{]{3,}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly int _maxFieldBytes;
@@ -92,12 +103,16 @@ public sealed class SecretScrubbingEnricher : ILogEventEnricher
         if (nameIsSecret && sv.Value is not null) return new ScalarValue(RedactedMarker);
         if (sv.Value is string s)
         {
+            var original = s;
             // Value-shape detection: scrub strings that look like secrets even when the property
-            // name doesn't (e.g. argv items like "--header=Authorization: Bearer …").
+            // name doesn't (e.g. argv items like "--header=Authorization: Bearer …", or a raw
+            // rx: payload logged under "Raw").
             if (ValueLooksLikeSecret.IsMatch(s))
-            {
-                return new ScalarValue(ValueLooksLikeSecret.Replace(s, RedactedMarker));
-            }
+                s = ValueLooksLikeSecret.Replace(s, RedactedMarker);
+
+            // Truncate AFTER redaction (M5): a redacted-but-still-huge string — a giant rx:
+            // payload that happened to contain one secret — must still be capped. The earlier
+            // code returned early on a redaction and skipped this branch entirely.
             var bytes = Encoding.UTF8.GetByteCount(s);
             if (bytes > _maxFieldBytes)
             {
@@ -105,6 +120,8 @@ public sealed class SecretScrubbingEnricher : ILogEventEnricher
                 var head = TruncateUtf8(s, headBytes);
                 return new ScalarValue($"{head}<… {bytes} bytes elided>");
             }
+
+            if (!ReferenceEquals(s, original)) return new ScalarValue(s);
         }
         return sv;
     }

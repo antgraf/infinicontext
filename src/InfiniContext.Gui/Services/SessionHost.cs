@@ -175,6 +175,10 @@ public sealed class SessionHost : IAsyncDisposable
         try
         {
             taskStore = await TaskStore.OpenAsync(settings.Tasks.ResolvedDbPath()).ConfigureAwait(false);
+            // M14: startup reconciliation (sound under single-host) — reset any leftover InProgress
+            // rows from a crash so they aren't wedged (delete refuses InProgress).
+            var reset = await taskStore.ResetInProgressToIdleAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ConfigureAwait(false);
+            if (reset > 0) logging.Logger.Information("tasks: startup reconcile reset {Count} InProgress row(s) to Idle", reset);
             var lightForTasks = lightModelFactory.Create(thinking: false, cliMode: settings.Models.Light.Cli.Mode);
             taskService = new TaskService(taskStore, lightForTasks);
 
@@ -241,7 +245,7 @@ public sealed class SessionHost : IAsyncDisposable
                 },
                 logger: logger);
             var reviewService = new ReviewService(reviewerAgent, coordinatorAgent, autoApplyExecutor, logger: logger);
-            var scopeResolver = new ScopeResolver(new ProcessGitRunner(), byteCap: reviewSettings.PerFileByteCap);
+            var scopeResolver = new ScopeResolver(new ProcessGitRunner(supervisor: supervisor), byteCap: reviewSettings.PerFileByteCap);
             return (reviewService, scopeResolver);
         }
         catch (Exception ex)

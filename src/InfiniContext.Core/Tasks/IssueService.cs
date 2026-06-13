@@ -96,7 +96,7 @@ public sealed class IssueService
             }
 
             AppendEntryMarkdown(sb, entry);
-            await File.WriteAllTextAsync(filePath, sb.ToString(), ct).ConfigureAwait(false);
+            await AtomicFile.WriteAllTextAsync(filePath, sb.ToString(), ct).ConfigureAwait(false);
             return entry;
         }).ConfigureAwait(false);
     }
@@ -186,7 +186,7 @@ public sealed class IssueService
             }
 
             var joined = string.Join("\n", lines);
-            await File.WriteAllTextAsync(filePath, joined, ct).ConfigureAwait(false);
+            await AtomicFile.WriteAllTextAsync(filePath, joined, ct).ConfigureAwait(false);
 
             // Re-parse so the returned entry reflects what we just wrote.
             var entries = IssueMarkdown.Parse(joined);

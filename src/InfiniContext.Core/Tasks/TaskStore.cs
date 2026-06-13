@@ -284,6 +284,100 @@ public sealed class TaskStore : IAsyncDisposable
     }
 
     /// <summary>
+    /// Atomically delete the task row only if it is not <see cref="TaskItemStatus.InProgress"/>,
+    /// re-verifying status inside the transaction (M16). This is the race-safe replacement for a
+    /// check-then-act at a higher layer: another session can flip a row to InProgress between an
+    /// external status read and the delete, and the prior code also deleted the on-disk folder
+    /// before the row — a failure between the two left content gone with a surviving registry row.
+    /// Children pointing at this row via <c>parent_task_id</c> have their FK nulled first.
+    /// </summary>
+    public async Task<DeleteOutcome> DeleteIfNotInProgressAsync(int id, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var tx = (SqliteTransaction)await _connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+
+            await using (var probe = _connection.CreateCommand())
+            {
+                probe.Transaction = tx;
+                probe.CommandText = "SELECT status FROM tasks WHERE id = $id;";
+                probe.Parameters.AddWithValue("$id", id);
+                var status = await probe.ExecuteScalarAsync(ct).ConfigureAwait(false);
+                if (status is null)
+                {
+                    await tx.CommitAsync(ct).ConfigureAwait(false);
+                    return new DeleteOutcome(DeleteOutcomeKind.NotFound, 0);
+                }
+                if (string.Equals(status as string, TaskItemStatus.InProgress.ToString(), StringComparison.Ordinal))
+                {
+                    await tx.CommitAsync(ct).ConfigureAwait(false);
+                    return new DeleteOutcome(DeleteOutcomeKind.RefusedInProgress, 0);
+                }
+            }
+
+            int orphaned;
+            await using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "UPDATE tasks SET parent_task_id = NULL WHERE parent_task_id = $id;";
+                clear.Parameters.AddWithValue("$id", id);
+                orphaned = await clear.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            await using (var del = _connection.CreateCommand())
+            {
+                del.Transaction = tx;
+                // Re-assert the status guard in the DELETE itself so a concurrent EnterAsync that
+                // raced past the probe still can't have its InProgress row deleted.
+                del.CommandText = "DELETE FROM tasks WHERE id = $id AND status != $inProgress;";
+                del.Parameters.AddWithValue("$id", id);
+                del.Parameters.AddWithValue("$inProgress", TaskItemStatus.InProgress.ToString());
+                var rows = await del.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                if (rows == 0)
+                {
+                    await tx.RollbackAsync(ct).ConfigureAwait(false);
+                    return new DeleteOutcome(DeleteOutcomeKind.RefusedInProgress, 0);
+                }
+            }
+
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return new DeleteOutcome(DeleteOutcomeKind.Deleted, orphaned);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reset every <see cref="TaskItemStatus.InProgress"/> row to <see cref="TaskItemStatus.Idle"/>
+    /// (M14). Sound under the single-host contract: at startup no session can legitimately hold a
+    /// task, so any InProgress row is a leftover from a crash or a non-released spawn claim and
+    /// would otherwise wedge the task forever (delete refuses InProgress; re-entry is refused).
+    /// Returns the number of rows reset.
+    /// </summary>
+    public async Task<int> ResetInProgressToIdleAsync(long whenUnixMs, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE tasks SET status = $idle, last_active_at_unix_ms = $when WHERE status = $inProgress;
+                """;
+            cmd.Parameters.AddWithValue("$idle", TaskItemStatus.Idle.ToString());
+            cmd.Parameters.AddWithValue("$when", whenUnixMs);
+            cmd.Parameters.AddWithValue("$inProgress", TaskItemStatus.InProgress.ToString());
+            return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Record that <paramref name="childId"/> was forked from <paramref name="parentId"/>.
     /// Sets <c>parent_task_id</c> on the child row. Throws if either row is missing or if
     /// the child's parent_task_id was already set to a different value.

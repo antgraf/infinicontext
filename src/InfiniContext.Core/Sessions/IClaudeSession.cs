@@ -39,6 +39,20 @@ public interface IClaudeSession : IAsyncDisposable
     /// <summary>Histogram of unknown discriminators keyed by <c>type</c> or <c>content-block:type</c>.</summary>
     IReadOnlyDictionary<string, int> UnknownTypeHistogram { get; }
 
+    /// <summary>
+    /// Completes when the first-user-message (task pointer) delivery attempt finishes — success
+    /// OR failure (M11). When no first message is configured, completes immediately. Never faults;
+    /// inspect <see cref="FirstMessageError"/> for the failure. <see cref="SendUserMessageAsync"/>
+    /// awaits this before writing so a caller's prompt can't race ahead of the pointer.
+    ///
+    /// <para>Default implementation returns a completed task — fakes that don't model a first
+    /// message need not override it.</para>
+    /// </summary>
+    Task FirstMessageDelivery => Task.CompletedTask;
+
+    /// <summary>Non-null when first-user-message delivery failed; the session then ran without the pointer.</summary>
+    Exception? FirstMessageError => null;
+
     /// <summary>Spawn the process and start the reader/stderr loops. Idempotent: subsequent calls throw.</summary>
     Task StartAsync(CancellationToken cancellationToken = default);
 

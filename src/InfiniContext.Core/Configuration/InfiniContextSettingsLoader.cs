@@ -233,6 +233,26 @@ public static class InfiniContextSettingsLoader
                 errors.Add($"tasks.modelContextWindows['{model}'] must be positive, got {window}.");
         }
 
+        // Review — every other section is strictly validated; review.* used to pass through
+        // unchecked, so a `confidenceFloor: 0.09` typo would silently auto-apply low-confidence
+        // edits and out-of-range values threw later, mislabeled "light-model or service init
+        // failed" (which silently disabled the tasks subsystem). Validate here (M26).
+        if (s.Review.ConfidenceFloor is < 0 or > 1)
+            errors.Add($"review.confidenceFloor must be in [0, 1], got {s.Review.ConfidenceFloor}.");
+        if (s.Review.AutoApplyMaxLinesPerFinding < 1)
+            errors.Add($"review.autoApplyMaxLinesPerFinding must be >= 1, got {s.Review.AutoApplyMaxLinesPerFinding}.");
+        if (s.Review.AutoApplyMaxFilesPerFinding < 1)
+            errors.Add($"review.autoApplyMaxFilesPerFinding must be >= 1, got {s.Review.AutoApplyMaxFilesPerFinding}.");
+        if (s.Review.PerFileByteCap < 1)
+            errors.Add($"review.perFileByteCap must be >= 1, got {s.Review.PerFileByteCap}.");
+        if (s.Review.InvocationTimeoutSeconds is < 1 or > 3600)
+            errors.Add($"review.invocationTimeoutSeconds must be in [1, 3600], got {s.Review.InvocationTimeoutSeconds}.");
+        // Skipping the build+test gate is the safety net that reverts edits when they break the
+        // suite. Refuse it as a persisted default, mirroring the approval.mode=Allow refusal; a
+        // test that genuinely needs it constructs AutoApplyOptions directly, not via Load().
+        if (s.Review.SkipBuildTestGate)
+            errors.Add("review.skipBuildTestGate 'true' is not allowed as a persisted default; it disables the post-auto-apply build/test gate that reverts breaking edits.");
+
         // Versioning — design doc §7.3 hard floor: must be parseable; min must be <= tested.
         if (!Sessions.ClaudeVersionPolicy.TryParse(s.Versioning.MinClaudeVersion, out _))
             errors.Add($"versioning.minClaudeVersion '{s.Versioning.MinClaudeVersion}' is not a valid version triplet.");

@@ -147,6 +147,23 @@ var consoleWriteLock = new object();
 // keeps working.
 await using var taskStore = await TryOpenTaskStoreAsync(settings, logging.Logger).ConfigureAwait(false);
 
+// M14: startup reconciliation. Sound under the single-host contract — at startup no session can
+// legitimately hold a task, so any row still InProgress is a leftover from a crash or an
+// unreleased spawn claim. Reset them to Idle so they aren't wedged forever (delete refuses
+// InProgress; re-entry is refused while held).
+if (taskStore is not null)
+{
+    try
+    {
+        var reset = await taskStore.ResetInProgressToIdleAsync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).ConfigureAwait(false);
+        if (reset > 0) logging.Logger.Information("tasks: startup reconcile reset {Count} InProgress row(s) to Idle", reset);
+    }
+    catch (Exception ex)
+    {
+        logging.Logger.Warning(ex, "tasks: startup InProgress->Idle reconcile failed");
+    }
+}
+
 // Phase 7: one host-scope LockRegistry shared by every spawned session. ApprovalChannel uses
 // the per-session pipe name as the lock owner id, so locks are reclaimed automatically when
 // each session's channel disposes. Constructed early so the TaskCommandHandler's review path
@@ -213,7 +230,7 @@ if (taskStore is not null)
             autoApplyExecutor,
             logger: logging.Logger);
         var scopeResolver = new InfiniContext.Core.Review.ScopeResolver(
-            new InfiniContext.Core.Review.ProcessGitRunner(),
+            new InfiniContext.Core.Review.ProcessGitRunner(supervisor: supervisor),
             byteCap: reviewSettings.PerFileByteCap);
 
         taskCommandHandler = new TaskCommandHandler(
@@ -309,6 +326,16 @@ await using var sessionManager = await SessionManager.OpenAsync(
     lockRegistry: lockRegistry);
 logging.Logger.Information("session-index: loaded {Path} with {Recent} recent row(s)",
     sessionManager.IndexPath, sessionManager.RecentSessions.Count);
+
+// M15: make session close the release point for task claims. A spawned pane (/task spawn) enters
+// a task under its own session id but the outer loop only ever called LeaveAsync for the focused
+// task — so a non-focused pane that ended stranded its holder entry (re-spawn refused for the
+// host's life) and left the row InProgress. Releasing on every close fixes both. Best-effort and
+// idempotent; ReleaseAllForSessionAsync swallows store-write failures.
+if (taskActivity is not null)
+{
+    sessionManager.SessionClosed += id => _ = taskActivity.ReleaseAllForSessionAsync(id);
+}
 
 // Task 0013 Slice 1: lift the auto-rotation policy out of MultiSessionHost into a Core-side
 // service so the future GUI host (task 0013 Slice 2) can subscribe to the same proposal signal.

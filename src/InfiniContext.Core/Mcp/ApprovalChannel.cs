@@ -89,74 +89,111 @@ public sealed class ApprovalChannel : IAsyncDisposable
 
     private async Task RunServerAsync()
     {
-        try
+        // Re-listen loop (M13): a single accept used to mean that if the sidecar died and `claude`
+        // respawned its MCP server (normal MCP recovery), the new sidecar had nothing to connect
+        // to — every gated tool call errored or hung silently for the rest of the session. After a
+        // connection ends we Disconnect() and WaitForConnection() again so a respawned sidecar
+        // reconnects. A failure to even accept (or to reset the pipe) stops the listener rather
+        // than busy-looping.
+        while (!_cts.IsCancellationRequested)
         {
-            _logger.Debug("approval-channel: waiting for connection on pipe={PipeName}", _pipeName);
-            await _pipe!.WaitForConnectionAsync(_cts.Token).ConfigureAwait(false);
+            try
+            {
+                _logger.Debug("approval-channel: waiting for connection on pipe={PipeName}", _pipeName);
+                await _pipe!.WaitForConnectionAsync(_cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "approval-channel: WaitForConnection failed; listener stopping");
+                break;
+            }
+
             _logger.Debug("approval-channel: sidecar connected");
-
-            using var reader = new StreamReader(_pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true);
-            await using var writer = new StreamWriter(_pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: -1, leaveOpen: true)
+            try
             {
-                AutoFlush = true,
-                NewLine = "\n",
-            };
+                await ServeConnectionAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (IOException ex) { _logger.Debug("approval-channel: pipe closed ({Reason})", ex.Message); }
+            catch (Exception ex) { _logger.Error(ex, "approval-channel: server loop crashed during serve"); }
 
-            string? line;
-            while ((line = await reader.ReadLineAsync(_cts.Token).ConfigureAwait(false)) is not null)
+            if (_cts.IsCancellationRequested) break;
+
+            try
             {
-                if (line.Length == 0) continue;
-
-                JsonObject? requestObj;
-                try
-                {
-                    requestObj = JsonNode.Parse(line) as JsonObject;
-                }
-                catch (Exception ex)
-                {
-                    _logger.Warning("approval-channel: malformed request line: {Reason}", ex.Message);
-                    continue;
-                }
-
-                if (requestObj is null)
-                {
-                    _logger.Warning("approval-channel: non-object request line ignored");
-                    continue;
-                }
-
-                var kind = requestObj[LockWireFormat.KindField]?.GetValue<string>() ?? LockWireFormat.ApprovalKind;
-                JsonObject responseJson;
-                switch (kind)
-                {
-                    case LockWireFormat.AcquireKind:
-                        responseJson = (await HandleLockAcquireAsync(requestObj).ConfigureAwait(false)).ToJson();
-                        break;
-                    case LockWireFormat.ReleaseKind:
-                        responseJson = HandleLockRelease(requestObj).ToJson();
-                        break;
-                    case LockWireFormat.SessionExitKind:
-                        responseJson = HandleSessionExit(requestObj).ToJson();
-                        break;
-                    case LockWireFormat.ApprovalKind:
-                        responseJson = (await HandleApprovalAsync(requestObj).ConfigureAwait(false)).ToWireJson();
-                        break;
-                    default:
-                        // Unknown discriminator: a future sidecar emitting a new kind against an
-                        // older host. Refuse explicitly rather than misinterpreting as approval.
-                        _logger.Warning("approval-channel: unknown message kind={Kind}, replying with error", kind);
-                        responseJson = new JsonObject
-                        {
-                            ["error"] = $"unknown kind: {kind}",
-                        };
-                        break;
-                }
-
-                await writer.WriteLineAsync(responseJson.ToJsonString()).ConfigureAwait(false);
+                if (_pipe!.IsConnected) _pipe.Disconnect();
+                _logger.Warning("approval-channel: sidecar disconnected; re-listening on pipe={PipeName}", _pipeName);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "approval-channel: could not reset pipe for re-listen; listener stopping");
+                break;
             }
         }
-        catch (OperationCanceledException) { /* shutdown */ }
-        catch (IOException ex) { _logger.Debug("approval-channel: pipe closed ({Reason})", ex.Message); }
-        catch (Exception ex) { _logger.Error(ex, "approval-channel: server loop crashed"); }
+    }
+
+    /// <summary>Serve one connected sidecar until its stream reaches EOF (the sidecar disconnects).</summary>
+    private async Task ServeConnectionAsync()
+    {
+        using var reader = new StreamReader(_pipe!, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true);
+        await using var writer = new StreamWriter(_pipe!, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: -1, leaveOpen: true)
+        {
+            AutoFlush = true,
+            NewLine = "\n",
+        };
+
+        string? line;
+        while ((line = await reader.ReadLineAsync(_cts.Token).ConfigureAwait(false)) is not null)
+        {
+            if (line.Length == 0) continue;
+
+            JsonObject? requestObj;
+            try
+            {
+                requestObj = JsonNode.Parse(line) as JsonObject;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning("approval-channel: malformed request line: {Reason}", ex.Message);
+                continue;
+            }
+
+            if (requestObj is null)
+            {
+                _logger.Warning("approval-channel: non-object request line ignored");
+                continue;
+            }
+
+            var kind = requestObj[LockWireFormat.KindField]?.GetValue<string>() ?? LockWireFormat.ApprovalKind;
+            JsonObject responseJson;
+            switch (kind)
+            {
+                case LockWireFormat.AcquireKind:
+                    responseJson = (await HandleLockAcquireAsync(requestObj).ConfigureAwait(false)).ToJson();
+                    break;
+                case LockWireFormat.ReleaseKind:
+                    responseJson = HandleLockRelease(requestObj).ToJson();
+                    break;
+                case LockWireFormat.SessionExitKind:
+                    responseJson = HandleSessionExit(requestObj).ToJson();
+                    break;
+                case LockWireFormat.ApprovalKind:
+                    responseJson = (await HandleApprovalAsync(requestObj).ConfigureAwait(false)).ToWireJson();
+                    break;
+                default:
+                    // Unknown discriminator: a future sidecar emitting a new kind against an
+                    // older host. Refuse explicitly rather than misinterpreting as approval.
+                    _logger.Warning("approval-channel: unknown message kind={Kind}, replying with error", kind);
+                    responseJson = new JsonObject
+                    {
+                        ["error"] = $"unknown kind: {kind}",
+                    };
+                    break;
+            }
+
+            await writer.WriteLineAsync(responseJson.ToJsonString()).ConfigureAwait(false);
+        }
     }
 
     private async Task<ApprovalResponse> HandleApprovalAsync(JsonObject obj)

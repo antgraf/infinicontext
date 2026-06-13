@@ -402,7 +402,7 @@ public sealed class TaskCommandHandler
         if (_lockRegistry is null)
         {
             var existing = File.Exists(filePath) ? await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false) : "";
-            await File.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
+            await AtomicFile.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
             return;
         }
 
@@ -417,7 +417,7 @@ public sealed class TaskCommandHandler
         try
         {
             var existing = File.Exists(filePath) ? await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false) : "";
-            await File.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
+            await AtomicFile.WriteAllTextAsync(filePath, transform(existing), ct).ConfigureAwait(false);
         }
         finally
         {
