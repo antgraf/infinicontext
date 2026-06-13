@@ -25,3 +25,19 @@
   behind an `AutoApprovalOptions` flag. The implemented changes (untrusted-data framing so injection
   can't flip the verdict; escalate a contradictory injection-flagged allow) already close the actual
   bypass vulnerability. Deferred pending an operator call on the policy default.
+
+## 0003 - ci-macos.yml built the full slnx, which can't build on macOS
+- **Logged:** 2026-06-12 by (Phase E session)
+- **Kind:** bug
+- **Where:** .github/workflows/ci-macos.yml
+- **Status:** resolved (fixed in Phase E)
+- **Body:** Discovered when dispatching `ci-macos.yml` to validate the new host-lifecycle smoke: the
+  `dotnet build/test InfiniContext.slnx` steps fail on macOS with NETSDK1073 because the slnx now
+  carries `InfiniContext.Gui.UiaDriver`/`.UiaTests` (net10.0-windows + `Microsoft.WindowsDesktop.App.WindowsForms`,
+  added by task 0020) which cannot build off-Windows. Earlier `ci-macos.yml` runs passed only because
+  the slnx predated the UIA projects (verified against the prior run's restore list). The Windows-only
+  UIA suite is already covered by `ci-uia.yml`. Fix: scope `ci-macos.yml` to
+  `tests/InfiniContext.Tests/InfiniContext.Tests.csproj`, which transitively builds Core/Cli/Gui/
+  FakeClaude/SupervisorHostProbe — everything the cross-platform + `[MacOnlyFact]` suite needs.
+  Resolved in this phase rather than deferred because a working dispatch is the deliverable for
+  audit item 7.

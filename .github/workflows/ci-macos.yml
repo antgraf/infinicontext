@@ -42,18 +42,25 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'InfiniContext.slnx') }}
           restore-keys: nuget-${{ runner.os }}-
 
+      # Scope to InfiniContext.Tests, NOT the whole slnx. The slnx carries the UIA projects
+      # (InfiniContext.Gui.UiaDriver / .UiaTests) which target net10.0-windows and reference
+      # Microsoft.WindowsDesktop.App.WindowsForms (FlaUI) — those cannot build on macOS (NETSDK1073)
+      # and are covered separately by the Windows-only ci-uia.yml. Building the test csproj
+      # transitively builds Core / Cli / Gui / FakeClaude / SupervisorHostProbe, which is everything
+      # the cross-platform + [MacOnlyFact] supervisor suite needs. (Earlier full-slnx runs passed
+      # only because the slnx predated the UIA projects.)
       - name: Restore
-        run: dotnet restore InfiniContext.slnx
+        run: dotnet restore tests/InfiniContext.Tests/InfiniContext.Tests.csproj
 
       # No `dotnet format --verify-no-changes` here — the Windows CI owns the formatting gate so we
       # don't burn 10x-billed macOS minutes on a cosmetic check.
 
       - name: Build
-        run: dotnet build InfiniContext.slnx --configuration Release --no-restore
+        run: dotnet build tests/InfiniContext.Tests/InfiniContext.Tests.csproj --configuration Release --no-restore
 
       - name: Test
         run: |
-          dotnet test InfiniContext.slnx \
+          dotnet test tests/InfiniContext.Tests/InfiniContext.Tests.csproj \
             --configuration Release \
             --no-build \
             --logger "trx;LogFileName=test-results.trx" \

@@ -153,7 +153,16 @@
   clean; Supervision suite green (11 passed / 5 MacOnly-skipped, incl. the 2 new). The macOS smoke
   itself can only run via `ci-macos.yml` dispatch (10×-billed) — **not yet dispatched**.
 
+- **Committed + pushed** Phase E to `main` as `fd9aae5` (operator "push" instruction).
+- **Dispatched `ci-macos.yml`** (run 27452811545) — **FAILED at build**, but NOT the supervisor code:
+  the full-slnx `dotnet build` hit NETSDK1073 on `InfiniContext.Gui.UiaDriver` (net10.0-windows +
+  WindowsForms, can't build on macOS). Latent breakage from task 0020 adding the UIA projects to the
+  slnx; earlier macOS runs passed because the slnx predated them. Logged issues.md#0003.
+  **Fix:** scoped `ci-macos.yml` to `tests/InfiniContext.Tests/InfiniContext.Tests.csproj` (builds
+  Core/Cli/Gui/FakeClaude/SupervisorHostProbe transitively; UIA is Windows-only via `ci-uia.yml`).
+  Re-committing + re-dispatching.
+
 ### Handoff to next session (post-Phase-E)
-- Phases A–E code done + verified on Windows; **Phase E macOS validation pending a `ci-macos.yml`
-  dispatch** (operator decision — costs 10× minutes). Working tree has Phase E changes uncommitted.
+- Phases A–E code done + verified on Windows; Phase E pushed. macOS validation in progress via the
+  re-dispatched `ci-macos.yml` (after the workflow-scope fix).
 - Remaining: Phase F (C1 startup sentinel lock; M19–M22 GUI bounding). See plan.md.
