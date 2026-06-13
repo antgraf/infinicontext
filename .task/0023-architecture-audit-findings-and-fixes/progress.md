@@ -162,7 +162,13 @@
   Core/Cli/Gui/FakeClaude/SupervisorHostProbe transitively; UIA is Windows-only via `ci-uia.yml`).
   Re-committing + re-dispatching.
 
+- **ci-macos.yml fix committed + pushed** as `bb135a4`; re-dispatched (run 27452915377) — **GREEN**.
+  Test step: 1147 passed / 0 failed / 8 skipped (the skips are the Windows-only tests, e.g.
+  `JobObjectSupervisorTests`). The `[MacOnlyFact]` `PosixSignalSupervisorTests` — including both
+  `HostLifecycle_SIGINT_*` and `HostLifecycle_SIGTERM_*` — ran (absent from the skip list; passed
+  count rose from 1096 → 1147 vs the pre-UIA slnx run) and passed. **C2/C3 validated on real macOS.**
+
 ### Handoff to next session (post-Phase-E)
-- Phases A–E code done + verified on Windows; Phase E pushed. macOS validation in progress via the
-  re-dispatched `ci-macos.yml` (after the workflow-scope fix).
+- Phases A–E DONE, verified on Windows, **and Phase E validated on macOS** (ci-macos green).
+  `main` @ `bb135a4`, working tree clean.
 - Remaining: Phase F (C1 startup sentinel lock; M19–M22 GUI bounding). See plan.md.
