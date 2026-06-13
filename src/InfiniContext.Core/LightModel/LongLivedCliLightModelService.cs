@@ -174,7 +174,13 @@ public sealed class LongLivedCliLightModelService : CliLightModelServiceBase, IA
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
         await KillCurrentChildAsync().ConfigureAwait(false);
-        _lifecycleLock.Dispose();
-        _turnLock.Dispose();
+        // CL-001 / M7 precedent: deliberately do NOT dispose _turnLock / _lifecycleLock. The factory
+        // hands this instance to general consumers, so a caller that already passed the top-of-
+        // ExecuteAsync _disposed check may be parked on _turnLock.WaitAsync (or holding it and about
+        // to Release) when shutdown runs. Disposing a SemaphoreSlim does not release parked waiters
+        // and throws on a subsequent Release from a holder — that in-flight turn would fault with
+        // ObjectDisposedException or strand a waiter. Leaving the semaphores to the GC (their only
+        // unmanaged resource is a lazily-allocated wait handle) lets the in-flight turn complete; the
+        // _disposed flag already fail-fasts new callers. Mirrors ClaudeSession not disposing _writeLock.
     }
 }

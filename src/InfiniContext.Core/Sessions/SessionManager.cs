@@ -237,16 +237,13 @@ public sealed class SessionManager : IAsyncDisposable
         var session = _sessionFactory(options, pressure.OnEvent, approvalSink, _logger);
         sessionRef = session;
 
-        try
-        {
-            await session.StartAsync(ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            await session.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-
+        // CL-002: construct the SessionContext and publish ctxRef BEFORE StartAsync. StartAsync wires
+        // pressure.OnEvent and begins streaming, so an early/seed-prompt turn can cross a pressure
+        // threshold inside that window; if ctxRef were still null the SoftCrossed/HardCrossed handlers
+        // would skip MarkRotationReason and the session would later exit with RotationReason.None,
+        // silently suppressing the auto-rotation this monitor exists to drive. The ctor is
+        // side-effect-free and MarkRotationReason is Interlocked, so publishing pre-start is safe.
+        // (The reader still starts post-start, below, so the events channel is producing first.)
         var id = Guid.NewGuid();
         var ctx = new SessionContext(
             id,
@@ -264,6 +261,17 @@ public sealed class SessionManager : IAsyncDisposable
             Model = request.Model ?? _settings.Session.Model,
         };
         ctxRef = ctx;
+
+        try
+        {
+            await session.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
         var createdAt = _clock();
 
         // D3: per-session reader always runs so off-screen sessions don't lose their text.

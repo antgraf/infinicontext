@@ -302,8 +302,75 @@
 - **Phase F DONE** (C1, M19, M20, M21 [virtualization deferred → issues.md#0004], M22). All Windows-
   verified: full Release build 0 warnings, `InfiniContext.Tests` 1179 passed / 5 platform-skipped,
   `Gui.HeadlessTests` green, `dotnet format --verify-no-changes` clean.
-- **All audit phases A–F are now complete.** Working tree has Phase F changes UNCOMMITTED (operator
-  pushes on request, per prior phases). Suggest `/task review` before declaring the task done.
+- **All audit phases A–F are now complete.** Phase F **committed + pushed** to `main` as `a4cd464`
+  (operator "push" instruction; operator confirmed the M21 rotation-only retirement is the desired
+  behaviour — finished/crashed panes must stay readable, never auto-vanish). `ci.yml` on the push
+  (run 27455722126) is **GREEN** — all gates passed (format, build, test+coverage). Suggest
+  `/task review` before declaring the task done.
 - Not run this session: `ci-uia.yml` (GUI E2E — M21/M22 touched GUI; worth a dispatch before a GUI
   release) and `ci-macos.yml` (no POSIX/supervisor code changed in Phase F, so not needed).
 - New deferred follow-up: issues.md#0004 (transcript panel virtualization).
+
+## 2026-06-13 (review)
+
+- Ran `/task review`. applied=1 rejected=0 awaiting=12. Report: `review-2026-06-13T040803.md`. Build/test gate: green.
+- **GUI "nothing happened" was a stale-build illusion, not a bug.** The operator's `/task review`
+  screenshot showed output stopping at `[task review] done.` with no `report:`/`applied=` tail, so it
+  read as a no-op. Ground truth: the review fully ran — 61 KB `review-2026-06-13T040803.md` on disk,
+  `index.md` + `progress.md` updated, gate green. **Cause: the running GUI process was a previous
+  build (pre-Phase-F / pre-M22), so its output path predates the current code.** Operator is
+  restarting on the newer build to re-test before we treat the truncated-tail render as a real
+  defect. If it reproduces on the fresh build, suspect the M22 `BatchingOutputSink` final-flush vs.
+  `EndHostCommandTurn` ordering in `RunHostSlashCommandAsync` (tail flushed, then card closed) — to
+  be confirmed, not yet a finding.
+
+## 2026-06-13 (acting on the review report — code fixes)
+
+Applied the concrete, reversible findings from `review-2026-06-13T040803.md`; left genuine operator
+decisions for sign-off (below). All Windows-verified: full Release build 0 warnings, format clean,
+`InfiniContext.Tests` **1179 passed / 0 failed / 8 skipped**.
+
+- **tests-001 (auto-applied by host, verified):** `LockRegistryTests.Acquire_validates_inputs` now
+  `async Task` + awaits each `ThrowAsync`. The `M` file already in the working tree; confirmed correct.
+- **sec-001 DONE** (build-time RCE vector): `AutoApplyExecutor.DenylistReason` now refuses
+  `nuget.config` / `global.json` by *filename* (the existing guard matched by extension only). A
+  planted `nuget.config` could repoint package sources to an attacker feed (arbitrary code on the
+  gate's `dotnet build` restore); `global.json` could pin a malicious SDK. Matched with
+  `FileSystemNaming.Comparison` — the same per-platform casing rule `dotnet restore` uses to resolve
+  them (resolves the coordinator's casing-semantics doubt). Extended the existing denylist Theory
+  with 3 cases (`nuget.config`, `src/nuget.config`, `global.json`).
+- **CL-001 DONE** (semaphore dispose hazard): `LongLivedCliLightModelService.DisposeAsync` no longer
+  disposes `_turnLock` / `_lifecycleLock` — mirrors the M7 precedent (`ClaudeSession` deliberately
+  doesn't dispose `_writeLock`). The factory hands this to general consumers, so a caller parked on
+  `_turnLock.WaitAsync` (or holding it) during shutdown would have faulted with
+  `ObjectDisposedException`. The `_disposed` flag already fail-fasts new callers; the GC reclaims the
+  semaphores' lazily-allocated wait handles.
+- **CL-002 DONE** (lost rotation reason on first turn): `SessionManager.CreateAsync` now constructs
+  the `SessionContext` and publishes `ctxRef` BEFORE `StartAsync`. `StartAsync` wires `pressure.OnEvent`
+  and begins streaming, so a first/seed-turn pressure crossing in that window previously found
+  `ctxRef == null` and skipped `MarkRotationReason`, exiting with `RotationReason.None` and
+  suppressing auto-rotation. The ctor is side-effect-free and `MarkRotationReason` is Interlocked, so
+  pre-start publication is safe; the reader still starts post-start (events channel producing first).
+- **CL-003 DONE** (disposed-CTS race): `ApprovalChannel.HandleSessionExit` captures `_cts.Token` on
+  the pre-dispose thread (`var exitToken = _cts.Token;`) instead of reading it inside the
+  fire-and-forget `Task.Run` continuation, where a concurrent `DisposeAsync` could have disposed
+  `_cts` first → `ObjectDisposedException` on a threadpool thread. The captured token struct stays
+  valid after disposal.
+- **tests-002 DONE** (vacuous Windows passes): new `UnixOnlyFactAttribute` (skip-on-Windows sibling
+  of `WindowsOnlyFact`/`MacOnlyFact`). The three `PosixSignalSupervisorTests` bookkeeping tests that
+  opened with `if (OperatingSystem.IsWindows()) return;` now use `[UnixOnlyFact]` (report **skipped**
+  on Windows, not a vacuous pass); `Constructor_throws_on_Windows` → `[WindowsOnlyFact]` (now actually
+  runs + asserts here); class docstring corrected (was "run everywhere"). Skip count 5→8 on Windows.
+
+### Awaiting operator decision (not actioned this session)
+- **completeness-001 (M3 shell/network-tool auto-allow)** — security/product call: should auto-mode
+  route Bash/network-capable tools to the human ask fallback? Deferred by autonomy default at kickoff
+  (issues.md#0002); needs explicit sign-off. Injection bypass itself is argued closed (framing+escalation).
+- **completeness-004 (ci-uia.yml dispatch)** — Phase F touched GUI; UIA E2E layer not yet run.
+  Operator action (interactive-desktop takeover); recommend before any GUI release.
+- **completeness-002 / 003** — documented deferrals to confirm/close: M21 transcript virtualization
+  (issues.md#0004 → Stage 3 backlog) and the M14 `/task idle <id>` escape hatch.
+- **arch-001 / arch-002 / tests-003** — low-confidence consistency/flake watch-items (AtomicFile in
+  MergeAsync; HOSTLOCKPATH env read [reviewer: no change needed]; Task.Delay(50) in a bundle-flush
+  test needing a production seam). Left as-is pending operator interest.
+- **All new fixes uncommitted on `main`** — awaiting operator checkpoint before committing (branch first).

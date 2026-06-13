@@ -15,10 +15,11 @@ namespace InfiniContext.Tests.Supervision;
 /// Stage 2B Phase 7. Two layers of coverage for the POSIX supervisor:
 ///
 /// <list type="bullet">
-///   <item>Platform-agnostic checks that exercise the public contract through plain method calls
-///   — these run everywhere because they only inspect supervisor state and don't actually send
-///   signals. They guard against regressions in the bookkeeping (attach guard, idempotent
-///   dispose, DetachAll skipping the reap).</item>
+///   <item><see cref="UnixOnlyFactAttribute"/>-gated checks that exercise the public contract
+///   through plain method calls — these run on any POSIX kernel (macOS in CI, Linux locally)
+///   because they only inspect supervisor state and don't actually send signals. They guard against
+///   regressions in the bookkeeping (attach guard, idempotent dispose). On Windows they report as
+///   <em>skipped</em> (the supervisor's constructor throws there), not as a vacuous pass.</item>
 ///   <item><see cref="MacOnlyFactAttribute"/>-gated E2E tests that spawn a real child via
 ///   <c>/bin/sh -c "sleep 600"</c> and verify Dispose terminates it within the grace window.
 ///   These can't run on Windows runners (no <c>sh</c> on path; no SIGTERM semantics) and are the
@@ -27,19 +28,17 @@ namespace InfiniContext.Tests.Supervision;
 /// </summary>
 public class PosixSignalSupervisorTests
 {
-    [Fact]
+    [WindowsOnlyFact]
     [UnsupportedOSPlatform("windows")]
     public void Constructor_throws_on_Windows()
     {
-        if (!OperatingSystem.IsWindows()) return;
         Action act = () => new PosixSignalSupervisor();
         act.Should().Throw<PlatformNotSupportedException>();
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Attach_throws_when_process_not_started()
     {
-        if (OperatingSystem.IsWindows()) return;
         using var supervisor = new PosixSignalSupervisor();
         var unstarted = new Process();
         try
@@ -54,10 +53,9 @@ public class PosixSignalSupervisorTests
         }
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Attach_after_dispose_throws()
     {
-        if (OperatingSystem.IsWindows()) return;
         var supervisor = new PosixSignalSupervisor();
         supervisor.Dispose();
         var unstarted = new Process();
@@ -72,10 +70,9 @@ public class PosixSignalSupervisorTests
         }
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Dispose_is_idempotent()
     {
-        if (OperatingSystem.IsWindows()) return;
         var supervisor = new PosixSignalSupervisor();
         supervisor.Dispose();
         Action act = () => supervisor.Dispose();

@@ -151,17 +151,17 @@ public class LockRegistryTests
     }
 
     [Fact]
-    public void Acquire_validates_inputs()
+    public async Task Acquire_validates_inputs()
     {
         var registry = NewRegistry();
 
-        FluentActions.Invoking(() => registry.AcquireAsync("", "owner", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
+        await FluentActions.Invoking(() => registry.AcquireAsync("", "owner", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
             .Should().ThrowAsync<ArgumentException>();
-        FluentActions.Invoking(() => registry.AcquireAsync("file", "", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
+        await FluentActions.Invoking(() => registry.AcquireAsync("file", "", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
             .Should().ThrowAsync<ArgumentException>();
-        FluentActions.Invoking(() => registry.AcquireAsync("file", "owner", TimeSpan.Zero, TimeSpan.FromSeconds(1)))
+        await FluentActions.Invoking(() => registry.AcquireAsync("file", "owner", TimeSpan.Zero, TimeSpan.FromSeconds(1)))
             .Should().ThrowAsync<ArgumentOutOfRangeException>();
-        FluentActions.Invoking(() => registry.AcquireAsync("file", "owner", TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(-1)))
+        await FluentActions.Invoking(() => registry.AcquireAsync("file", "owner", TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(-1)))
             .Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 

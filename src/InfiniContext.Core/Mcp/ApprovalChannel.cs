@@ -403,7 +403,12 @@ public sealed class ApprovalChannel : IAsyncDisposable
             // Fire-and-forget is load-bearing: the agent's tool result must return BEFORE stdin
             // closes, or claude may die before reading it. Deferring the close to the threadpool
             // lets this method reply {ok:true} on the pipe first. See design.md §"Sequence diagram".
-            _ = Task.Run(() => _onSessionExit(req, _cts.Token));
+            // CL-003: capture the token on this (pre-dispose) thread rather than reading _cts.Token
+            // inside the deferred continuation — a concurrent DisposeAsync disposes _cts, and a late
+            // read of the disposed source's .Token would throw ObjectDisposedException on a
+            // threadpool thread. The captured CancellationToken struct stays valid after disposal.
+            var exitToken = _cts.Token;
+            _ = Task.Run(() => _onSessionExit(req, exitToken));
             return new SessionExitResponse(true);
         }
         catch (Exception ex)

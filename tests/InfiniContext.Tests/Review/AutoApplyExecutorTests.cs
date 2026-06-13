@@ -144,6 +144,9 @@ public class AutoApplyExecutorTests
     [InlineData("build/custom.targets")]
     [InlineData("InfiniContext.slnx")]
     [InlineData("legacy.sln")]
+    [InlineData("nuget.config")] // sec-001: restore-time package-source redirection
+    [InlineData("src/nuget.config")]
+    [InlineData("global.json")] // sec-001: pins the SDK used by the gate's dotnet build
     public void DenylistReason_refuses_vcs_ci_and_build_files(string relative)
     {
         AutoApplyExecutor.DenylistReason(relative).Should().NotBeNull();

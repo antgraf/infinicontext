@@ -363,6 +363,15 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
             && segments[1].Equals("workflows", FileSystemNaming.Comparison))
             return "auto-apply refused: target is a CI workflow file under .github/workflows/";
 
+        // NuGet/SDK config files steer the gate's `dotnet build` restore: a planted nuget.config
+        // can redirect package sources to an attacker-controlled feed (arbitrary code on restore),
+        // and global.json can pin a malicious/unexpected SDK. Matching is by filename (not extension),
+        // using the filesystem's casing rule — the same rule `dotnet restore` uses to resolve them.
+        var fileName = Path.GetFileName(norm);
+        if (fileName.Equals("nuget.config", FileSystemNaming.Comparison)
+            || fileName.Equals("global.json", FileSystemNaming.Comparison))
+            return $"auto-apply refused: target is a NuGet/SDK config file ({fileName})";
+
         // Build-system files are executed as MSBuild logic during the gate's `dotnet build`.
         var ext = Path.GetExtension(norm);
         if (!string.IsNullOrEmpty(ext))
