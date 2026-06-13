@@ -354,8 +354,12 @@ public sealed class AutoApplyExecutor : IAutoApplyExecutor
         var segments = norm.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
         // .git/ internals — hooks/, config (core.fsmonitor → arbitrary command on every git op), etc.
-        if (segments.Length > 0 && segments[0].Equals(".git", FileSystemNaming.Comparison))
-            return "auto-apply refused: target is under .git/ (version-control internals)";
+        // Match a `.git` segment at ANY depth (sec-101): a nested .git/ — a submodule or a vendored
+        // repo (e.g. submodule/.git/config, vendor/repo/.git/hooks/pre-commit) — is just as dangerous
+        // and was writable under the old segments[0]-only check. A path component equal exactly to
+        // ".git" is always a git directory, so the any-depth match has no legitimate false positives.
+        if (segments.Any(s => s.Equals(".git", FileSystemNaming.Comparison)))
+            return "auto-apply refused: target is under a .git/ directory (version-control internals)";
 
         // CI workflow definitions run on push under the repo's credentials.
         if (segments.Length >= 2

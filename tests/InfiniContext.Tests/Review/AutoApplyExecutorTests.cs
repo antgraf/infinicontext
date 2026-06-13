@@ -137,6 +137,8 @@ public class AutoApplyExecutorTests
     [Theory]
     [InlineData(".git/config")]
     [InlineData(".git/hooks/post-checkout")]
+    [InlineData("submodule/.git/config")] // sec-101: nested .git at depth > 0
+    [InlineData("vendor/repo/.git/hooks/pre-commit")]
     [InlineData(".github/workflows/ci.yml")]
     [InlineData("Foo.csproj")]
     [InlineData("src/Bar.csproj")]

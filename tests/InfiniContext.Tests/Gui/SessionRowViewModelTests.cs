@@ -21,6 +21,20 @@ public class SessionRowViewModelTests
     private static SessionRowViewModel BuildRow(SessionContextFactory f) =>
         new(f.Context, new SynchronousUiDispatcher(), new TestUiTimerFactory());
 
+    /// <summary>Poll <paramref name="condition"/> until it holds or the timeout elapses. Deterministic
+    /// stand-in for a fixed Task.Delay when waiting on a Task.Run continuation: returns as soon as the
+    /// condition is true, and fails fast (throws) if it never becomes true within the budget.</summary>
+    private static async Task WaitForAsync(Func<bool> condition, CancellationToken ct, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (!condition())
+        {
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException($"condition not met within {timeoutMs}ms");
+            await Task.Delay(5, ct);
+        }
+    }
+
     // ----- Free sessions (ActiveTaskId == null) -----
 
     [Fact]
@@ -532,8 +546,10 @@ public class SessionRowViewModelTests
         f.RaiseEvent(SessionContextFactory.MakeAssistantText("first acknowledged"));
         f.RaiseEvent(SessionContextFactory.MakeResult());
 
-        // SendOrQueueAsync's flush path uses Task.Run; give the continuation a tick to run.
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // CloseInFlightTurnWith's flush runs on a Task.Run continuation; poll deterministically for
+        // the combined send rather than racing a fixed sleep (tests-002 — a 50ms sleep flakes under
+        // CI load and can pass for the wrong reason).
+        await WaitForAsync(() => f.Session.SentMessages.Count >= 2, TestContext.Current.CancellationToken);
 
         f.Session.SentMessages.Should().HaveCount(2, "first + combined-bundle.");
         f.Session.SentMessages[1].Should().Be("a\n\n---\n\nb",
@@ -542,6 +558,37 @@ public class SessionRowViewModelTests
         row.HasQueuedPrompts.Should().BeFalse();
         row.Turns[1].IsQueued.Should().BeFalse("the bundle card is now the in-flight turn.");
         row.Turns[1].IsInProgress.Should().BeTrue("the bundle's own ResultEvent hasn't arrived yet.");
+    }
+
+    [Fact]
+    public async Task Queued_transcript_line_uses_post_mutation_count_on_dispatched_branch_code002()
+    {
+        // Regression for code-002: the "[queued: will glue with N other(s)]" transcript line read the
+        // buffer count BEFORE the dispatched mutation ran, so on the off-UI-thread (Post) branch it
+        // rendered "-1 other(s)". With a deferring dispatcher the glue mutation is captured, not run,
+        // until Drain() — so this reproduces the exact window the synchronous dispatcher masks.
+        var f = new SessionContextFactory(activeTaskId: null);
+        var dispatcher = new DeferringUiDispatcher();
+        var row = new SessionRowViewModel(f.Context, dispatcher, new TestUiTimerFactory());
+
+        // "first" takes the idle path and drives the state machine in-flight (dispatcher-independent),
+        // so the next send takes the glue path.
+        await row.SendOrQueueAsync("first", TestContext.Current.CancellationToken);
+        row.IsAgentTurnInFlight.Should().BeTrue("the first send put a turn in flight.");
+
+        await row.SendOrQueueAsync("a", TestContext.Current.CancellationToken);
+
+        // Before drain: the glue Apply (which now owns the transcript line) hasn't run.
+        string.Concat(f.Context.Transcript.Snapshot()).Should().NotContain("[queued:",
+            "the transcript line is built inside the dispatched Apply, not before it.");
+
+        dispatcher.Drain();
+
+        var transcript = string.Concat(f.Context.Transcript.Snapshot());
+        transcript.Should().Contain("will glue with 0 other(s)",
+            "one buffered prompt → glue with 0 others; the old code rendered -1 on this branch.");
+        transcript.Should().NotContain("-1 other(s)");
+        row.QueuedPromptCount.Should().Be(1);
     }
 
     [Fact]

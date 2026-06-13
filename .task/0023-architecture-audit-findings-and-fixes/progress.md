@@ -323,6 +323,7 @@
   defect. If it reproduces on the fresh build, suspect the M22 `BatchingOutputSink` final-flush vs.
   `EndHostCommandTurn` ordering in `RunHostSlashCommandAsync` (tail flushed, then card closed) — to
   be confirmed, not yet a finding.
+- Ran `/task review`. applied=0 rejected=0 awaiting=13. Report: `review-2026-06-13T043927.md`. Build/test gate: green.
 
 ## 2026-06-13 (acting on the review report — code fixes)
 
@@ -374,3 +375,50 @@ decisions for sign-off (below). All Windows-verified: full Release build 0 warni
   MergeAsync; HOSTLOCKPATH env read [reviewer: no change needed]; Task.Delay(50) in a bundle-flush
   test needing a production seam). Left as-is pending operator interest.
 - **All new fixes uncommitted on `main`** — awaiting operator checkpoint before committing (branch first).
+
+## 2026-06-13 (second review round — review-2026-06-13T043927.md)
+
+The five fixes above were committed + pushed to `main` as **`940e17a`** (operator "push to main");
+`ci.yml` ran green. The operator then ran `/task review` again on `940e17a`, producing
+`review-2026-06-13T043927.md` (13 findings, all needs_user, 0 auto-applied). Acted on the
+concrete/reversible subset; left design/seam/policy/operator items. Windows-verified: Release build
+0 warnings, format clean, `InfiniContext.Tests` **1184 passed / 0 failed / 8 skipped**, headless GUI
+suite green.
+
+- **sec-101 DONE** (`.git` denylist depth): `AutoApplyExecutor.DenylistReason` now refuses a `.git`
+  path segment at ANY depth (`segments.Any(...)`), not just `segments[0]` — closes nested-repo
+  vectors (`submodule/.git/config`, `vendor/repo/.git/hooks/pre-commit`). A component equal exactly
+  to `.git` is always a git dir, so no false positives. +2 denylist Theory cases.
+- **tests-001 DONE** (AtomicFile failure/cleanup coverage): two new tests — (a) a pre-cancelled token
+  → `OperationCanceledException`, pre-existing target content **unchanged**, no `.tmp` left behind
+  (the crash-safety guarantee); (b) a move forced to fail (destination is an existing directory) →
+  throws, directory survives, temp cleaned up. Exercises the `catch { delete temp; throw; }` branch
+  that is the entire point of AtomicFile.
+- **tests-002 DONE** (flaky 50ms sleep): replaced `Task.Delay(50)` in
+  `Result_event_flushes_bundle_as_one_combined_send` with a deterministic `WaitForAsync` poll (new
+  test helper) on `SentMessages.Count >= 2`, bounded by a 5s timeout that fails fast.
+- **code-002 DONE** (queued-count `-1`): moved the `[queued: will glue with N other(s)]` transcript
+  append INSIDE the dispatched `Apply` closure in `SessionRowViewModel.SendOrQueueAsync`, so the count
+  is read after the buffer mutation. Old code read it before the `Post`ed `Apply` ran → `-1 other(s)`
+  on the off-UI-thread branch. New `DeferringUiDispatcher` test helper (captures `Post`ed actions
+  until `Drain()`) + regression test reproducing the exact window the synchronous dispatcher masked.
+- **arch-001 DONE** (AtomicFile consistency): routed the two `TaskService.MergeAsync` writes
+  (per-file merged artifact + `WriteMergedIndexAsync`) through `AtomicFile.WriteAllTextAsync` — these
+  produce the merged `index.md`, the exact artifact M18's doc-comment names as crash-vulnerable.
+  Left the genuinely fresh-file creates (`TaskFolder.WriteScaffoldedDescriptionAsync`, the timestamped
+  review-report write) on `File.WriteAllTextAsync` — a crash there loses only a re-runnable create,
+  no prior history.
+
+### Left for the operator (design / seam / policy / process — not "no-approval" work)
+- **code-001** (warning) — glue-buffer flush vs idle-send ordering race in `SessionRowViewModel`:
+  a non-local concurrency *design* choice (gate on `_inFlightTurn` vs a synchronous flag vs send
+  synchronously), no concrete edit. Needs design sign-off.
+- **code-003** (suggestion) — defensive `_disposed` guard in `ApplyEvent` for a benign-today
+  handler-after-dispose race whose root is in Core's `RaiseEventObserved` (snapshot-then-invoke
+  outside the gate). Not deterministically testable at the VM layer; bundled with code-001.
+- **tests-003** (suggestion) — `ReviewStackFactory` model-override test asserts only `NotThrow`;
+  strengthening it requires a new production seam (expose resolved models / agents on `ReviewStack`).
+- **arch-002** (suggestion) — reviewer explicitly states "no change required now."
+- **completeness-001** (M3 shell/network routing), **-002** (M21 virtualization confirm), **-003**
+  (M14 `/task idle`), **-004** (ci-uia.yml dispatch) — operator decisions / actions, as before.
+- **This round's fixes are uncommitted on `main`** — awaiting an operator checkpoint.

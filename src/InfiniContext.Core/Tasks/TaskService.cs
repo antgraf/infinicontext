@@ -189,7 +189,10 @@ public sealed class TaskService
                 sb.AppendLine();
             }
 
-            await File.WriteAllTextAsync(System.IO.Path.Combine(mergedFolder.Path, fileName), sb.ToString(), ct).ConfigureAwait(false);
+            // arch-001: write merged artifacts crash-safely, consistent with the M18 AtomicFile
+            // contract that IssueService / TaskCommandHandler already follow (these produce
+            // index.md/progress.md-shaped task artifacts).
+            await AtomicFile.WriteAllTextAsync(System.IO.Path.Combine(mergedFolder.Path, fileName), sb.ToString(), ct).ConfigureAwait(false);
         }
 
         // Rewrite the merged index.md with all artifacts that now exist on disk.
@@ -415,6 +418,6 @@ public sealed class TaskService
         {
             sb.Append("| ").Append(name).Append(" | merged | ").Append(today.ToString("yyyy-MM-dd")).AppendLine(" |");
         }
-        await File.WriteAllTextAsync(System.IO.Path.Combine(folder.Path, ArtifactTemplates.IndexFileName), sb.ToString(), ct).ConfigureAwait(false);
+        await AtomicFile.WriteAllTextAsync(System.IO.Path.Combine(folder.Path, ArtifactTemplates.IndexFileName), sb.ToString(), ct).ConfigureAwait(false);
     }
 }

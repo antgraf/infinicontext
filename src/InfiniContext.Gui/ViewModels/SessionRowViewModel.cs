@@ -431,11 +431,10 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
             return true;
         }
 
-        int countAfter = 0;
         void Apply()
         {
             _pendingPrompts.Add(text);
-            countAfter = _pendingPrompts.Count;
+            var countAfter = _pendingPrompts.Count;
             if (_pendingBundleTurn is null)
             {
                 _pendingBundleTurn = new TurnNodeViewModel(text) { IsQueued = true };
@@ -446,11 +445,15 @@ public sealed partial class SessionRowViewModel : ObservableObject, IDisposable
                 _pendingBundleTurn.UserPrompt = string.Join(GlueSeparator, _pendingPrompts);
             }
             QueuedPromptCount = countAfter;
+            // code-002: build the transcript line INSIDE Apply, after countAfter is set. The old code
+            // appended it after the CheckAccess/Post dispatch, so on the off-UI-thread (Post) branch
+            // countAfter was still 0 and the line read "will glue with -1 other(s)". Doing it here also
+            // keeps the transcript order consistent with the bundle-card update on both branches.
+            Context.Transcript.Append($"\n> {text}  [queued: will glue with {countAfter - 1} other(s) on next Idle]\n");
         }
         if (_dispatcher.CheckAccess()) Apply();
         else _dispatcher.Post(Apply);
 
-        Context.Transcript.Append($"\n> {text}  [queued: will glue with {countAfter - 1} other(s) on next Idle]\n");
         return false;
     }
 

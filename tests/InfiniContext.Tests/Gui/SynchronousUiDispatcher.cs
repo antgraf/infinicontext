@@ -27,3 +27,28 @@ internal sealed class TrackingUiDispatcher : IUiDispatcher
     public void Post(Action action) { PostCount++; action(); }
     public Task InvokeAsync(Func<Task> action) => action();
 }
+
+/// <summary>Deferring variant of <see cref="IUiDispatcher"/>: <c>CheckAccess</c> always returns
+/// <c>false</c> (simulating a non-UI calling thread) and <c>Post</c> <em>captures</em> the action
+/// instead of running it, so a test can assert state BEFORE the posted work runs and then release it
+/// via <see cref="Drain"/>. Unlike <see cref="TrackingUiDispatcher"/> (which runs Post synchronously)
+/// this exposes the real async window the production code dispatches into.</summary>
+internal sealed class DeferringUiDispatcher : IUiDispatcher
+{
+    private readonly List<Action> _pending = new();
+
+    public bool CheckAccess() => false;
+    public void Post(Action action) => _pending.Add(action);
+    public Task InvokeAsync(Func<Task> action) => action();
+
+    /// <summary>Run all captured actions in FIFO order (and any they enqueue in turn).</summary>
+    public void Drain()
+    {
+        while (_pending.Count > 0)
+        {
+            var batch = _pending.ToArray();
+            _pending.Clear();
+            foreach (var action in batch) action();
+        }
+    }
+}
